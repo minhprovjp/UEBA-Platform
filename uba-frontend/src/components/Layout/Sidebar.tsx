@@ -4,15 +4,7 @@ import './Layout.css';
 
 // Định nghĩa props để nhận hàm điều hướng từ App.tsx
 interface SidebarProps {
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  onNavigate: (page: 'dashboard' | 'engine-control') => void;
-=======
   onNavigate: (page: 'dashboard' | 'engine-control' | 'configuration' | 'anomaly-explorer') => void;
->>>>>>> Stashed changes
-=======
-  onNavigate: (page: 'dashboard' | 'engine-control' | 'configuration' | 'anomaly-explorer') => void;
->>>>>>> Stashed changes
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
@@ -34,11 +26,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
             ⚙️ Engine Control
           </button>
         </li>
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
         {/* Configuration button with icon */}
         <li>
           <button onClick={() => onNavigate('configuration')}>
@@ -50,10 +37,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
             🔍 Anomaly Explorer
           </button>
         </li>
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
         {/* Các mục menu khác sẽ được thêm sau */}
       </ul>
     </nav>

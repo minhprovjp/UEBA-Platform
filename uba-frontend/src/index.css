@@ -1,18 +1,4 @@
 /* src/index.css */
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-=======
-=======
->>>>>>> Stashed changes
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
@@ -138,19 +124,10 @@
   font-family: var(--font-sans);
   line-height: 1.6;
   font-weight: 400;
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-=======
-=======
->>>>>>> Stashed changes
   
   color-scheme: dark;
   color: var(--text-primary);
@@ -163,23 +140,10 @@
 
 html {
   scroll-behavior: smooth;
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 }
 
 body {
   margin: 0;
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-=======
-=======
->>>>>>> Stashed changes
   padding: 0;
   min-width: 320px;
   min-height: 100vh;
@@ -189,20 +153,10 @@ body {
   color: var(--text-primary);
   line-height: 1.6;
   overflow-x: hidden;
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 }
 
 #root {
   width: 100%;
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  height: 100vh;
-=======
-=======
->>>>>>> Stashed changes
   min-height: 100vh;
 }
 
@@ -389,8 +343,4 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
 }

@@ -15,17 +15,6 @@ const StatCards: React.FC<StatCardsProps> = ({ anomalies }) => {
   }, {} as Record<string, number>);
 
   const stats = [
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-    { title: 'Truy vấn Giờ Khuya', count: anomalyCounts['late_night'] || 0 },
-    { title: 'Kết xuất Dữ liệu Lớn', count: anomalyCounts['dump'] || 0 },
-    { title: 'Truy cập Nhiều Bảng', count: anomalyCounts['multi_table'] || 0 },
-    { title: 'Truy cập Bảng Nhạy cảm', count: anomalyCounts['sensitive'] || 0 },
-    { title: 'HĐ User Bất thường', count: anomalyCounts['user_time'] || 0 },
-    { title: 'Độ phức tạp (AI)', count: anomalyCounts['complexity'] || 0 },
-=======
-=======
->>>>>>> Stashed changes
     { 
       title: 'Truy vấn Giờ Khuya', 
       count: anomalyCounts['late_night'] || 0,
@@ -62,23 +51,12 @@ const StatCards: React.FC<StatCardsProps> = ({ anomalies }) => {
       icon: '🤖',
       color: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)'
     },
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
   ];
 
   return (
     <div className="stats-container">
       {stats.map((stat, index) => (
         <div className="stat-card" key={index}>
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-          <h3>{stat.count}</h3>
-          <p>{stat.title}</p>
-=======
-=======
->>>>>>> Stashed changes
           <div className="stat-icon" style={{ background: stat.color }}>
             {stat.icon}
           </div>
@@ -86,10 +64,6 @@ const StatCards: React.FC<StatCardsProps> = ({ anomalies }) => {
             <h3>{stat.count.toLocaleString()}</h3>
             <p>{stat.title}</p>
           </div>
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
         </div>
       ))}
     </div>

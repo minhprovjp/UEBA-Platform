@@ -1,84 +1,4 @@
 /* src/components/EngineControl/EngineControl.css */
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-.engine-control-page {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-  
-  .status-container {
-    background-color: #1e1e1e;
-    padding: 20px;
-    border-radius: 8px;
-    border: 1px solid #333;
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-  }
-  
-  .status-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  
-  .status-label {
-    color: #aaa;
-  }
-  
-  .status-value {
-    font-weight: bold;
-  }
-  
-  .status-badge {
-    padding: 5px 10px;
-    border-radius: 12px;
-    font-weight: bold;
-    font-size: 0.9em;
-  }
-  
-  .status-badge.running {
-    background-color: #2f9e44; /* Green */
-    color: white;
-  }
-  
-  .status-badge.stopped {
-    background-color: #c92a2a; /* Red */
-    color: white;
-  }
-  
-  .actions-container {
-    display: flex;
-    gap: 15px;
-  }
-  
-  .actions-container button {
-    padding: 10px 20px;
-    font-size: 1em;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-  
-  .actions-container button:disabled {
-    background-color: #333;
-    cursor: not-allowed;
-    color: #777;
-  }
-  
-  .actions-container button:not(:disabled) {
-    background-color: #007bff;
-    color: white;
-  }
-  
-  .actions-container button.stop-button:not(:disabled) {
-    background-color: #e03131;
-  }
-=======
-=======
->>>>>>> Stashed changes
 
 .engine-control-page {
   padding: var(--space-8);
@@ -492,9 +412,4 @@
   height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
   animation: shimmer 2s infinite;
-<<<<<<< Updated upstream
 }
->>>>>>> Stashed changes
-=======
-}
->>>>>>> Stashed changes

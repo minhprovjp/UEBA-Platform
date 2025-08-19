@@ -35,17 +35,6 @@ const Charts: React.FC<ChartsProps> = ({ anomalies }) => {
     datasets: [{
       label: 'Số lượng bất thường',
       data: Object.values(anomalyCounts),
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-      backgroundColor: 'rgba(77, 171, 247, 0.6)',
-      borderColor: 'rgba(77, 171, 247, 1)',
-      borderWidth: 1,
-    }],
-  };
-
-=======
-=======
->>>>>>> Stashed changes
       backgroundColor: [
         'rgba(99, 102, 241, 0.8)',
         'rgba(139, 92, 246, 0.8)',
@@ -130,10 +119,6 @@ const Charts: React.FC<ChartsProps> = ({ anomalies }) => {
     }
   };
 
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
   // --- Dữ liệu cho Biểu đồ Tròn ---
   const userCounts = anomalies.reduce((acc, anomaly) => {
     if(anomaly.user) {
@@ -150,24 +135,6 @@ const Charts: React.FC<ChartsProps> = ({ anomalies }) => {
     labels: topUsers.map(([user]) => user),
     datasets: [{
       data: topUsers.map(([, count]) => count),
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-      backgroundColor: ['#4DABF7', '#74C0FC', '#A5D8FF', '#E7F5FF', '#364FC7'],
-    }],
-  };
-
-  return (
-    <div className="charts-container">
-      <div className="chart-wrapper">
-        <h3>Số lượng bất thường theo loại</h3>
-        <Bar data={barChartData} />
-      </div>
-      <div className="chart-wrapper">
-        <h3>Top 5 Users có nhiều bất thường nhất</h3>
-        <Pie data={pieChartData} />
-=======
-=======
->>>>>>> Stashed changes
       backgroundColor: [
         'rgba(99, 102, 241, 0.8)',
         'rgba(139, 92, 246, 0.8)',
@@ -236,10 +203,6 @@ const Charts: React.FC<ChartsProps> = ({ anomalies }) => {
         <div style={{ height: '400px', position: 'relative' }}>
           <Pie data={pieChartData} options={pieChartOptions as any} />
         </div>
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
       </div>
     </div>
   );

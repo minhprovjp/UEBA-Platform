@@ -1,152 +1,5 @@
 /* src/components/Layout/Layout.css */
 .app-layout {
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-    display: flex;
-    height: 100vh;
-    width: 100%;
-  }
-  
-  .sidebar {
-    width: 250px;
-    background: linear-gradient(180deg, #1e1e1e 0%, #2d2d2d 100%);
-    color: white;
-    display: flex;
-    flex-direction: column;
-    border-right: 1px solid #333;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.3);
-    position: relative;
-  }
-  
-  .sidebar::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 1px;
-    height: 100%;
-    background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-  }
-  
-  .sidebar-header {
-    padding: 20px;
-    text-align: center;
-    border-bottom: 1px solid #333;
-    background: linear-gradient(90deg, #3a3a3a 0%, #2d2d2d 100%);
-  }
-  
-  .sidebar-header h3 {
-    margin: 0;
-    font-size: 1.4rem;
-    font-weight: 600;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-  }
-  
-  .sidebar-menu {
-    list-style: none;
-    padding: 0;
-    margin: 20px 0;
-  }
-  
-  .sidebar-menu li {
-    margin: 8px 16px;
-  }
-  
-  .sidebar-menu li button {
-    width: 100%;
-    padding: 16px 20px;
-    background: linear-gradient(135deg, #4a4a4a 0%, #3a3a3a 100%);
-    color: #e0e0e0;
-    border: none;
-    border-radius: 12px;
-    font-size: 1rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    position: relative;
-    overflow: hidden;
-    text-align: left;
-    letter-spacing: 0.5px;
-    line-height: 1.4;
-  }
-  
-  .sidebar-menu li button::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-    transition: left 0.5s;
-  }
-  
-  .sidebar-menu li button:hover {
-    background: linear-gradient(135deg, #5a5a5a 0%, #4a4a4a 100%);
-    color: white;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  }
-  
-  .sidebar-menu li button:hover::before {
-    left: 100%;
-  }
-  
-  .sidebar-menu li button:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  }
-  
-  .sidebar-menu li button:focus {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
-  }
-  
-  .sidebar-menu li button:focus-visible {
-    outline: 2px solid #6366f1;
-    outline-offset: 2px;
-  }
-  
-  /* Dashboard button specific styling */
-  .sidebar-menu li button:first-of-type {
-    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-    color: white;
-  }
-  
-  .sidebar-menu li button:first-of-type:hover {
-    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
-  }
-  
-  /* Engine Control button specific styling */
-  .sidebar-menu li button:last-of-type {
-    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
-    color: white;
-  }
-  
-  .sidebar-menu li button:last-of-type:hover {
-    background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
-    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
-  }
-  
-  .sidebar-menu li a {
-    display: block;
-    padding: 12px 20px;
-    color: #ccc;
-    text-decoration: none;
-    transition: background-color 0.2s, color 0.2s;
-  }
-  
-  .sidebar-menu li a:hover {
-    background-color: #333;
-    color: white;
-  }
-  
-  .main-content {
-=======
-=======
->>>>>>> Stashed changes
   display: flex;
   height: 100vh;
   width: 100%;
@@ -429,20 +282,10 @@
   
   .sidebar-menu li {
     margin: 0;
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
     flex: 1;
     padding: 20px;
     overflow-y: auto; /* Cho phép cuộn nếu nội dung dài */
     background-color: #242424;
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-  }
-=======
-=======
->>>>>>> Stashed changes
   }
   
   .sidebar-menu li button {
@@ -497,9 +340,4 @@
   background-color: #007bff;
   color: white;
   font-weight: bold;
-<<<<<<< Updated upstream
 }
->>>>>>> Stashed changes
-=======
-}
->>>>>>> Stashed changes
