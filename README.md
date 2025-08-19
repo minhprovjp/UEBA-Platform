@@ -14,6 +14,7 @@ Trước khi bắt đầu, hãy đảm bảo bạn đã cài đặt các phần 
 -   [Python](https://www.python.org/downloads/) (phiên bản 3.11+)
 -   [PostgreSQL](https://www.postgresql.org/download/) (tùy chọn, nếu bạn muốn phân tích log PostgreSQL)
 -   [Ollama](https://ollama.com/) (tùy chọn, nếu bạn muốn sử dụng tính năng phân tích của LLM)
+-   [Nodejs](https://nodejs.org/en/download)
 
 ## Hướng dẫn Cài đặt (Setup Instructions)
 
@@ -86,8 +87,18 @@ Tiến trình này phục vụ API để bạn có thể tương tác.
 uvicorn backend_api.main_api:app --reload
 ```
 
+### Terminal 3: Chạy Frontend
+
+Tiến trình này để hiển thị giao diện bạn có thể tương tác.
+```bash
+cd uba-frontend
+npm run dev
+```
+
+
 ### Kiểm tra Hoạt động
 
 1.  Mở trình duyệt và truy cập: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**
 2.  Bạn sẽ thấy giao diện tài liệu Swagger UI.
 3.  Hãy thử dùng các endpoint trong mục "Anomalies" và "Engine Control" để kiểm tra.
+4. Truy cập vào URL **[http://127.0.0.1:5173/docs](http://127.0.0.1:5173/docs)** và kiểm tra frontend.

@@ -1,5 +1,6 @@
 # backend_api/main_api.py
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 
@@ -23,6 +24,20 @@ app = FastAPI(
     title="User Behavior Analytics API",
     description="API để truy vấn các bất thường được phát hiện bởi Engine Phân tích Log.",
     version="1.0.0"
+)
+
+# Cấu hình CORS
+origins = [
+    "http://localhost:5173",  # Địa chỉ của Vite React dev server
+    "http://localhost:3000",  # Thêm địa chỉ phổ biến khác của React
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Cho phép các nguồn gốc trong danh sách
+    allow_credentials=True, # Cho phép gửi cookie (nếu có)
+    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, PUT, DELETE,...)
+    allow_headers=["*"],    # Cho phép tất cả các header
 )
 
 # --- Dependency Injection: Cung cấp DB Session cho các endpoint ---
