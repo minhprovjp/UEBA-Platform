@@ -285,13 +285,15 @@ def extract_query_features(sql_query):
         
     return features
 
-def save_feedback_to_csv(item_data: pd.Series, label: int) -> tuple[bool, str]:
+def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
     """
-    Lưu phản hồi vào file CSV với logic "UPSERT".
-    Trả về một tuple (Thành công/Thất bại, Thông báo).
+    Lưu phản hồi từ một dictionary vào file CSV với logic "UPSERT".
     """
     try:
-        identifier_string = f"{item_data.get('timestamp')}{item_data.get('user')}{item_data.get('query')}"
+        # === SỬA ĐỔI: Chuyển item_data (dict) thành Series để tái sử dụng logic cũ ===
+        item_series = pd.Series(item_data)
+
+        identifier_string = f"{item_series.get('timestamp')}{item_series.get('user')}{item_series.get('query')}"
         feedback_id = hashlib.md5(identifier_string.encode()).hexdigest()
 
         new_feedback_data = item_data.to_dict()

@@ -9,8 +9,17 @@ from . import models, schemas
 from .models import SessionLocal, engine
 
 # Import engine và trình quản lý config
+import sys
+import os
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.engine_runner import AnalysisEngine
 from engine.config_manager import load_config, save_config
+from engine.utils import save_feedback_to_csv
+
+from pydantic import BaseModel
+# Import hàm phân tích LLM
+from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
 
 # === TẠO MỘT INSTANCE DUY NHẤT CỦA ENGINE ===
 # Instance này sẽ tồn tại suốt vòng đời của API server
@@ -74,6 +83,38 @@ def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return anomaly
 
+@app.post("/api/llm/analyze-anomaly", tags=["LLM Analysis"])
+def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest):
+    """
+    Nhận thông tin về một bất thường và yêu cầu LLM phân tích nó.
+    """
+    try:
+        # 1. Đọc cấu hình engine hiện tại từ file
+        engine_config = load_config()
+        
+        # 2. Lấy ra các phần cấu hình cần thiết
+        llm_settings = engine_config.get("llm_config", {}) # Giả sử bạn sẽ tạo mục này
+        rules_settings = engine_config.get("analysis_params", {})
+        
+        # 3. Chuyển đổi request Pydantic thành dictionary
+        anomaly_data = request.model_dump()
+        
+        # 4. Gọi hàm phân tích đã được tái cấu trúc
+        analysis_result = analyze_query_with_llm(
+            anomaly_row=anomaly_data,
+            anomaly_type_from_system=anomaly_data['anomaly_type'],
+            llm_config=llm_settings,
+            rules_config=rules_settings
+        )
+        
+        return analysis_result
+        
+    except (ValueError, ConnectionError) as e:
+        # Bắt các lỗi cụ thể mà hàm phân tích ném ra
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        # Bắt các lỗi không lường trước khác
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
 # === CÁC ENDPOINT MỚI ĐỂ ĐIỀU KHIỂN ENGINE ===
 
@@ -115,3 +156,50 @@ def update_engine_config(config_data: Dict[str, Any]):
     # Tải lại cấu hình cho instance đang chạy
     engine_instance.config = load_config()
     return {"message": message}
+
+# === CÁC ENDPOINT ĐỂ QUẢN LÝ CẤU HÌNH ===
+@app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Configuration"])
+def get_engine_config():
+    """
+    Đọc và trả về nội dung hiện tại của file engine_config.json.
+    """
+    config = load_config()
+    if not config:
+        raise HTTPException(status_code=404, detail="File cấu hình không tìm thấy hoặc bị lỗi.")
+    return config
+
+@app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Configuration"])
+def update_engine_config(config_data: Dict[str, Any]):
+    """
+    Nhận một đối tượng JSON và ghi đè hoàn toàn file engine_config.json.
+    Engine sẽ tự động áp dụng cấu hình mới ở chu kỳ tiếp theo.
+    """
+    success, message = save_config(config_data)
+    if not success:
+        raise HTTPException(status_code=500, detail=message)
+    
+    # Tải lại cấu hình cho instance engine đang chạy để nó áp dụng ngay lập tức
+    if 'engine_instance' in globals():
+        engine_instance.config = load_config()
+        
+    return {"message": message}
+
+# === THÊM ENDPOINT MỚI ĐỂ NHẬN FEEDBACK ===
+@app.post("/api/feedback/", status_code=status.HTTP_201_CREATED, tags=["Feedback"])
+def submit_feedback(feedback: schemas.FeedbackCreate):
+    """
+    Nhận phản hồi từ người dùng và lưu vào file feedback.csv.
+    """
+    try:
+        # Gọi hàm logic cốt lõi từ utils
+        success, message = save_feedback_to_csv(
+            item_data=feedback.anomaly_data,
+            label=feedback.label
+        )
+        if not success:
+            raise HTTPException(status_code=500, detail=message)
+        
+        return {"message": message}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi không xác định: {str(e)}")

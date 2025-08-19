@@ -1,6 +1,14 @@
 // src/components/EngineControl/EngineControlPage.tsx
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+import { Button } from '../UI';
+>>>>>>> Stashed changes
+=======
+import { Button } from '../UI';
+>>>>>>> Stashed changes
 import './EngineControl.css'; // File CSS riêng cho trang này
 
 const API_URL = 'http://127.0.0.1:8000';
@@ -85,12 +93,41 @@ const EngineControlPage: React.FC = () => {
       )}
 
       <div className="actions-container">
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
         <button onClick={handleStart} disabled={status?.is_running}>
           Khởi động Engine
         </button>
         <button onClick={handleStop} disabled={!status?.is_running} className="stop-button">
           Dừng Engine
         </button>
+=======
+=======
+>>>>>>> Stashed changes
+        <Button 
+          variant="success"
+          size="large"
+          onClick={handleStart} 
+          disabled={status?.is_running}
+          icon="🚀"
+          iconPosition="left"
+        >
+          Khởi động Engine
+        </Button>
+        <Button 
+          variant="error"
+          size="large"
+          onClick={handleStop} 
+          disabled={!status?.is_running}
+          icon="⏹️"
+          iconPosition="left"
+        >
+          Dừng Engine
+        </Button>
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
       </div>
     </div>
   );

@@ -25,3 +25,18 @@ class Anomaly(AnomalyBase):
     # từ các thuộc tính của một đối tượng SQLAlchemy (chế độ ORM).
     class Config:
         from_attributes = True # Dành cho Pydantic v2. Nếu dùng Pydantic v1, hãy dùng `orm_mode = True`
+
+# --- Schema cho Yêu cầu Phân tích của LLM ---
+# Định nghĩa cấu trúc dữ liệu mà frontend PHẢI gửi lên khi yêu cầu phân tích.
+class AnomalyAnalysisRequest(BaseModel):
+    timestamp: str
+    user: str
+    query: str
+    anomaly_type: str
+    score: Optional[float] = None
+    reason: Optional[str] = None
+    
+# === THÊM SCHEMA MỚI CHO FEEDBACK ===
+class FeedbackCreate(BaseModel):
+    label: int # 0 cho bình thường, 1 cho bất thường
+    anomaly_data: dict # Gửi toàn bộ dữ liệu của bất thường dưới dạng dictionary

@@ -1,5 +1,33 @@
 {
   "engine_sleep_interval_seconds": 60,
+  "llm_config": {
+    "enable_ollama": true,
+    "ollama_host": "http://localhost:11434",
+    "ollama_model": "seneca:latest",
+    "ollama_timeout": 3600,
+    "ollama_max_retries": 3,
+    "ollama_temperature": 0.7,
+    "ollama_max_tokens": 4096,
+    
+    "selected_provider": "none",
+    "openai_api_key": "",
+    "openai_model": "gpt-3.5-turbo",
+    "openai_base_url": "https://api.openai.com/v1",
+    "anthropic_api_key": "",
+    "anthropic_model": "claude-3-sonnet-20240229",
+    "custom_api_key": "",
+    "custom_api_endpoint": "",
+    "custom_model_name": "",
+    "custom_api_type": "openai-compatible",
+    
+    "api_temperature": 0.7,
+    "api_max_tokens": 4096,
+    "api_timeout": 60,
+    
+    "provider_priority": "ollama,api",
+    "enable_fallback": true,
+    "max_fallback_attempts": 3
+  },
   "active_parsers": [
     "mysql",
     "postgres"
@@ -18,5 +46,20 @@
     "p_quantile_start": 0.15,
     "p_quantile_end": 0.85,
     "p_min_queries_for_profile": 10
+  },
+  "llm_analysis_settings": {
+    "enable_two_round_analysis": true,
+    "enable_session_analysis": true,
+    "confidence_threshold": 0.7,
+    "max_concurrent_requests": 5,
+    "request_queue_size": 100
+  },
+  "logging_config": {
+    "log_level": "INFO",
+    "log_to_file": true,
+    "log_file_path": "logs/llm_analysis.log",
+    "max_log_file_size": "10MB",
+    "log_rotation": "daily"
   }
 }
+

@@ -4,10 +4,25 @@ import Sidebar from './components/Layout/Sidebar';
 import MainContent from './components/Layout/MainContent';
 import DashboardPage from './components/Dashboard/DashboardPage';
 import EngineControlPage from './components/EngineControl/EngineControlPage';
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
 import './components/Layout/Layout.css';
 
 // Định nghĩa các trang có sẵn
 type Page = 'dashboard' | 'engine-control';
+=======
+=======
+>>>>>>> Stashed changes
+import ConfigurationPage from './components/Configuration/ConfigurationPage';
+import AnomalyExplorerPage from './components/AnomalyExplorer/AnomalyExplorerPage';
+import './components/Layout/Layout.css';
+
+// Định nghĩa các trang có sẵn
+type Page = 'dashboard' | 'engine-control' | 'configuration' | 'anomaly-explorer';
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
 
 const App: React.FC = () => {
   // State để theo dõi trang đang được hiển thị
@@ -25,6 +40,16 @@ const App: React.FC = () => {
         {/* Hiển thị component tương ứng với trang đang hoạt động */}
         {activePage === 'dashboard' && <DashboardPage />}
         {activePage === 'engine-control' && <EngineControlPage />}
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+=======
+        {activePage === 'configuration' && <ConfigurationPage />}
+        {activePage === 'anomaly-explorer' && <AnomalyExplorerPage />}
+>>>>>>> Stashed changes
+=======
+        {activePage === 'configuration' && <ConfigurationPage />}
+        {activePage === 'anomaly-explorer' && <AnomalyExplorerPage />}
+>>>>>>> Stashed changes
       </MainContent>
     </div>
   );
