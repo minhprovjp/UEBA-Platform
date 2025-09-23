@@ -1,37 +1,312 @@
-# Python virtual environment
+# ================================
+# Python
+# ================================
+# Virtual environments
 .venv/
 venv/
-__pycache__/
-*.pyc
+env/
+ENV/
+env.bak/
+venv.bak/
 
-# IDE and editor files
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# celery beat schedule file
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ================================
+# Node.js / Frontend
+# ================================
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Vite
+.vite/
+.vite-test/
+
+# Editor directories and files
+.vscode-test/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Package managers
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# TypeScript
+*.tsbuildinfo
+
+# ESLint
+.eslintcache
+
+# ================================
+# IDE and Editor files
+# ================================
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# Generated data and state files
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ================================
+# Project Specific - UBA Platform
+# ================================
+# Database files
 # KHÔNG đưa CSDL và các file CSV đã phân tích lên Git
 data/app_database.db
 data/parsed_*.csv
 data/*.meta
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Parser state files
 engine/.mysql_parser_state
 engine/.postgres_parser_state.json
-feedback.csv
+engine/*.state
+engine/*.state.json
 
-# Trained models
+# CSV data files
+feedback.csv
+*.csv
+!requirements.txt
+
+# Trained models and ML artifacts
 # Các mô hình đã huấn luyện có thể rất lớn và đặc thù cho dữ liệu
 trained_models/
+*.joblib
+*.pkl
+*.pickle
+*.model
+*.h5
+*.pb
 
 # Logs folder
 logs/
+*.log
+*.log.*
 
 # Configuration files that may contain secrets
 # Chúng ta sẽ tạo một file template để thay thế
 config.py
 engine_config.json
+*.secret
+*.secrets
+.env*
+!.env.example
+!.env.template
 
-# Windows specific
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Cache directories
+.cache/
+cache/
+
+# ================================
+# Machine Learning / Data Science
+# ================================
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Data files (keep only samples)
+*.h5
+*.hdf5
+*.parquet
+
+# Model checkpoints
+checkpoints/
+*.ckpt
+
+# TensorBoard logs
+runs/
+logs/tensorboard/
+
+# MLflow
+mlruns/
+
+# Weights & Biases
+wandb/
+
+# ================================
+# Security and Sensitive Data
+# ================================
+# API keys and secrets
+.env
+.env.local
+.env.production
+.env.staging
+.env.development
+*.key
+*.pem
+*.p12
+*.pfx
+credentials.json
+service-account.json
+
+# Database dumps
+*.sql
+*.dump
+
+# ================================
+# System and misc
+# ================================
+# System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-#Nodejs 
-.vite/
-node_modules/
+# Archive files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
