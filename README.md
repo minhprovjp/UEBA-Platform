@@ -102,3 +102,10 @@ npm run dev
 2.  Bạn sẽ thấy giao diện tài liệu Swagger UI.
 3.  Hãy thử dùng các endpoint trong mục "Anomalies" và "Engine Control" để kiểm tra.
 4. Truy cập vào URL **[http://127.0.0.1:5173/docs](http://127.0.0.1:5173/docs)** và kiểm tra frontend.
+
+
+Setup frontend
+
+npm create vite@latest uba-frontend -- --template react-ts
+npm install axios 
+npm install chart.js react-chartjs-2
