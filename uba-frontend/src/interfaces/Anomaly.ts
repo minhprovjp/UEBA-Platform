@@ -1,4 +1,4 @@
-// src/interfaces/Anomaly.ts
+// uba-frontend/src/interfaces/Anomaly.ts
 export interface Anomaly {
   id: number;
   timestamp: string;
@@ -10,4 +10,4 @@ export interface Anomaly {
   score: number | null;
   reason: string | null;
   status: string;
-}
+} 

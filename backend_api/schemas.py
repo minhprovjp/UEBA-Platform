@@ -1,7 +1,7 @@
 # backend_api/schemas.py
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 # --- Schema cơ bản cho Anomaly ---
 # Chứa các trường chung mà cả khi tạo mới và khi đọc đều cần đến.
@@ -40,3 +40,29 @@ class AnomalyAnalysisRequest(BaseModel):
 class FeedbackCreate(BaseModel):
     label: int # 0 cho bình thường, 1 cho bất thường
     anomaly_data: dict # Gửi toàn bộ dữ liệu của bất thường dưới dạng dictionary
+
+class AnomalyPage(BaseModel):
+    total_items: int
+    items: List[Anomaly]
+
+    class Config:
+        from_attributes = True    
+    
+# --- Schemas cho Parsed Logs ---
+class LogBase(BaseModel):
+    timestamp: datetime
+    source_type: Optional[str] = 'unknown'
+    user: str
+    client_ip: Optional[str] = None
+    database: Optional[str] = None
+    query: str
+
+class Log(LogBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class LogPage(BaseModel):
+    total_items: int
+    items: List[Log]

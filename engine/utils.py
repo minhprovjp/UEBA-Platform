@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [U
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import *
+from core.config import settings
 
 # ==============================================================================
 # I. CÁC HÀM HỖ TRỢ PHÂN TÍCH THEO LUẬT (RULE-BASED ANALYSIS)
@@ -285,7 +285,7 @@ def extract_query_features(sql_query):
         
     return features
 
-def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
+def save_feedback_to_csv(item_data: dict, label: int, feedback_path: str) -> tuple[bool, str]:
     """
     Lưu phản hồi từ một dictionary vào file CSV với logic "UPSERT".
     """
@@ -305,8 +305,8 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
                 new_feedback_data[key] = json.dumps(value)
         
         df_feedback = pd.DataFrame()
-        if os.path.exists(FEEDBACK_FILE_PATH) and os.path.getsize(FEEDBACK_FILE_PATH) > 0:
-            df_feedback = pd.read_csv(FEEDBACK_FILE_PATH)
+        if os.path.exists(feedback_path) and os.path.getsize(feedback_path) > 0:
+            df_feedback = pd.read_csv(feedback_path)
 
         message = ""
         if not df_feedback.empty and 'feedback_id' in df_feedback.columns and (feedback_id in df_feedback['feedback_id'].values):
@@ -327,7 +327,7 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         all_columns = sorted(list(set(df_feedback.columns.tolist() + list(new_feedback_data.keys()))))
         final_cols = [c for c in ordered_cols if c in all_columns] + [c for c in all_columns if c not in ordered_cols]
         
-        df_feedback.to_csv(FEEDBACK_FILE_PATH, mode='w', header=True, index=False, columns=final_cols, encoding='utf-8')
+        df_feedback.to_csv(settings.FEEDBACK_FILE_PATH, mode='w', header=True, index=False, columns=final_cols, encoding='utf-8')
         
         logging.info(message) # Ghi log thay vì hiển thị toast
         return True, message # Trả về thành công và thông báo

@@ -21,6 +21,7 @@ Luồng hoạt động chính:
 """
 
 # Import các thư viện cần thiết
+import logging
 import re
 import csv
 import json
@@ -32,7 +33,7 @@ from datetime import datetime
 import sys
 # Thêm thư mục gốc để import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import * # Import tất cả các hằng số từ config.py
+from core.config import settings 
 
 # ==============================================================================
 # I. CÁC BIỂU THỨC CHÍNH QUY (REGEX)
@@ -131,10 +132,10 @@ def update_metadata_file(output_csv_path, source_log_path, source_log_size):
         meta_file_path = output_csv_path + ".meta"
         with open(meta_file_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=4)
-        print("Metadata file updated successfully.")
+        logging.info("Metadata file updated successfully.")
 
     except Exception as e:
-        print(f"Error updating metadata file: {e}")
+        logging.info(f"Error updating metadata file: {e}")
 
 # ==============================================================================
 # III. CÁC HÀM XÁC THỰC TÍNH TOÀN VẸN
@@ -160,7 +161,7 @@ def get_first_timestamp_from_log(log_path, regex_list):
                 if ts:
                     return ts # Trả về ngay khi tìm thấy
     except Exception as e:
-        print(f"Lỗi khi đọc timestamp đầu tiên từ log: {e}")
+        logging.info(f"Lỗi khi đọc timestamp đầu tiên từ log: {e}")
     return None
 
 def get_last_timestamp_from_log(log_path, regex_list):
@@ -179,7 +180,7 @@ def get_last_timestamp_from_log(log_path, regex_list):
                 if ts:
                     return ts # Trả về ngay khi tìm thấy
     except Exception as e:
-        print(f"Lỗi khi đọc timestamp cuối cùng từ log: {e}")
+        logging.info(f"Lỗi khi đọc timestamp cuối cùng từ log: {e}")
     return None
 
 # Hàm helper chuyển dữ liệu vào file mismatch_archives khi dữ liệu của file csv và file log không trùng khớp
@@ -187,31 +188,31 @@ def perform_hard_reset(reason: str):
     """
     Thực hiện "Hard Reset": Lưu trữ file CSV để đối chiếu và xóa các file trạng thái.
     """
-    print(f"!!! CẢNH BÁO: {reason}")
-    print("!!! Thực hiện Hard Reset và Lưu trữ để Đối chiếu...")
+    logging.info(f"!!! CẢNH BÁO: {reason}")
+    logging.info("!!! Thực hiện Hard Reset và Lưu trữ để Đối chiếu...")
     reason_slug = re.sub(r'[^\w-]', '_', reason.lower()).split(':')[0]
     try:
-        os.makedirs(MYSQL_MISMATCH_ARCHIVE_DIR, exist_ok=True)
+        os.makedirs(settings.MYSQL_MISMATCH_ARCHIVE_DIR, exist_ok=True)
     except OSError as e:
-        print(f"    -> LỖI: Không thể tạo thư mục lưu trữ '{MYSQL_MISMATCH_ARCHIVE_DIR}': {e}")
+        logging.info(f"    -> LỖI: Không thể tạo thư mục lưu trữ '{settings.MYSQL_MISMATCH_ARCHIVE_DIR}': {e}")
         pass
     try:
         if os.path.exists(PARSED_MYSQL_LOG_FILE_PATH):
             timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             new_filename = f"{timestamp_str}_{reason_slug}.csv"
-            destination_path = os.path.join(MYSQL_MISMATCH_ARCHIVE_DIR, new_filename)
+            destination_path = os.path.join(settings.MYSQL_MISMATCH_ARCHIVE_DIR, new_filename)
             shutil.move(PARSED_MYSQL_LOG_FILE_PATH, destination_path)
-            print(f"    -> Đã lưu trữ: {os.path.basename(PARSED_MYSQL_LOG_FILE_PATH)} -> {new_filename}")
+            logging.info(f"    -> Đã lưu trữ: {os.path.basename(PARSED_MYSQL_LOG_FILE_PATH)} -> {new_filename}")
     except Exception as e:
-        print(f"    -> LỖI khi lưu trữ file CSV: {e}")
+        logging.info(f"    -> LỖI khi lưu trữ file CSV: {e}")
     files_to_delete = [META_FILE_PATH, STATE_FILE_PATH]
     for file_path in files_to_delete:
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
-                print(f"    -> Đã xóa để reset: {os.path.basename(file_path)}")
+                logging.info(f"    -> Đã xóa để reset: {os.path.basename(file_path)}")
         except Exception as e:
-            print(f"    -> LỖI khi xóa {os.path.basename(file_path)}: {e}")
+            logging.info(f"    -> LỖI khi xóa {os.path.basename(file_path)}: {e}")
 
 # ==============================================================================
 # IV. LOGIC PHÂN TÍCH CỐT LÕI
@@ -308,7 +309,7 @@ def run_incremental_parser():
     
     # --- Bước 1: Xác thực tính toàn vẹn ---
     if not args.no_reset_check:
-        print("--- Chế độ khởi động: Đang thực hiện kiểm tra toàn vẹn ---")
+        logging.info("--- Chế độ khởi động: Đang thực hiện kiểm tra toàn vẹn ---")
         meta_exists = os.path.exists(META_FILE_PATH)
         state_exists = os.path.exists(STATE_FILE_PATH)
     
@@ -332,7 +333,7 @@ def run_incremental_parser():
                     perform_hard_reset(f"Phát hiện file log nguồn thay đổi.")
                 else:
                     # Kịch bản 2: Đường dẫn khớp, kiểm tra thời gian
-                    print("Kiểm tra tính toàn vẹn thời gian của dữ liệu...")
+                    logging.info("Kiểm tra tính toàn vẹn thời gian của dữ liệu...")
                     start_ts_in_csv = pd.to_datetime(metadata.get("timestamp_start_in_csv"), utc=True, errors='coerce')
                     
                     if pd.notna(start_ts_in_csv):
@@ -351,11 +352,11 @@ def run_incremental_parser():
                 if current_size_check < last_size_check:
                     perform_hard_reset("Phát hiện Log Rotation (kích thước file giảm).")
     else:
-        print(f"--- Chế độ Real-time: Bỏ qua kiểm tra toàn vẹn ---")
+        logging.info(f"--- Chế độ Real-time: Bỏ qua kiểm tra toàn vẹn ---")
     
     # --- Bước 2: Logic phân tích tăng dần ---
     if not os.path.exists(SOURCE_MYSQL_LOG_PATH):
-        print(f"Lỗi: File log nguồn không tồn tại tại '{SOURCE_MYSQL_LOG_PATH}'")
+        logging.info(f"Lỗi: File log nguồn không tồn tại tại '{SOURCE_MYSQL_LOG_PATH}'")
         return
 
     # Đọc trạng thái lần cuối và lấy kích thước file hiện tại
@@ -367,12 +368,12 @@ def run_incremental_parser():
         perform_hard_reset("Phát hiện Log Rotation (kích thước file giảm).")
 
     if current_size == last_size:
-        print("Không có dữ liệu log mới.")
+        logging.info("Không có dữ liệu log mới.")
         return
     
     start_pos = last_size
     
-    print(f"Đọc dữ liệu mới từ byte {start_pos} đến {current_size}...")
+    logging.info(f"Đọc dữ liệu mới từ byte {start_pos} đến {current_size}...")
     
     # Đọc phần dữ liệu mới từ file log
     with open(SOURCE_MYSQL_LOG_PATH, 'r', encoding='utf-8', errors='ignore') as f:
@@ -380,7 +381,7 @@ def run_incremental_parser():
         new_lines = f.readlines()
 
     if not new_lines:
-        print("Không tìm thấy dòng mới hợp lệ.")
+        logging.info("Không tìm thấy dòng mới hợp lệ.")
         write_last_known_state(current_size, sessions)
         return
 
@@ -388,7 +389,7 @@ def run_incremental_parser():
     df_new, updated_sessions = parse_and_append_log_data(new_lines, sessions)
     
     if df_new.empty:
-        print("Không có truy vấn nào được phân tích từ các dòng mới.")
+        logging.info("Không có truy vấn nào được phân tích từ các dòng mới.")
         write_last_known_state(current_size, updated_sessions)
         return
 
@@ -402,9 +403,9 @@ def run_incremental_parser():
     
     # Cập nhật trạng thái và metadata
     write_last_known_state(current_size, updated_sessions)
-    if not df_new.empty: print(f"Thành công! Đã xử lý và ghi thêm {len(df_new)} dòng mới.")
+    if not df_new.empty: logging.info(f"Thành công! Đã xử lý và ghi thêm {len(df_new)} dòng mới.")
     update_metadata_file(PARSED_MYSQL_LOG_FILE_PATH, SOURCE_MYSQL_LOG_PATH, current_size)
-    print("Thành công! Đã cập nhật metadata mới.")
+    logging.info("Thành công! Đã cập nhật metadata mới.")
 
 
 if __name__ == "__main__":

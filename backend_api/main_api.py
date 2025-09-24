@@ -2,76 +2,116 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
-
-# Import các thành phần từ các file trong cùng thư mục
-from . import models, schemas
-from .models import SessionLocal, engine
-
-# Import engine và trình quản lý config
+from sqlalchemy import func
+from typing import Dict
+from typing import List, Dict, Any, Optional
 import sys
 import os
-# Add parent directory to path for imports
+from .routers import logs
+from .routers import logs, filters
+from engine.schemas.config_schema import EngineConfig
+from core.config import settings
+
+# Thêm thư mục gốc vào sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from engine.engine_runner import AnalysisEngine
+
+from . import models, schemas
+from .models import SessionLocal, engine
 from engine.config_manager import load_config, save_config
 from engine.utils import save_feedback_to_csv
+from engine.llm_analyzer import analyze_query_with_llm
+from engine.status_manager import load_status
 
-from pydantic import BaseModel
-# Import hàm phân tích LLM
-from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
-
-# === TẠO MỘT INSTANCE DUY NHẤT CỦA ENGINE ===
-# Instance này sẽ tồn tại suốt vòng đời của API server
-engine_instance = AnalysisEngine()
-
-# Tạo các bảng trong CSDL nếu chúng chưa tồnTAIN (chỉ chạy khi API khởi động)
+# Khởi tạo các bảng trong CSDL
 models.Base.metadata.create_all(bind=engine)
+
+# Biến này sẽ được engine cập nhật từ bên ngoài
+# Đây là giải pháp đơn giản, trong production có thể dùng Redis hoặc DB
+ENGINE_STATUS: Dict[str, any] = {
+    "is_running": False,
+    "status": "stopped",
+    "last_run_finish_time_utc": None
+}
 
 # Khởi tạo ứng dụng FastAPI
 app = FastAPI(
+    
     title="User Behavior Analytics API",
-    description="API để truy vấn các bất thường được phát hiện bởi Engine Phân tích Log.",
+    description="API để truy vấn các bất thường và điều khiển Engine Phân tích.",
     version="1.0.0"
 )
-
+#ĐĂNG KÝ ROUTER
+app.include_router(logs.router)
+app.include_router(filters.router)
 # Cấu hình CORS
-origins = [
-    "http://localhost:5173",  # Địa chỉ của Vite React dev server
-    "http://localhost:3000",  # Thêm địa chỉ phổ biến khác của React
-]
-
+origins = ["http://localhost:5173", "http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Cho phép các nguồn gốc trong danh sách
-    allow_credentials=True, # Cho phép gửi cookie (nếu có)
-    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, PUT, DELETE,...)
-    allow_headers=["*"],    # Cho phép tất cả các header
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- Dependency Injection: Cung cấp DB Session cho các endpoint ---
+# Dependency Injection
 def get_db():
-    """
-    Tạo và cung cấp một session CSDL cho mỗi yêu cầu, và đảm bảo nó
-    luôn được đóng lại sau khi yêu cầu hoàn tất.
-    """
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-# === ĐỊNH NGHĨA API ENDPOINT ĐẦU TIÊN ===
+# === CÁC API ENDPOINT ===
 
-@app.get("/api/anomalies/", response_model=List[schemas.Anomaly], tags=["Anomalies"])
-def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+@app.get("/api/engine/status", tags=["Engine Monitoring"])
+def get_engine_status():
+    return load_status()
+
+@app.get("/api/anomalies/", response_model=schemas.AnomalyPage, tags=["Anomalies"])
+def read_anomalies(
+    skip: int = 0, 
+    limit: int = 50, 
+    type: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
     """
-    Lấy ra một danh sách các bất thường, hỗ trợ phân trang (pagination).
-    - **skip**: Bỏ qua bao nhiêu bản ghi đầu tiên.
-    - **limit**: Giới hạn số lượng bản ghi trả về.
+    Lấy danh sách bất thường, hỗ trợ phân trang và lọc theo loại.
     """
-    anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
-    return anomalies
+    query = db.query(models.Anomaly)
+    if type:
+        query = query.filter(models.Anomaly.anomaly_type == type)
+    
+    total_items = query.count()
+    anomalies = query.order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
+    return {"total_items": total_items, "items": anomalies}
+
+# === ENDPOINT MỚI CHO THỐNG KÊ ===
+@app.get("/api/stats/summary", tags=["Statistics"])
+def get_statistics_summary(db: Session = Depends(get_db)):
+    """
+    Thực hiện các truy vấn đếm để lấy số liệu thống kê tổng quan
+    về các loại bất thường và top users.
+    """
+    try:
+        anomaly_counts_query = db.query(
+            models.Anomaly.anomaly_type, 
+            func.count(models.Anomaly.anomaly_type)
+        ).group_by(models.Anomaly.anomaly_type).all()
+        anomaly_counts = {atype: count for atype, count in anomaly_counts_query}
+
+        top_users_query = db.query(
+            models.Anomaly.user,
+            func.count(models.Anomaly.user)
+        ).group_by(models.Anomaly.user).order_by(func.count(models.Anomaly.user).desc()).limit(5).all()
+        top_users = {user: count for user, count in top_users_query}
+
+        return {
+            "anomaly_counts": anomaly_counts,
+            "top_users": top_users
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi lấy dữ liệu thống kê: {e}")
+
 
 @app.get("/api/anomalies/{anomaly_id}", response_model=schemas.Anomaly, tags=["Anomalies"])
 def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db)):
@@ -118,44 +158,11 @@ def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest):
 
 # === CÁC ENDPOINT MỚI ĐỂ ĐIỀU KHIỂN ENGINE ===
 
-@app.get("/api/engine/status", tags=["Engine Control"])
-def get_engine_status():
-    """Lấy trạng thái hiện tại của Engine Phân tích."""
-    return engine_instance.get_status()
-
-@app.post("/api/engine/start", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def start_engine():
-    """Khởi động vòng lặp phân tích của Engine trong nền."""
-    if engine_instance.get_status()["is_running"]:
-        raise HTTPException(status_code=409, detail="Engine đã đang chạy.")
-    engine_instance.start()
-    return {"message": "Đã gửi yêu cầu khởi động Engine."}
-
-@app.post("/api/engine/stop", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def stop_engine():
-    """Dừng vòng lặp phân tích của Engine."""
-    if not engine_instance.get_status()["is_running"]:
-        raise HTTPException(status_code=409, detail="Engine đã dừng.")
-    engine_instance.stop()
-    return {"message": "Đã gửi yêu cầu dừng Engine."}
 
 @app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Engine Control"])
 def get_engine_config():
     """Đọc cấu hình hiện tại của Engine từ file engine_config.json."""
     return load_config()
-
-@app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def update_engine_config(config_data: Dict[str, Any]):
-    """
-    Cập nhật và ghi đè file engine_config.json.
-    Engine sẽ tự động áp dụng cấu hình mới ở chu kỳ tiếp theo.
-    """
-    success, message = save_config(config_data)
-    if not success:
-        raise HTTPException(status_code=500, detail=message)
-    # Tải lại cấu hình cho instance đang chạy
-    engine_instance.config = load_config()
-    return {"message": message}
 
 # === CÁC ENDPOINT ĐỂ QUẢN LÝ CẤU HÌNH ===
 @app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Configuration"])
@@ -169,22 +176,25 @@ def get_engine_config():
     return config
 
 @app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Configuration"])
-def update_engine_config(config_data: Dict[str, Any]):
+def update_engine_config(config_data: EngineConfig):
     """
-    Nhận một đối tượng JSON và ghi đè hoàn toàn file engine_config.json.
+    Nhận và xác thực cấu hình, sau đó ghi đè file engine_config.json.
     Engine sẽ tự động áp dụng cấu hình mới ở chu kỳ tiếp theo.
     """
-    success, message = save_config(config_data)
-    if not success:
-        raise HTTPException(status_code=500, detail=message)
-    
-    # Tải lại cấu hình cho instance engine đang chạy để nó áp dụng ngay lập tức
-    if 'engine_instance' in globals():
-        engine_instance.config = load_config()
+    try:
+        success, message = save_config(config_data.model_dump())
         
-    return {"message": message}
+        if not success:
+            raise HTTPException(status_code=500, detail=message)
+            
+        # Đơn giản chỉ trả về thông báo thành công.
+        # Engine sẽ tự lo phần còn lại.
+        return {"message": message}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 # === THÊM ENDPOINT MỚI ĐỂ NHẬN FEEDBACK ===
+
 @app.post("/api/feedback/", status_code=status.HTTP_201_CREATED, tags=["Feedback"])
 def submit_feedback(feedback: schemas.FeedbackCreate):
     """
@@ -194,7 +204,8 @@ def submit_feedback(feedback: schemas.FeedbackCreate):
         # Gọi hàm logic cốt lõi từ utils
         success, message = save_feedback_to_csv(
             item_data=feedback.anomaly_data,
-            label=feedback.label
+            label=feedback.label,
+            feedback_path=settings.FEEDBACK_FILE_PATH
         )
         if not success:
             raise HTTPException(status_code=500, detail=message)

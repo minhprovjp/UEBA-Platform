@@ -53,7 +53,7 @@ class LLMProvider(ABC):
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider"""
     
-    def __init__(self, host: str = "http://localhost:11434", timeout: int = 3600):
+    def __init__(self, host: str = "http://172.16.0.221:11434", timeout: int = 3600):
         self.host = host
         self.timeout = timeout
         self.client = None

@@ -1,0 +1,52 @@
+/* src/pages/DashboardPage.css */
+
+.dashboard-page {
+  padding: 2rem;
+}
+
+.stat-cards-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.stat-card {
+  background-color: #2a2a3e;
+  border-radius: 8px;
+  padding: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  border: 1px solid #3a3a5a;
+}
+
+.stat-card-icon {
+  font-size: 2.5rem;
+}
+
+.stat-card-title {
+  font-size: 0.9rem;
+  color: #a0a0b8;
+  margin-bottom: 0.25rem;
+}
+
+.stat-card-value {
+  font-size: 1.75rem;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 2rem;
+}
+
+.main-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+/* Bạn có thể thêm CSS cho RecentAnomalies trong file Dashboard.css chung */

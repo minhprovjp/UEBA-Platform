@@ -16,7 +16,7 @@ import ollama          # Thư viện chính để giao tiếp với Ollama
 import pandas as pd    # Dùng để làm việc với đối tượng Series
 import json            # Dùng để làm việc với định dạng dữ liệu JSON
 from typing import Optional, Dict, Any, List, Union # Dùng cho type hinting
-from config import *   # Import các hằng số cấu hình
+from core.config import settings   # Import các hằng số cấu hình
 import logging
 import os
 import sys
@@ -54,7 +54,7 @@ class LLMProvider(ABC):
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider"""
     
-    def __init__(self, host: str = "http://localhost:11434", timeout: int = 3600):
+    def __init__(self, host: str = "http://172.16.0.221:11434", timeout: int = 3600):
         self.host = host
         self.timeout = timeout
         self.client = None

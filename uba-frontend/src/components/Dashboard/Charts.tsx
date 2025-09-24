@@ -1,17 +1,10 @@
 // src/components/Dashboard/Charts.tsx
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Bar, Pie } from 'react-chartjs-2';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-  ArcElement,
-} from 'chart.js';  
-import type { Anomaly } from '../../interfaces/Anomaly';
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement,
+  Title, Tooltip, Legend, ArcElement
+} from 'chart.js';
 import './Dashboard.css';
 
 // Đăng ký các thành phần cần thiết cho Chart.js
@@ -19,190 +12,59 @@ ChartJS.register(
   CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement
 );
 
+// Component nhận props là các đối tượng đã được tính toán sẵn
 interface ChartsProps {
-  anomalies: Anomaly[];
+  anomalyCounts: Record<string, number>;
+  topUsers: Record<string, number>;
 }
 
-const Charts: React.FC<ChartsProps> = ({ anomalies }) => {
-  // --- Dữ liệu cho Biểu đồ Cột ---
-  const anomalyCounts = anomalies.reduce((acc, anomaly) => {
-    acc[anomaly.anomaly_type] = (acc[anomaly.anomaly_type] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
-  const barChartData = {
-    labels: Object.keys(anomalyCounts),
-    datasets: [{
-      label: 'Số lượng bất thường',
-      data: Object.values(anomalyCounts),
-      backgroundColor: [
-        'rgba(99, 102, 241, 0.8)',
-        'rgba(139, 92, 246, 0.8)',
-        'rgba(236, 72, 153, 0.8)',
-        'rgba(16, 185, 129, 0.8)',
-        'rgba(245, 158, 11, 0.8)',
-        'rgba(239, 68, 68, 0.8)'
-      ],
-      borderColor: [
-        'rgba(99, 102, 241, 1)',
-        'rgba(139, 92, 246, 1)',
-        'rgba(236, 72, 153, 1)',
-        'rgba(16, 185, 129, 1)',
-        'rgba(245, 158, 11, 1)',
-        'rgba(239, 68, 68, 1)'
-      ],
-      borderWidth: 2,
-      borderRadius: 8,
-      borderSkipped: false,
-    }],
-  };
-
-  const barChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        display: false,
-      },
-      tooltip: {
-        backgroundColor: 'rgba(30, 30, 46, 0.95)',
-        titleColor: '#ffffff',
-        bodyColor: '#b8b8d1',
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        borderWidth: 1,
-        cornerRadius: 12,
-        displayColors: true,
-        titleFont: {
-          size: 14,
-          weight: 'bold'
-        },
-        bodyFont: {
-          size: 13
-        }
-      }
-    },
-    scales: {
-      x: {
-        grid: {
-          color: 'rgba(255, 255, 255, 0.1)',
-          drawBorder: false,
-        },
-        ticks: {
-          color: '#b8b8d1',
-          font: {
-            size: 12,
-            weight: 'bold'
-          }
-        }
-      },
-      y: {
-        grid: {
-          color: 'rgba(255, 255, 255, 0.1)',
-          drawBorder: false,
-        },
-        ticks: {
-          color: '#b8b8d1',
-          font: {
-            size: 12,
-            weight: 'bold'
-          },
-          callback: function(value: any) {
-            return value.toLocaleString();
-          }
-        }
-      }
-    },
-    elements: {
-      bar: {
-        borderRadius: 8,
-      }
-    }
-  };
-
-  // --- Dữ liệu cho Biểu đồ Tròn ---
-  const userCounts = anomalies.reduce((acc, anomaly) => {
-    if(anomaly.user) {
-      acc[anomaly.user] = (acc[anomaly.user] || 0) + 1;
-    }
-    return acc;
-  }, {} as Record<string, number>);
+const Charts: React.FC<ChartsProps> = ({ anomalyCounts, topUsers }) => {
   
-  const topUsers = Object.entries(userCounts)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5);
+  // Sử dụng useMemo để tránh việc tính toán lại dữ liệu biểu đồ không cần thiết
+  const { barChartData, pieChartData } = useMemo(() => {
+    const anomalyLabels: Record<string, string> = {
+      'late_night': 'Giờ Khuya',
+      'dump': 'Kết xuất Lớn',
+      'multi_table': 'Nhiều Bảng',
+      'sensitive': 'Bảng Nhạy cảm',
+      'user_time': 'HĐ Bất thường',
+      'complexity': 'Phức tạp (AI)',
+    };
 
-  const pieChartData = {
-    labels: topUsers.map(([user]) => user),
-    datasets: [{
-      data: topUsers.map(([, count]) => count),
-      backgroundColor: [
-        'rgba(99, 102, 241, 0.8)',
-        'rgba(139, 92, 246, 0.8)',
-        'rgba(236, 72, 153, 0.8)',
-        'rgba(16, 185, 129, 0.8)',
-        'rgba(245, 158, 11, 0.8)'
-      ],
-      borderColor: [
-        'rgba(99, 102, 241, 1)',
-        'rgba(139, 92, 246, 1)',
-        'rgba(236, 72, 153, 1)',
-        'rgba(16, 185, 129, 1)',
-        'rgba(245, 158, 11, 1)'
-      ],
-      borderWidth: 2,
-      hoverOffset: 8,
-    }],
-  };
-
-  const pieChartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'bottom' as const,
-        labels: {
-          color: '#b8b8d1',
-          font: {
-            size: 12,
-            weight: 'bold'
-          },
-          padding: 20,
-          usePointStyle: true,
-          pointStyle: 'circle'
-        }
-      },
-      tooltip: {
-        backgroundColor: 'rgba(30, 30, 46, 0.95)',
-        titleColor: '#ffffff',
-        bodyColor: '#b8b8d1',
-        borderColor: 'rgba(255, 255, 255, 0.1)',
+    const barData = {
+      labels: Object.values(anomalyLabels), // Lấy tên tiếng Việt để làm nhãn
+      datasets: [{
+        label: 'Số lượng bất thường',
+        // Lấy dữ liệu theo đúng thứ tự của các nhãn
+        data: Object.keys(anomalyLabels).map(key => anomalyCounts[key] || 0),
+        backgroundColor: 'rgba(75, 192, 192, 0.6)',
+        borderColor: 'rgba(75, 192, 192, 1)',
         borderWidth: 1,
-        cornerRadius: 12,
-        displayColors: true,
-        titleFont: {
-          size: 14,
-          weight: '600'
-        },
-        bodyFont: {
-          size: 13
-        }
-      }
-    }
-  };
+      }],
+    };
+
+    const pieData = {
+      labels: Object.keys(topUsers), // Tên user
+      datasets: [{
+        data: Object.values(topUsers), // Số lượng bất thường tương ứng
+        backgroundColor: [
+          '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF'
+        ],
+      }],
+    };
+
+    return { barChartData: barData, pieChartData: pieData };
+  }, [anomalyCounts, topUsers]); // Chỉ chạy lại khi props thay đổi
 
   return (
     <div className="charts-container">
       <div className="chart-wrapper">
-        <h3>📊 Số lượng bất thường theo loại</h3>
-        <div style={{ height: '400px', position: 'relative' }}>
-          <Bar data={barChartData} options={barChartOptions as any} />
-        </div>
+        <h3>Số lượng bất thường theo loại</h3>
+        <Bar data={barChartData} options={{ maintainAspectRatio: false, responsive: true, plugins: { title: { display: true, text: 'Số lượng bất thường theo loại' } } }} />
       </div>
       <div className="chart-wrapper">
-        <h3>👥 Top 5 Users có nhiều bất thường nhất</h3>
-        <div style={{ height: '400px', position: 'relative' }}>
-          <Pie data={pieChartData} options={pieChartOptions as any} />
-        </div>
+        <h3>Top 5 Users có nhiều bất thường nhất</h3>
+        <Pie data={pieChartData} options={{ maintainAspectRatio: false, responsive: true, plugins: { title: { display: true, text: 'Top 5 Users có nhiều bất thường nhất' } } }} />
       </div>
     </div>
   );

@@ -19,6 +19,7 @@ from tzlocal import get_localzone
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
+from core.config import settings
 import os
 import joblib
 import logging
@@ -32,7 +33,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [D
 # Điều này làm cho module này có thể chạy được từ bất kỳ đâu.
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import *
 # Sử dụng relative import cho các module trong cùng package 'engine'
 from .utils import (
     is_late_night_query, is_potential_large_dump, get_tables_with_sqlglot,
@@ -41,8 +41,8 @@ from .utils import (
 # from email_alert import send_email_alert # Sẽ tích hợp lại sau nếu cần
 
 # Đảm bảo các thư mục tồn tại
-os.makedirs(MODELS_DIR, exist_ok=True)
-os.makedirs(USER_MODELS_DIR, exist_ok=True)
+os.makedirs(settings.MODELS_DIR, exist_ok=True)
+os.makedirs(settings.USER_MODELS_DIR, exist_ok=True)
 
 def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     """
@@ -50,26 +50,10 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     Trả về một dictionary chứa tất cả các kết quả.
     """
     
-    # if not os.path.exists(log_file_path):
-    #     logging.error(f"File log không tìm thấy tại đường dẫn '{log_file_path}'.")
-    #     return None
-    # if os.path.getsize(log_file_path) == 0:
-    #     logging.warning(f"File log '{os.path.basename(log_file_path)}' rỗng, không có dữ liệu để phân tích.")
-    #     return {"empty": True}
-
-    # try:
-    #     df_logs = pd.read_csv(log_file_path)
-    # except Exception as e:
-    #     logging.error(f"Lỗi khi đọc file CSV '{log_file_path}': {e}")
-    #     return None
-
-    # if df_logs.empty:
-    #     logging.warning("File log có header nhưng không có dòng dữ liệu nào.")
-    #     return {"empty": True}
-    
     # --- BƯỚC 1: KIỂM TRA DATAFRAME ĐẦU VÀO ---
     if input_df is None or input_df.empty:
         logging.warning("DataFrame đầu vào rỗng hoặc None, không có dữ liệu để xử lý.")
+        # Trả về một cấu trúc rỗng để đảm bảo code ở engine_runner không bị lỗi
         return {
             "all_logs": pd.DataFrame(), "anomalies_late_night": pd.DataFrame(),
             "anomalies_dump": pd.DataFrame(), "anomalies_multi_table": pd.DataFrame(),
@@ -84,7 +68,9 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs.dropna(subset=['timestamp'], inplace=True)
     if df_logs.empty:
         logging.warning("Không còn dữ liệu sau khi loại bỏ timestamp không hợp lệ.")
-        return {"empty": True}
+        # Trả về cấu trúc rỗng
+        return { "all_logs": pd.DataFrame(), "anomalies_late_night": pd.DataFrame(), "anomalies_dump": pd.DataFrame(), "anomalies_multi_table": pd.DataFrame(), "anomalies_sensitive": pd.DataFrame(), "anomalies_user_time": pd.DataFrame(), "anomalies_complexity": pd.DataFrame(), "normal_activities": pd.DataFrame() }
+    
     try:
         local_tz = get_localzone()
         if df_logs['timestamp'].dt.tz is not None:
@@ -96,29 +82,30 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         logging.error(f"Lỗi khi chuẩn hóa múi giờ: {e}.")
     df_logs['query'] = df_logs['query'].astype(str)
 
-    # === BƯỚC 3: LẤY VÀ CHUẨN HÓA TẤT CẢ CÁC THAM SỐ CẤU HÌNH TẠI MỘT NƠI DUY NHẤT ===
+    # === BƯỚC 3: LẤY CÁC THAM SỐ CẤU HÌNH TỪ `config_params` VỚI GIÁ TRỊ MẶC ĐỊNH AN TOÀN ===
     
-    # Chuyển đổi các giá trị thời gian từ chuỗi sang đối tượng time
+    p_known_large_tables = config_params.get('p_known_large_tables', [])
+    p_time_window_minutes = config_params.get('p_time_window_minutes', 5)
+    p_min_distinct_tables = config_params.get('p_min_distinct_tables', 3)
+    p_sensitive_tables = config_params.get('p_sensitive_tables', [])
+    p_allowed_users_sensitive = config_params.get('p_allowed_users_sensitive', [])
+    p_safe_hours_start = config_params.get('p_safe_hours_start', 8)
+    p_safe_hours_end = config_params.get('p_safe_hours_end', 18)
+    p_safe_weekdays = config_params.get('p_safe_weekdays', [0, 1, 2, 3, 4])
+    p_quantile_start = config_params.get('p_quantile_start', 0.15)
+    p_quantile_end = config_params.get('p_quantile_end', 0.85)
+    p_min_queries_for_profile = config_params.get('p_min_queries_for_profile', 10)
+    
     try:
-        p_late_night_start_time = dt_time.fromisoformat(config_params.get('p_late_night_start_time'))
-        p_late_night_end_time = dt_time.fromisoformat(config_params.get('p_late_night_end_time'))
+        start_time_str = config_params.get('p_late_night_start_time', '00:00:00')
+        end_time_str = config_params.get('p_late_night_end_time', '05:00:00')
+        p_late_night_start_time = dt_time.fromisoformat(start_time_str)
+        p_late_night_end_time = dt_time.fromisoformat(end_time_str)
     except (ValueError, TypeError):
-        logging.error("Định dạng thời gian trong config không hợp lệ. Sử dụng giá trị mặc định.")
-        p_late_night_start_time = LATE_NIGHT_START_TIME_DEFAULT
-        p_late_night_end_time = LATE_NIGHT_END_TIME_DEFAULT
-    
-    # --- Lấy tham số từ dictionary cấu hình ---
-    p_known_large_tables = config_params.get('p_known_large_tables', KNOWN_LARGE_TABLES_DEFAULT)
-    p_time_window_minutes = config_params.get('p_time_window_minutes', TIME_WINDOW_DEFAULT_MINUTES)
-    p_min_distinct_tables = config_params.get('p_min_distinct_tables', MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT)
-    p_sensitive_tables = config_params.get('p_sensitive_tables', SENSITIVE_TABLES_DEFAULT)
-    p_allowed_users_sensitive = config_params.get('p_allowed_users_sensitive', ALLOWED_USERS_FOR_SENSITIVE_DEFAULT)
-    p_safe_hours_start = config_params.get('p_safe_hours_start', SAFE_HOURS_START_DEFAULT)
-    p_safe_hours_end = config_params.get('p_safe_hours_end', SAFE_HOURS_END_DEFAULT)
-    p_safe_weekdays = config_params.get('p_safe_weekdays', SAFE_WEEKDAYS_DEFAULT)
-    p_quantile_start = config_params.get('p_quantile_start', QUANTILE_START_DEFAULT)
-    p_quantile_end = config_params.get('p_quantile_end', QUANTILE_END_DEFAULT)
-    p_min_queries_for_profile = config_params.get('p_min_queries_for_profile', MIN_QUERIES_FOR_PROFILE_DEFAULT)
+        logging.error("Định dạng thời gian trong config không hợp lệ. Sử dụng giá trị mặc định cứng.")
+        p_late_night_start_time = dt_time(0, 0)
+        p_late_night_end_time = dt_time(5, 0)
+
     # --- Feature Engineering ---
     df_logs['query_lower'] = df_logs['query'].str.lower()
     df_logs['query_length'] = df_logs['query_lower'].str.len()
@@ -325,7 +312,7 @@ def analyze_contextual_complexity_anomalies(df_with_features, min_queries_for_pr
         return pd.Series(name='anomaly_score'), pd.Series(name='is_complexity_anomaly'), pd.Series(name='analysis_type')
     
     # Xử lý mô hình toàn cục
-    global_model_path = os.path.join(MODELS_DIR, "global_isolation_forest.joblib")
+    global_model_path = os.path.join(settings.MODELS_DIR, "global_isolation_forest.joblib")
     global_model, scaler_global = load_model_and_scaler(global_model_path)
     if global_model is None or scaler_global is None:
         logging.info("Không tìm thấy mô hình toàn cục, đang tiến hành huấn luyện lần đầu...")
@@ -339,7 +326,7 @@ def analyze_contextual_complexity_anomalies(df_with_features, min_queries_for_pr
     all_results = []
     for user, user_df in df_analysis.groupby('user'):
         current_user_df = user_df.copy()
-        user_model_path = os.path.join(USER_MODELS_DIR, f"{user}.joblib")
+        user_model_path = os.path.join(settings.USER_MODELS_DIR, f"{user}.joblib")
         if len(user_df) >= min_queries_for_profile:
             user_model, scaler_user = load_model_and_scaler(user_model_path)
             if user_model is None or scaler_user is None:
