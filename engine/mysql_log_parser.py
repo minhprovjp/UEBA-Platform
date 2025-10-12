@@ -28,7 +28,7 @@ import os
 import shutil
 import argparse
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 import sys
 # Thêm thư mục gốc để import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -119,7 +119,7 @@ def update_metadata_file(output_csv_path, source_log_path, source_log_size):
 
         metadata = {
             "source_log_path": source_log_path,
-            "last_updated_utc": datetime.utcnow().isoformat() + "Z",
+            "last_updated_utc": datetime.now(timezone.utc).isoformat(),
             "parser_version": "1.2", # Tăng phiên bản
             "source_log_size_bytes": source_log_size,
             "total_records_in_csv": len(df),
@@ -148,7 +148,42 @@ def get_timestamp_from_line(line, regex_list):
         match = regex.match(line)
         if match:
             # Chuyển chuỗi ISO 8601 (với Z) thành đối tượng datetime timezone-aware (UTC)
-            return datetime.fromisoformat(match.group('timestamp').replace('Z', '+00:00'))
+            timestamp_str = match.group('timestamp')
+            # SỬ DỤNG pd.to_datetime ĐỂ CHUẨN HÓA
+            # errors='coerce' sẽ trả về NaT nếu chuỗi không hợp lệ
+            return pd.to_datetime(timestamp_str, utc=True, errors='coerce')
+    return None
+
+def get_first_processable_timestamp(log_path, regex_list):
+    """
+    Đọc file log và tìm timestamp của BẢN GHI ĐẦU TIÊN SẼ ĐƯỢC XỬ LÝ.
+    Hàm này mô phỏng logic của parser chính để đảm bảo tính nhất quán.
+    """
+    temp_sessions = set() # Dùng set để lưu các thread_id đã kết nối, nhanh hơn dict
+    connect_regex = regex_list[0] # Giả định regex đầu tiên là cho 'Connect'
+    query_regex = regex_list[1]   # Giả định regex thứ hai là cho 'Query'
+    
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                
+                # Cố gắng khớp với 'Connect' trước
+                connect_match = connect_regex.match(line)
+                if connect_match:
+                    temp_sessions.add(connect_match.group('thread_id'))
+                    continue # Chuyển sang dòng tiếp theo
+                
+                # Cố gắng khớp với 'Query'
+                query_match = query_regex.match(line)
+                if query_match:
+                    thread_id = query_match.group('thread_id')
+                    # CHỈ trả về timestamp nếu session đã được khởi tạo
+                    if thread_id in temp_sessions:
+                        timestamp_str = query_match.group('timestamp')
+                        return pd.to_datetime(timestamp_str, utc=True, errors='coerce')
+    except Exception as e:
+        print(f"Lỗi khi đọc timestamp có thể xử lý đầu tiên: {e}")
     return None
 
 def get_first_timestamp_from_log(log_path, regex_list):
@@ -303,7 +338,7 @@ def parse_and_append_log_data(new_lines, sessions):
 # V. HÀM CHÍNH (ENTRY POINT CỦA SCRIPT)
 # ==============================================================================
 
-def run_incremental_parser():
+def run_incremental_parser(source_log_path, output_csv_path, state_file_path, no_reset_check=False):
     """Hàm chính để thực thi toàn bộ logic phân tích tăng dần."""
     
     # --- Bước 1: Xác thực tính toàn vẹn ---
@@ -311,10 +346,11 @@ def run_incremental_parser():
         print("--- Chế độ khởi động: Đang thực hiện kiểm tra toàn vẹn ---")
         meta_exists = os.path.exists(META_FILE_PATH)
         state_exists = os.path.exists(STATE_FILE_PATH)
+        csv_exists = os.path.exists(PARSED_MYSQL_LOG_FILE_PATH)
     
         # Nếu trạng thái không đồng bộ (một file có, một file không), reset tất cả
-        if meta_exists != state_exists:
-            perform_hard_reset(f"Phát hiện trạng thái không đồng bộ (meta: {meta_exists}, state: {state_exists}).")
+        if not (sum([meta_exists, state_exists, csv_exists]) in [0, 3]):
+            perform_hard_reset(f"Phát hiện trạng thái không đồng bộ (meta:{meta_exists}, state:{state_exists}, csv:{csv_exists}).")
             # Sau khi reset, cập nhật lại trạng thái tồn tại của file
             meta_exists = False
             state_exists = False
@@ -333,14 +369,16 @@ def run_incremental_parser():
                 else:
                     # Kịch bản 2: Đường dẫn khớp, kiểm tra thời gian
                     print("Kiểm tra tính toàn vẹn thời gian của dữ liệu...")
+                    # Đọc timestamp từ meta và đảm bảo nó là Pandas Timestamp
                     start_ts_in_csv = pd.to_datetime(metadata.get("timestamp_start_in_csv"), utc=True, errors='coerce')
                     
                     if pd.notna(start_ts_in_csv):
                         regex_patterns = [mysql_connect_regex, mysql_query_regex, mysql_init_db_regex]
-                        first_ts_in_log = get_first_timestamp_from_log(SOURCE_MYSQL_LOG_PATH, regex_patterns)
+                        first_ts_in_log = get_first_processable_timestamp(source_log_path, regex_patterns)
                         
-                        if first_ts_in_log and start_ts_in_csv != first_ts_in_log:
-                            perform_hard_reset(f"Phát hiện không khớp timestamp bắt đầu.")
+                        # So sánh hai đối tượng Pandas Timestamp. Phép so sánh này sẽ chính xác.
+                        if pd.notna(first_ts_in_log) and start_ts_in_csv != first_ts_in_log:
+                            perform_hard_reset(f"Phát hiện không khớp timestamp bắt đầu. Log (processable): {first_ts_in_log}, CSV: {start_ts_in_csv}.")
         except Exception as e:
             perform_hard_reset(f"Không đọc được file metadata hoặc file bị hỏng ({e}).")
 
@@ -429,4 +467,9 @@ if __name__ == "__main__":
     STATE_FILE_PATH = os.path.join(os.path.dirname(args.output), ".mysql_parser_state")
     
     # Điểm khởi đầu khi chạy script này trực tiếp từ terminal
-    run_incremental_parser()
+    run_incremental_parser(
+        source_log_path=SOURCE_MYSQL_LOG_PATH,
+        output_csv_path=PARSED_MYSQL_LOG_FILE_PATH,
+        state_file_path=STATE_FILE_PATH,
+        no_reset_check=args.no_reset_check
+    )
