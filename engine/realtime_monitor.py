@@ -5,6 +5,7 @@ import os
 import time
 import logging
 import threading
+import shutil
 
 # Thêm thư mục gốc vào sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,8 +43,9 @@ def monitor_log_file(log_path, parser_script, output_csv):
 
     # Chọn câu lệnh dựa trên hệ điều hành
     if sys.platform == "win32":
-        # Sử dụng PowerShell. "-Wait" tương đương -f, "-Tail 1" chỉ lấy các dòng mới
-        command = ["powershell", "-Command", f"Get-Content '{log_path}' -Wait -Tail 1"]
+    # Prefer pwsh (PowerShell Core), fallback to classic powershell.exe
+        powershell_cmd = "pwsh" if shutil.which("pwsh") else "powershell"
+        command = [powershell_cmd, "-Command", f"Get-Content '{log_path}' -Wait -Tail 1"]
     else:
         # Dành cho Linux và macOS
         command = ["tail", "-F", "-n", "0", log_path]
