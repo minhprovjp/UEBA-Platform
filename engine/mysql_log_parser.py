@@ -333,7 +333,11 @@ def run_incremental_parser():
                     perform_hard_reset(f"Phát hiện file log nguồn thay đổi.")
                 else:
                     # Kịch bản 2: Đường dẫn khớp, kiểm tra thời gian
+<<<<<<< Updated upstream
                     logging.info("Kiểm tra tính toàn vẹn thời gian của dữ liệu...")
+=======
+                    print("Kiểm tra tính toàn vẹn thời gian của dữ liệu...")
+>>>>>>> Stashed changes
                     start_ts_in_csv = pd.to_datetime(metadata.get("timestamp_start_in_csv"), utc=True, errors='coerce')
                     
                     if pd.notna(start_ts_in_csv):
