@@ -35,15 +35,33 @@ OUTPUT_LOG_FILE = "simulated_general_log.txt"
 DB_NAME = "company_db"
 
 SIMULATION_START_TIME = datetime(2025, 10, 20, 7, 0, 0)
-SIMULATION_DURATION_DAYS = 30      # Mô phỏng 7 ngày
-SESSIONS_PER_HOUR_BASE = 1000       # Tăng số này lên (ví dụ 50) nếu muốn log cực lớn
+SIMULATION_DURATION_DAYS = 14      # Mô phỏng bao nhiêu ngày
+SESSIONS_PER_HOUR_BASE = 50       # Session trong 1 giờ
 
 # Giờ làm việc công ty
 WORK_START = dt_time(7, 0)
 WORK_END = dt_time(17, 0)
 OVERTIME_END = dt_time(20, 0)
 
-COMPANY_IP_RANGE = "192.168.1."
+# Tracker: để đảm bảo mỗi giờ (ví dụ 2025-10-22 02h) chỉ spawn tối đa 1 compromised session
+compromise_tracker = {}
+# Xác suất base cho ngày thường (weekday, ban đêm) -> stealth
+BASE_COMPROMISE_PROB = 1        # 2% cơ hội tấn công nhẹ/stealth
+# Xác suất cuối tuần (weekend, ban đêm) -> loud hơn
+WEEKEND_COMPROMISE_PROB = 1     # 15% cơ hội tấn công mạnh/loud
+# Số session tấn công trong 1 giờ
+MAX_COMPROMISE_PER_HOUR = 2        # 2 session tấn công trong 1 giờ
+
+# Tình huống (có thể bật/tắt)
+ENABLE_SCENARIO_PRIVILEGE_ABUSE = True          # Dev truy cập dữ liệu nhạy cảm không liên quan đến công việc
+ENABLE_SCENARIO_DATA_LEAKAGE = True             # Marketing gia tăng đột ngột việc truy cập dữ liệu nhạy cảm
+ENABLE_SCENARIO_OT_IP_THEFT = True              # InsiderThreat đánh cắp tài sản trí tuệ bằng cách truy cập ngoài giờ
+ENABLE_SCENARIO_SABOTAGE = True                 # InsiderThreat cố ý phá hoại tài sản công ty
+ENABLE_SCENARIO_PRIV_ESCALATION = True          # Developer/Insider cố tự nâng quyền
+ENABLE_SCENARIO_IDENTITY_THEFT_ONLY = True      # Cho phép login từ IP ác nhưng hành vi "như bình thường"
+ENABLE_SCENARIO_COMPROMISED_ACCOUNT = True      # Attacker tấn công
+
+#COMPANY_IP_RANGE = "192.168.1."
 
 # Các bảng để ITAdmin quét (Rule 3)
 TABLES = [
@@ -68,83 +86,104 @@ EMPLOYEES = {
     "sales_user_anh": {
         "username": "anh_sales",
         "persona": "Sales",
-        "ip": COMPANY_IP_RANGE + "10",
+        "dept": "Sales",
+        "ip": "192.168.1.10",
         "alt_ips": [],
+        "normal_hours": (dt_time(8,30), dt_time(17,30)),
         "overtime_prob": 0.15,
-        "normal_hours": (dt_time(8, 30), dt_time(17, 30)),
-        "allowed_sensitive": []
+        "can_manage_users": False,
+        "can_view_salaries_normally": False,
+        "priv_compromise_profile": "low"
     },
     "marketing_user_binh": {
         "username": "binh_mkt",
         "persona": "Marketing",
-        "ip": COMPANY_IP_RANGE + "11",
+        "dept": "Marketing",
+        "ip": "192.168.1.11",
         "alt_ips": [],
+        "normal_hours": (dt_time(9,0), dt_time(18,0)),
         "overtime_prob": 0.05,
-        "normal_hours": (dt_time(9, 0), dt_time(18, 0)),
-        "allowed_sensitive": []
+        "can_manage_users": False,
+        "can_view_salaries_normally": False,
+        "priv_compromise_profile": "low"
     },
     "hr_user_chi": {
         "username": "chi_hr",
         "persona": "HR",
-        "ip": COMPANY_IP_RANGE + "12",
+        "dept": "HR",
+        "ip": "192.168.1.12",
         "alt_ips": [],
+        "normal_hours": (dt_time(8,0), dt_time(17,0)),
         "overtime_prob": 0.01,
-        "normal_hours": (dt_time(8, 0), dt_time(17, 0)),
-        "allowed_sensitive": ["employees", "salaries"]
+        "can_manage_users": False,
+        "can_view_salaries_normally": True,     # HR được xem lương hợp lệ
+        "priv_compromise_profile": "sensitive"  # nếu bị hack -> nguy hiểm vì lộ lương
     },
     "support_user_dung": {
         "username": "dung_support",
         "persona": "Support",
-        "ip": COMPANY_IP_RANGE + "13",
+        "dept": "Support",
+        "ip": "192.168.1.13",
         "alt_ips": [],
+        "normal_hours": (dt_time(7,30), dt_time(19,0)),
         "overtime_prob": 0.20,
-        "normal_hours": (dt_time(7, 30), dt_time(19, 0)),
-        "allowed_sensitive": []
+        "can_manage_users": False,
+        "can_view_salaries_normally": False,
+        "priv_compromise_profile": "low"
     },
     "dev_user_em": {
         "username": "em_dev",
         "persona": "Developer",
-        "ip": COMPANY_IP_RANGE + "15",
+        "dept": "Engineering",
+        "ip": "192.168.1.15",
         "alt_ips": [],
+        "normal_hours": (dt_time(10,0), dt_time(20,0)),
         "overtime_prob": 0.40,
-        "normal_hours": (dt_time(10, 0), dt_time(20, 0)),
-        "allowed_sensitive": []
-    },
-    "it_admin_thanh": {
-        "username": "thanh_admin",
-        "persona": "ITAdmin",
-        "ip": COMPANY_IP_RANGE + "2",
-        "alt_ips": [],
-        "overtime_prob": 0.30,
-        "normal_hours": (dt_time(6, 30), dt_time(19, 0)),
-        "allowed_sensitive": ["mysql.user", "system_logs"]
+        "can_manage_users": False,
+        "can_view_salaries_normally": False,
+        "priv_compromise_profile": "low"
     },
     "insider_dave": {
         "username": "dave_dev",
         "persona": "InsiderThreat",
-        "ip": COMPANY_IP_RANGE + "16",
-        "alt_ips": ["113.21.55.88"],  # IP ở nhà hoặc VPN lạ
+        "dept": "Engineering",
+        "ip": "192.168.1.16",
+        "alt_ips": ["113.21.55.88"],  # nhà / VPN
+        "normal_hours": (dt_time(10,0), dt_time(18,0)),
         "overtime_prob": 0.35,
-        "normal_hours": (dt_time(10, 0), dt_time(18, 0)),
-        "allowed_sensitive": []
+        "can_manage_users": False,
+        "can_view_salaries_normally": False,
+        "priv_compromise_profile": "low"
+    },
+    "it_admin_thanh": {
+        "username": "thanh_admin",
+        "persona": "ITAdmin",
+        "dept": "IT",
+        "ip": "192.168.1.2",
+        "alt_ips": ["185.220.101.4"],  # remote admin/VPN
+        "normal_hours": (dt_time(6,30), dt_time(19,0)),
+        "overtime_prob": 0.30,
+        "can_manage_users": True,           # có GRANT OPTION, CREATE USER
+        "can_view_salaries_normally": True, # gần như root
+        "priv_compromise_profile": "admin"
     }
 }
 
-EXTERNAL_ATTACKER = {
-    "username": "attacker",
-    "persona": "Attacker",
-    "ip": "103.77.161.88",
-    "alt_ips": [],
-    "overtime_prob": 0.0,
-    "normal_hours": (dt_time(2, 0), dt_time(5, 0)),
-    "allowed_sensitive": []
-}
+# EXTERNAL_ATTACKER = {
+#     "username": "attacker",
+#     "persona": "Attacker",
+#     "ip": "103.77.161.88",
+#     "alt_ips": [],
+#     "overtime_prob": 0.0,
+#     "normal_hours": (dt_time(2, 0), dt_time(5, 0)),
+#     "allowed_sensitive": []
+# }
 
-# Tình huống (có thể bật/tắt)
-ENABLE_SCENARIO_PRIVILEGE_ABUSE = True  # Dev truy cập dữ liệu nhạy cảm không liên quan đến công việc
-ENABLE_SCENARIO_DATA_LEAKAGE = True     # Marketing gia tăng đột ngột việc truy cập dữ liệu nhạy cảm
-ENABLE_SCENARIO_OT_IP_THEFT = True      # InsiderThreat đánh cắp tài sản trí tuệ bằng cách truy cập ngoài giờ
-ENABLE_SCENARIO_SABOTAGE = True         # InsiderThreat cố ý phá hoại tài sản công ty
+MALICIOUS_IP_POOL = [
+    "103.77.161.88",
+    "113.21.55.88",
+    "185.220.101.4"
+]
 
 # ==============================================================================
 # 2. TIỆN ÍCH NHỎ
@@ -319,6 +358,7 @@ def gen_developer_queries(is_overtime=False, is_off_hours=False):
             "UPDATE orders SET status = 'FIXED_IN_STAGING' "
             f"WHERE order_id = {order_id}"
         )
+        
     # === PRIVILEGE ABUSE SCENARIO ===
     # Dev tò mò xem lương dù không cần
     if ENABLE_SCENARIO_PRIVILEGE_ABUSE:
@@ -327,6 +367,16 @@ def gen_developer_queries(is_overtime=False, is_off_hours=False):
             q.append("SELECT * FROM salaries")
         if random.random() < 0.1:
             q.append("SELECT * FROM employees")
+            
+    # === PRIVILEGE ESCALATION SCENARIO ===
+    # Dev (không phải admin) cố tự nâng quyền. Thường sẽ fail.
+    if ENABLE_SCENARIO_PRIV_ESCALATION:
+        if random.random() < 0.02:  # rất hiếm
+            q.append(
+                "GRANT ALL PRIVILEGES ON company_db.* "
+                "TO 'em_dev'@'%' WITH GRANT OPTION"
+            )
+
     return q
 
 def gen_itadmin_queries(is_overtime=False, is_off_hours=False):
@@ -386,7 +436,8 @@ def gen_insider_queries(is_overtime=False, is_off_hours=False):
 
             # lấy data khách hàng hàng loạt
             q.append("SELECT * FROM customers")
-        # === SABOTAGE SCENARIO ===
+    
+    # === SABOTAGE SCENARIO ===
     if ENABLE_SCENARIO_SABOTAGE and is_off_hours and random.random() < 0.15:
         # xoá toàn bộ orders (không WHERE)
         q.append("DELETE FROM orders")
@@ -398,35 +449,177 @@ def gen_insider_queries(is_overtime=False, is_off_hours=False):
         if random.random() < 0.3:
             victim_table = random.choice(["orders", "products", "customers"])
             q.append(f"DROP TABLE {victim_table}")
+            
+    # Insider cố tình leo thang đặc quyền bằng cách cấp quyền admin bừa bãi
+    if ENABLE_SCENARIO_PRIV_ESCALATION and (is_overtime or is_off_hours):
+        # làm việc này vào lúc OT/đêm cho giống người chuẩn bị nghỉ việc
+        if random.random() < 0.3:
+            q.append(
+                "GRANT ALL PRIVILEGES ON company_db.* "
+                "TO 'dave_dev'@'%' WITH GRANT OPTION"
+            )
+        # hoặc tạo backdoor giống attacker loud nhưng dưới danh nghĩa tài khoản nội bộ
+        if random.random() < 0.2:
+            q.append(
+                "CREATE USER 'shadow_admin'@'%' IDENTIFIED BY 'TempPass123!';"
+            )
+            q.append(
+                "GRANT ALL PRIVILEGES ON company_db.* TO 'shadow_admin'@'%' WITH GRANT OPTION"
+            )
+            q.append("FLUSH PRIVILEGES")
+
     return q
 
-def gen_attacker_queries(is_overtime=False, is_off_hours=False):
+# def gen_attacker_queries(is_overtime=False, is_off_hours=False):
+#     q = []
+#     # Recon
+#     q.append("SHOW DATABASES")
+#     q.append("SHOW TABLES")
+#     for tbl in random.sample(SENSITIVE_TABLES, k=min(2, len(SENSITIVE_TABLES))):
+#         q.append(f"DESCRIBE `{tbl}`")
+
+#     # Khai thác
+#     if random.random() < 0.5:
+#         q.append(
+#             "SELECT * FROM users WHERE id = 1 "
+#             "AND IF(1=1, SLEEP(5), 0)"
+#         )
+#     else:
+#         q.append(
+#             "SELECT name, email FROM customers "
+#             "UNION SELECT user, password FROM mysql.user"
+#         )
+
+#     # Trích xuất
+#     q.append("SELECT * FROM salaries")
+#     if random.random() < 0.5:
+#         q.append(
+#             "SELECT * INTO OUTFILE '/tmp/products_export.csv' FROM products"
+#         )
+#     return q
+
+# def gen_compromised_account_queries(user_info):
+#     profile = user_info["priv_compromise_profile"]
+#     q = []
+
+#     if profile == "low":
+#         # cố truy cập nhạy cảm dù không có quyền
+#         q.append("SELECT * FROM salaries")
+#         q.append("SELECT user, host, plugin FROM mysql.user")
+#         # cố leo thang
+#         q.append("CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';")
+#         q.append("GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';")
+#         q.append("FLUSH PRIVILEGES")
+#         # lấy data mà tài khoản này THỰC SỰ có quyền xem
+#         q.append("SELECT * FROM customers")
+#         q.append("SELECT * FROM orders LIMIT 50")
+
+#     elif profile == "sensitive":
+#         # HR bị chiếm -> rò rỉ lương là hợp lệ
+#         q.append("SELECT * FROM salaries")
+#         q.append("SELECT * FROM salaries INTO OUTFILE '/tmp/salaries_dump.csv' FIELDS TERMINATED BY ','")
+#         # thử escalate nhưng thường fail vì HR không có GRANT OPTION
+#         q.append("CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';")
+#         q.append("GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';")
+#         q.append("FLUSH PRIVILEGES")
+#         # có thể liếc mysql.user
+#         q.append("SHOW FULL PROCESSLIST")
+
+#     elif profile == "admin":
+#         # IT admin bị chiếm -> ác mộng
+#         q.append("SHOW FULL PROCESSLIST")
+#         q.append("SELECT user, host, plugin FROM mysql.user")
+#         # tạo backdoor
+#         q.append("CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';")
+#         q.append("GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';")
+#         q.append("FLUSH PRIVILEGES")
+#         # dump data nhạy cảm
+#         q.append("SELECT * FROM salaries")
+#         q.append("SELECT * FROM customers")
+#         q.append("SELECT * FROM salaries INTO OUTFILE '/tmp/salaries_dump.csv' FIELDS TERMINATED BY ','")
+#         q.append("SELECT * FROM customers INTO OUTFILE '/tmp/customers_dump.csv' FIELDS TERMINATED BY ','")
+#     return q
+
+def gen_compromised_account_queries_loud(user_info):
+    profile = user_info["priv_compromise_profile"]
     q = []
-    # Recon
-    q.append("SHOW DATABASES")
-    q.append("SHOW TABLES")
-    for tbl in random.sample(SENSITIVE_TABLES, k=min(2, len(SENSITIVE_TABLES))):
-        q.append(f"DESCRIBE `{tbl}`")
 
-    # Khai thác
-    if random.random() < 0.5:
-        q.append(
-            "SELECT * FROM users WHERE id = 1 "
-            "AND IF(1=1, SLEEP(5), 0)"
-        )
-    else:
-        q.append(
-            "SELECT name, email FROM customers "
-            "UNION SELECT user, password FROM mysql.user"
-        )
+    if profile == "low":
+        q += [
+            "SELECT * FROM salaries",
+            "SELECT user, host, plugin FROM mysql.user",
+            "CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';",
+            "GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';",
+            "FLUSH PRIVILEGES",
+            "SELECT * FROM customers",
+            "SELECT * FROM orders LIMIT 50"
+        ]
 
-    # Trích xuất
-    q.append("SELECT * FROM salaries")
-    if random.random() < 0.5:
-        q.append(
-            "SELECT * INTO OUTFILE '/tmp/products_export.csv' FROM products"
-        )
+    elif profile == "sensitive":  # HR bị chiếm
+        q += [
+            "SELECT * FROM salaries",
+            "SELECT * FROM salaries INTO OUTFILE '/tmp/salaries_dump.csv' FIELDS TERMINATED BY ','",
+            "CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';",
+            "GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';",
+            "FLUSH PRIVILEGES",
+            "SHOW FULL PROCESSLIST"
+        ]
+
+    elif profile == "admin":  # IT admin bị chiếm
+        q += [
+            "SHOW FULL PROCESSLIST",
+            "SELECT user, host, plugin FROM mysql.user",
+            "CREATE USER 'backup_admin'@'%' IDENTIFIED BY 'P@ssw0rd!';",
+            "GRANT ALL PRIVILEGES ON company_db.* TO 'backup_admin'@'%';",
+            "FLUSH PRIVILEGES",
+            "SELECT * FROM salaries",
+            "SELECT * FROM customers",
+            "SELECT * FROM salaries INTO OUTFILE '/tmp/salaries_dump.csv' FIELDS TERMINATED BY ','",
+            "SELECT * FROM customers INTO OUTFILE '/tmp/customers_dump.csv' FIELDS TERMINATED BY ','"
+        ]
+
     return q
+
+def gen_compromised_account_queries_stealth(user_info):
+    profile = user_info["priv_compromise_profile"]
+    q = []
+
+    if profile == "low":
+        # tài khoản bình thường bị chiếm: đọc lương trái phép nhưng có vẻ "tò mò"
+        start_id = rand_employee_id()
+        end_id = start_id + random.randint(2,5)
+        q += [
+            # xem lương nhưng không dump hết
+            f"SELECT * FROM salaries WHERE employee_id BETWEEN {start_id} AND {end_id}",
+            # xem data khách hàng rộng bất thường
+            "SELECT * FROM customers LIMIT 100",
+            # xem ai đang online để né detection nội bộ
+            "SHOW PROCESSLIST"
+        ]
+
+    elif profile == "sensitive":
+        # HR bị chiếm: HR vốn có quyền xem lương
+        # attacker cố lặng lẽ hút nhiều lương nhưng không OUTFILE
+        start_id = rand_employee_id()
+        end_id = start_id + random.randint(10,20)
+        q += [
+            f"SELECT * FROM salaries WHERE employee_id BETWEEN {start_id} AND {end_id}",
+            "SELECT name, email FROM customers LIMIT 200",
+            "SHOW FULL PROCESSLIST"
+        ]
+
+    elif profile == "admin":
+        # Admin bị chiếm nhưng attacker chơi an toàn:
+        # Không tạo backdoor ngay lập tức, chỉ do thám, đọc mysql.user
+        q += [
+            "SHOW FULL PROCESSLIST",
+            "SELECT user, host, plugin FROM mysql.user",
+            "SELECT employee_id, base_salary FROM salaries LIMIT 50",
+            "SELECT customer_id, name, email FROM customers LIMIT 200"
+        ]
+
+    return q
+
 
 def gen_persona_queries(persona_name, is_overtime=False, is_off_hours=False):
     if persona_name == "Sales":
@@ -443,25 +636,28 @@ def gen_persona_queries(persona_name, is_overtime=False, is_off_hours=False):
         return gen_itadmin_queries(is_overtime, is_off_hours)
     if persona_name == "InsiderThreat":
         return gen_insider_queries(is_overtime, is_off_hours)
-    if persona_name == "Attacker":
-        return gen_attacker_queries(is_overtime, is_off_hours)
+    # if persona_name == "Attacker":
+    #     return gen_attacker_queries(is_overtime, is_off_hours)
     return []
 
 # ==============================================================================
 # 4. SINH RA 1 PHIÊN LÀM VIỆC → DANH SÁCH EVENT (Connect/Query/...)
 # ==============================================================================
 
-def build_session(user_info, session_start_dt, is_workday, is_overtime_period, is_off_hours, connection_id):
+def build_session(user_info, session_start_dt, is_workday, is_overtime_period, is_off_hours, compromised, compromised_mode, connection_id):
     """
     Trả về list event cho 1 connection:
       (timestamp_dt, connection_id, command, argument)
     command ∈ {Connect, Query, Init DB, Quit}
     """
     logs = []
-
-    persona_name = user_info["persona"]
     username = user_info["username"]
-    host_ip = choose_session_ip(user_info, is_workday, is_off_hours)
+
+    # nếu compromised => dùng IP ác thay vì IP công ty
+    if compromised:
+        host_ip = random.choice(MALICIOUS_IP_POOL)
+    else:
+        host_ip = choose_session_ip(user_info, is_workday, is_off_hours)
 
     # offset thời gian trong phiên (giây)
     current_offset = 0
@@ -479,22 +675,47 @@ def build_session(user_info, session_start_dt, is_workday, is_overtime_period, i
     connect_arg = f"{username}@{host_ip} on  using SSL/TLS"
     push_event(0, "Connect", connect_arg)
 
-    # handshake giống client thật
+    # handshake "bình thường"
     push_event(random.randint(1, 2), "Query", "select @@version_comment limit 1")
-    push_event(random.randint(1, 4), "Query", "SELECT DATABASE()")
+    push_event(random.randint(1, 3), "Query", "SELECT DATABASE()")
+    push_event(random.randint(1, 2), "Init DB", DB_NAME)
 
-    # chọn DB
-    push_event(random.randint(1, 3), "Init DB", DB_NAME)
+    # nếu compromised -> attacker bắt đầu recon ngay sau khi đã USE DB
+    if compromised:
+        if compromised_mode == "stealth":
+            recon = [
+                "SELECT CURRENT_USER()",
+                "SHOW DATABASES"
+            ]
+            for q in recon:
+                push_event(random.randint(1, 3), "Query", q)
 
-    # truy vấn thực tế
-    persona_queries = gen_persona_queries(
-        persona_name,
-        is_overtime=is_overtime_period,
-        is_off_hours=is_off_hours
-    )
+            queries = gen_compromised_account_queries_stealth(user_info)
 
-    for q in persona_queries:
-        push_event(random.randint(2, 6), "Query", q)
+        else:  # "loud"
+            recon = [
+                "SELECT CURRENT_USER()",
+                "SHOW GRANTS FOR CURRENT_USER()",
+                "SHOW DATABASES",
+                "SHOW TABLES"
+            ]
+            for q in recon:
+                push_event(random.randint(1, 3), "Query", q)
+
+            queries = gen_compromised_account_queries_loud(user_info)
+
+        for q in queries:
+            push_event(random.randint(2, 6), "Query", q)
+
+    else:
+        # phiên hợp lệ bình thường
+        persona_queries = gen_persona_queries(
+            user_info["persona"],
+            is_overtime=is_overtime_period,
+            is_off_hours=is_off_hours
+        )
+        for q in persona_queries:
+            push_event(random.randint(2, 6), "Query", q)
 
     # Quit
     push_event(random.randint(5, 15), "Quit", "")
@@ -506,14 +727,6 @@ def build_session(user_info, session_start_dt, is_workday, is_overtime_period, i
 # ==============================================================================
 
 def choose_actor(current_dt):
-    """
-    Trả về (user_info, is_workday_flag, is_overtime_period, is_off_hours)
-    Logic:
-      - Trong giờ làm việc -> nhân viên bình thường
-      - Tăng ca -> Developer/IT/Insider dày hơn
-      - 2-5h sáng -> attacker + insider
-      - Cuối tuần -> hầu như chỉ ITAdmin, InsiderThreat, attacker
-    """
     is_workday = current_dt.weekday() < 5
     hour = current_dt.hour
     minute = current_dt.minute
@@ -522,63 +735,76 @@ def choose_actor(current_dt):
     is_overtime_period = is_workday and (WORK_END.hour <= hour < OVERTIME_END.hour)
     is_off_hours = (not is_workday) or (hour < WORK_START.hour) or (hour >= OVERTIME_END.hour)
 
+    # chọn nhân viên phù hợp giờ như cũ
     candidates = []
     weights = []
-
     for _, info in EMPLOYEES.items():
-        persona = info["persona"]
         start, end = info["normal_hours"]
-
-        weight = 0.0
-        # giờ bình thường
+        w = 0.0
         if is_time_in_range(hm, start, end):
-            weight += 1.0
-
-        # tăng ca
+            w += 1.0
         if is_overtime_period:
-            weight += info.get("overtime_prob", 0.0)
-
-        # insider được buff nếu ngoài giờ
-        if persona == "InsiderThreat" and (is_overtime_period or is_off_hours):
-            weight += 2.0
-
-        # cuối tuần giảm mạnh sales/marketing/... nhưng vẫn giữ IT + Insider
-        if not is_workday and persona not in ("ITAdmin", "InsiderThreat"):
-            weight *= 0.2
-
-        if weight > 0:
+            w += info.get("overtime_prob", 0.0)
+        if not is_workday and info["persona"] not in ("ITAdmin", "InsiderThreat"):
+            w *= 0.2
+        if w > 0:
             candidates.append(info)
-            weights.append(weight)
+            weights.append(w)
 
-    # attacker: thường xuyên lúc 2-5h sáng và ngoài giờ
-    attacker_bonus = 0.0
-    if is_off_hours and (2 <= hour < 5):
-        attacker_bonus = 2.5
-    elif is_off_hours:
-        attacker_bonus = 0.3
-
-    if candidates and attacker_bonus > 0:
-        total_internal = sum(weights)
-        if random.random() < attacker_bonus / (attacker_bonus + total_internal):
-            return EXTERNAL_ATTACKER, is_workday, is_overtime_period, is_off_hours
-        else:
+    # nếu giờ rất xấu (2-5h sáng) hoặc cuối tuần đêm:
+    compromised = False
+    compromised_mode = "none"  # "stealth" hoặc "loud" nếu bị chiếm
+    
+    if is_off_hours:
+        # nếu không có ứng viên phù hợp thì fallback IT admin, insider_dave
+        if candidates:
             chosen = random.choices(candidates, weights=weights, k=1)[0]
-            return chosen, is_workday, is_overtime_period, is_off_hours
+        else:
+            chosen = random.choice([
+            EMPLOYEES["it_admin_thanh"],
+            EMPLOYEES["insider_dave"]
+            ])
 
+        # Cửa sổ giờ "xấu": 2h-5h sáng
+        if ENABLE_SCENARIO_COMPROMISED_ACCOUNT and (2 <= hour < 5):
+            # Mỗi giờ chỉ cho phép 1 vụ hack (để log không spam)
+            hour_key = current_dt.strftime("%Y-%m-%d %H")
+            count_so_far = compromise_tracker.get(hour_key, 0)
+
+            if count_so_far < MAX_COMPROMISE_PER_HOUR:
+                # quyết định có tạo 1 compromised session mới không
+                # Nếu là cuối tuần => attacker liều lĩnh (loud, phá mạnh)
+                # Nếu là ngày thường => attacker im lặng (stealth)
+                if is_workday:
+                    prob = BASE_COMPROMISE_PROB          # ví dụ 0.02
+                    mode = "stealth"
+                else:
+                    prob = WEEKEND_COMPROMISE_PROB       # ví dụ 0.15
+                    mode = "loud"
+
+                if random.random() < prob:
+                    compromised = True
+                    compromised_mode = mode
+                    compromise_tracker[hour_key] = count_so_far + 1
+
+        return chosen, is_workday, is_overtime_period, is_off_hours, compromised, compromised_mode
+
+    # Giờ bình thường (không off_hours)
     if candidates:
         chosen = random.choices(candidates, weights=weights, k=1)[0]
-        return chosen, is_workday, is_overtime_period, is_off_hours
+    else:
+        chosen = EMPLOYEES["dev_user_em"]
 
-    # fallback
-    return EXTERNAL_ATTACKER, is_workday, is_overtime_period, is_off_hours
+    # ban ngày hầu như không compromised
+    return chosen, is_workday, is_overtime_period, is_off_hours, compromised, compromised_mode
 
 # ==============================================================================
-# 6. LẬP LỊCH TẤT CẢ CÁC PHIÊN TRONG 7 NGÀY
+# 6. LẬP LỊCH TẤT CẢ CÁC PHIÊN TRONG NGÀY
 # ==============================================================================
 
 def generate_schedule():
     """
-    Kết quả: list[(start_time, user_info, is_workday, is_ot, is_off_hours)]
+    Kết quả: list[(start_time, user_info, is_workday, is_ot, is_off_hours, compromised, compromised_mode)]
     """
     sessions = []
     current_virtual_time = SIMULATION_START_TIME
@@ -604,8 +830,8 @@ def generate_schedule():
                 microseconds=random.randint(0, 999_999)
             )
 
-            actor_info, is_workday_flag, is_ot, is_off = choose_actor(sess_time)
-            sessions.append((sess_time, actor_info, is_workday_flag, is_ot, is_off))
+            actor_info, is_workday_flag, is_ot, is_off, compromised, compromised_mode = choose_actor(sess_time)
+            sessions.append((sess_time, actor_info, is_workday_flag, is_ot, is_off, compromised, compromised_mode))
 
         current_virtual_time += timedelta(hours=1)
 
@@ -629,13 +855,15 @@ def generate_log_lines():
     all_events = []
 
     # sinh toàn bộ event và nhét vào all_events
-    for sess_time, actor_info, is_workday_flag, is_ot, is_off in schedule:
+    for sess_time, actor_info, is_workday_flag, is_ot, is_off, compromised, compromised_mode in schedule:
         sess_events = build_session(
             actor_info,
             session_start_dt=sess_time,
             is_workday=is_workday_flag,
             is_overtime_period=is_ot,
             is_off_hours=is_off,
+            compromised=compromised,
+            compromised_mode=compromised_mode,
             connection_id=connection_id_counter
         )
         all_events.extend(sess_events)
