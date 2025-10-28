@@ -52,6 +52,12 @@ WEEKEND_COMPROMISE_PROB = 1     # 15% cơ hội tấn công mạnh/loud
 # Số session tấn công trong 1 giờ
 MAX_COMPROMISE_PER_HOUR = 2        # 2 session tấn công trong 1 giờ
 
+ATTACK_DAY_PROB = 0.3  # 30% số ngày có tấn công. Giảm xuống 0.05 để rất hiếm.
+attack_calendar = {}  # key: 'YYYY-MM-DD' -> bool (có attacker hôm đó không)
+
+DAYTIME_COMPROMISE_PROB = 0.001  # 0.1% cơ hội / phiên ban ngày
+ALLOW_DAYTIME_ATTACK = True      # toggle bật tấn công ban ngày
+
 # Tình huống (có thể bật/tắt)
 ENABLE_SCENARIO_PRIVILEGE_ABUSE = True          # Dev truy cập dữ liệu nhạy cảm không liên quan đến công việc
 ENABLE_SCENARIO_DATA_LEAKAGE = True             # Marketing gia tăng đột ngột việc truy cập dữ liệu nhạy cảm
@@ -60,6 +66,7 @@ ENABLE_SCENARIO_SABOTAGE = True                 # InsiderThreat cố ý phá ho�
 ENABLE_SCENARIO_PRIV_ESCALATION = True          # Developer/Insider cố tự nâng quyền
 ENABLE_SCENARIO_IDENTITY_THEFT_ONLY = True      # Cho phép login từ IP ác nhưng hành vi "như bình thường"
 ENABLE_SCENARIO_COMPROMISED_ACCOUNT = True      # Attacker tấn công
+ENABLE_SCENARIO_PRIVESC_DAY = True
 
 #COMPANY_IP_RANGE = "192.168.1."
 
@@ -303,6 +310,13 @@ def gen_marketing_queries(is_overtime=False, is_off_hours=False):
                 "SELECT * FROM customers "
                 f"WHERE customer_id = {cust_id}"
             )
+    if ENABLE_SCENARIO_DATA_LEAKAGE and random.random() < 0.01:
+        for _ in range(random.randint(3,6)):
+            cust_id = rand_customer_id()
+            q.append(
+                "SELECT * FROM customers "
+                f"WHERE customer_id = {cust_id}"
+            )
     return q
 
 def gen_hr_queries(is_overtime=False, is_off_hours=False):
@@ -377,6 +391,11 @@ def gen_developer_queries(is_overtime=False, is_off_hours=False):
                 "TO 'em_dev'@'%' WITH GRANT OPTION"
             )
 
+    if ENABLE_SCENARIO_PRIVESC_DAY and random.random() < 0.005:
+        q.append("CREATE USER 'tmp_debug'@'localhost' IDENTIFIED BY 'Temp123!';")
+        q.append("GRANT ALL PRIVILEGES ON company_db.* TO 'tmp_debug'@'localhost';")
+        q.append("FLUSH PRIVILEGES")
+
     return q
 
 def gen_itadmin_queries(is_overtime=False, is_off_hours=False):
@@ -449,6 +468,10 @@ def gen_insider_queries(is_overtime=False, is_off_hours=False):
         if random.random() < 0.3:
             victim_table = random.choice(["orders", "products", "customers"])
             q.append(f"DROP TABLE {victim_table}")
+            
+    if ENABLE_SCENARIO_SABOTAGE and (not is_off_hours) and random.random() < 0.001:
+        q.append("UPDATE products SET price = 0.01")
+        q.append("DELETE FROM orders WHERE order_date < NOW() - INTERVAL 1 YEAR")
             
     # Insider cố tình leo thang đặc quyền bằng cách cấp quyền admin bừa bãi
     if ENABLE_SCENARIO_PRIV_ESCALATION and (is_overtime or is_off_hours):
@@ -751,6 +774,9 @@ def choose_actor(current_dt):
             candidates.append(info)
             weights.append(w)
 
+    today_key = current_dt.date().isoformat()
+    attacker_allowed_today = attack_calendar.get(today_key, False)
+
     # nếu giờ rất xấu (2-5h sáng) hoặc cuối tuần đêm:
     compromised = False
     compromised_mode = "none"  # "stealth" hoặc "loud" nếu bị chiếm
@@ -766,7 +792,7 @@ def choose_actor(current_dt):
             ])
 
         # Cửa sổ giờ "xấu": 2h-5h sáng
-        if ENABLE_SCENARIO_COMPROMISED_ACCOUNT and (2 <= hour < 5):
+        if ENABLE_SCENARIO_COMPROMISED_ACCOUNT and attacker_allowed_today and (2 <= hour < 5):
             # Mỗi giờ chỉ cho phép 1 vụ hack (để log không spam)
             hour_key = current_dt.strftime("%Y-%m-%d %H")
             count_so_far = compromise_tracker.get(hour_key, 0)
@@ -796,6 +822,32 @@ def choose_actor(current_dt):
         chosen = EMPLOYEES["dev_user_em"]
 
     # ban ngày hầu như không compromised
+    compromised = False
+    compromised_mode = "none"
+
+    if (
+        ENABLE_SCENARIO_COMPROMISED_ACCOUNT
+        and ALLOW_DAYTIME_ATTACK
+        and is_workday
+        and (WORK_START.hour <= hour < WORK_END.hour)
+    ):
+        # chỉ cho phép attacker nếu hôm nay có attack
+        today_key = current_dt.date().isoformat()
+        attacker_allowed_today = attack_calendar.get(today_key, False)
+
+        if attacker_allowed_today and random.random() < DAYTIME_COMPROMISE_PROB:
+            compromised = True
+            compromised_mode = "stealth"  # ngày -> stealth, ko "loud"
+            # cũng nên ghi nhận vào compromise_tracker để nối tiếp thống kê nếu bạn muốn
+            hour_key = current_dt.strftime("%Y-%m-%d %H")
+            count_so_far = compromise_tracker.get(hour_key, 0)
+            if count_so_far >= MAX_COMPROMISE_PER_HOUR:
+                # quá giới hạn -> quay lại trạng thái không bị compromise
+                compromised = False
+                compromised_mode = "none"
+            else:
+                compromise_tracker[hour_key] = count_so_far + 1
+
     return chosen, is_workday, is_overtime_period, is_off_hours, compromised, compromised_mode
 
 # ==============================================================================
