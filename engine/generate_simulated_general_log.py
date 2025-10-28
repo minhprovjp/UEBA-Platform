@@ -46,27 +46,29 @@ OVERTIME_END = dt_time(20, 0)
 # Tracker: để đảm bảo mỗi giờ (ví dụ 2025-10-22 02h) chỉ spawn tối đa 1 compromised session
 compromise_tracker = {}
 # Xác suất base cho ngày thường (weekday, ban đêm) -> stealth
-BASE_COMPROMISE_PROB = 1        # 2% cơ hội tấn công nhẹ/stealth
+BASE_COMPROMISE_PROB = 0        # 2% cơ hội tấn công nhẹ/stealth
 # Xác suất cuối tuần (weekend, ban đêm) -> loud hơn
-WEEKEND_COMPROMISE_PROB = 1     # 15% cơ hội tấn công mạnh/loud
+WEEKEND_COMPROMISE_PROB = 0     # 15% cơ hội tấn công mạnh/loud
 # Số session tấn công trong 1 giờ
-MAX_COMPROMISE_PER_HOUR = 2        # 2 session tấn công trong 1 giờ
+MAX_COMPROMISE_PER_HOUR = 0       # 2 session tấn công trong 1 giờ
 
-ATTACK_DAY_PROB = 0.3  # 30% số ngày có tấn công. Giảm xuống 0.05 để rất hiếm.
+ATTACK_DAY_PROB = 0  # 30% số ngày có tấn công. Giảm xuống 0.05 để rất hiếm.
 attack_calendar = {}  # key: 'YYYY-MM-DD' -> bool (có attacker hôm đó không)
 
-DAYTIME_COMPROMISE_PROB = 0.001  # 0.1% cơ hội / phiên ban ngày
-ALLOW_DAYTIME_ATTACK = True      # toggle bật tấn công ban ngày
+DAYTIME_COMPROMISE_PROB = 0  # 0.1% cơ hội / phiên ban ngày
+ALLOW_DAYTIME_ATTACK = False      # toggle bật tấn công ban ngày
 
 # Tình huống (có thể bật/tắt)
-ENABLE_SCENARIO_PRIVILEGE_ABUSE = True          # Dev truy cập dữ liệu nhạy cảm không liên quan đến công việc
-ENABLE_SCENARIO_DATA_LEAKAGE = True             # Marketing gia tăng đột ngột việc truy cập dữ liệu nhạy cảm
-ENABLE_SCENARIO_OT_IP_THEFT = True              # InsiderThreat đánh cắp tài sản trí tuệ bằng cách truy cập ngoài giờ
-ENABLE_SCENARIO_SABOTAGE = True                 # InsiderThreat cố ý phá hoại tài sản công ty
-ENABLE_SCENARIO_PRIV_ESCALATION = True          # Developer/Insider cố tự nâng quyền
-ENABLE_SCENARIO_IDENTITY_THEFT_ONLY = True      # Cho phép login từ IP ác nhưng hành vi "như bình thường"
-ENABLE_SCENARIO_COMPROMISED_ACCOUNT = True      # Attacker tấn công
-ENABLE_SCENARIO_PRIVESC_DAY = True
+ENABLE_SCENARIO_PRIVILEGE_ABUSE = False          # Dev truy cập dữ liệu nhạy cảm không liên quan đến công việc
+ENABLE_SCENARIO_DATA_LEAKAGE = False             # Marketing gia tăng đột ngột việc truy cập dữ liệu nhạy cảm
+ENABLE_SCENARIO_OT_IP_THEFT = False              # InsiderThreat đánh cắp tài sản trí tuệ bằng cách truy cập ngoài giờ
+ENABLE_SCENARIO_SABOTAGE = False                 # InsiderThreat cố ý phá hoại tài sản công ty
+ENABLE_SCENARIO_PRIV_ESCALATION = False          # Developer/Insider cố tự nâng quyền
+ENABLE_SCENARIO_IDENTITY_THEFT_ONLY = False      # Cho phép login từ IP ác nhưng hành vi "như bình thường"
+ENABLE_SCENARIO_COMPROMISED_ACCOUNT = False      # Attacker tấn công
+ENABLE_SCENARIO_PRIVESC_DAY = False              # Tấn công ban ngày
+ENABLE_INSIDER_BEHAVIOR = False                  # tắt = dave_dev hành xử như dev bình thường
+BUSINESS_HOURS_ONLY = True                       # nếu True: chỉ sinh log trong giờ làm việc ngày thường
 
 #COMPANY_IP_RANGE = "192.168.1."
 
@@ -415,8 +417,12 @@ def gen_itadmin_queries(is_overtime=False, is_off_hours=False):
     return q
 
 def gen_insider_queries(is_overtime=False, is_off_hours=False):
-    q = []
+    
+    # Nếu tắt insider mode -> behave như Developer bình thường
+    if not ENABLE_INSIDER_BEHAVIOR:
+        return gen_developer_queries(is_overtime, is_off_hours)
 
+    q = []
     # Bình thường để nguỵ trang (giống dev)
     normal_dev = gen_developer_queries(is_overtime=False, is_off_hours=False)
     # Nhưng nếu đây là OT (18-20h) hoặc off-hours (đêm, cuối tuần),
@@ -864,16 +870,25 @@ def generate_schedule():
 
     while current_virtual_time < end_time:
         hour = current_virtual_time.hour
-        is_workday = current_virtual_time.weekday() < 5
+        is_workday = current_virtual_time.weekday() < 5       # Thứ 0-4 = Mon-Fri
+        in_business_hours = (
+            WORK_START.hour <= hour < WORK_END.hour
+        )  # ví dụ 07h <= giờ < 17h
 
-        # mật độ session theo khung giờ
-        if (9 <= hour < 12 or 14 <= hour < 16) and is_workday:
+        # Nếu bật chế độ chỉ giờ hành chính:
+        if BUSINESS_HOURS_ONLY:
+            # bỏ qua hết: cuối tuần hoặc ngoài khung 07-17
+            if (not is_workday) or (not in_business_hours):
+                current_virtual_time += timedelta(hours=1)
+                continue
+
+        # xác định mật độ phiên trong giờ làm
+        if (9 <= hour < 12 or 14 <= hour < 16) and is_workday and in_business_hours:
             sessions_this_hour = int(SESSIONS_PER_HOUR_BASE * random.uniform(2.0, 4.0))
-        elif WORK_START.hour <= hour < WORK_END.hour and is_workday:
-            sessions_this_hour = int(SESSIONS_PER_HOUR_BASE * random.uniform(0.8, 1.5))
         else:
-            sessions_this_hour = int(SESSIONS_PER_HOUR_BASE * random.uniform(0.1, 0.5))
+            sessions_this_hour = int(SESSIONS_PER_HOUR_BASE * random.uniform(0.8, 1.5))
 
+        # tạo các session trong giờ này
         for _ in range(sessions_this_hour):
             # random phút + giây trong giờ đó
             sess_time = current_virtual_time + timedelta(
