@@ -982,7 +982,7 @@ def choose_actor(current_dt):
 
     # attacker mượn account ngay ban ngày (rất hiếm, nếu bạn cho phép)
     if (
-        ENABLE_COMPROMISED_ACCOUNTy
+        ENABLE_COMPROMISED_ACCOUNT
         and ALLOW_DAYTIME_ATTACK
         and is_workday
         and (WORK_START.hour <= hour < WORK_END.hour)
