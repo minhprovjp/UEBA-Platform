@@ -23,10 +23,14 @@ import os
 import joblib
 import logging
 import sys
+# Thư viện để vẽ biểu đồ
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import classification_report, confusion_matrix
 
 # --- Cấu hình Logging ---
-# Cấu hình này sẽ in ra các thông báo với định dạng rõ ràng (thời gian, cấp độ, nội dung)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [DataProcessor] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [MySQLParser] - %(message)s',
+                    handlers=[logging.StreamHandler(sys.stdout)]) # Chỉ in ra console cho đơn giản
 
 # --- Thêm thư mục gốc vào sys.path để import config và các module khác ---
 # Điều này làm cho module này có thể chạy được từ bất kỳ đâu.
@@ -46,40 +50,26 @@ os.makedirs(USER_MODELS_DIR, exist_ok=True)
 
 def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     """
-    Tải và xử lý dữ liệu log, nhận tất cả các tham số cấu hình qua một dictionary.
-    Trả về một dictionary chứa tất cả các kết quả.
+    Xử lý dữ liệu log từ một DataFrame đã được cung cấp.
     """
-    
-    # if not os.path.exists(log_file_path):
-    #     logging.error(f"File log không tìm thấy tại đường dẫn '{log_file_path}'.")
-    #     return None
-    # if os.path.getsize(log_file_path) == 0:
-    #     logging.warning(f"File log '{os.path.basename(log_file_path)}' rỗng, không có dữ liệu để phân tích.")
-    #     return {"empty": True}
-
-    # try:
-    #     df_logs = pd.read_csv(log_file_path)
-    # except Exception as e:
-    #     logging.error(f"Lỗi khi đọc file CSV '{log_file_path}': {e}")
-    #     return None
-
-    # if df_logs.empty:
-    #     logging.warning("File log có header nhưng không có dòng dữ liệu nào.")
-    #     return {"empty": True}
-    
-    # --- BƯỚC 1: KIỂM TRA DATAFRAME ĐẦU VÀO ---
     if input_df is None or input_df.empty:
         logging.warning("DataFrame đầu vào rỗng hoặc None, không có dữ liệu để xử lý.")
-        return {
-            "all_logs": pd.DataFrame(), "anomalies_late_night": pd.DataFrame(),
-            "anomalies_dump": pd.DataFrame(), "anomalies_multi_table": pd.DataFrame(),
-            "anomalies_sensitive": pd.DataFrame(), "anomalies_user_time": pd.DataFrame(),
-            "anomalies_complexity": pd.DataFrame(), "normal_activities": pd.DataFrame()
-        }
+        return {"empty": True}
+    
+    # Lấy cấu hình whitelist
+    whitelists = config_params.get("whitelists", {})
+    maintenance_users = whitelists.get("maintenance_users", [])
+
+    def is_whitelisted(row):
+        if row['user'] in maintenance_users:
+            return True
+        # Thêm các điều kiện khác (IP, thời gian)
+        return False
     
     df_logs = input_df.copy()
 
-    # --- BƯỚC 2: TIỀN XỬ LÝ DỮ LIỆU ---
+    # --- Tiền xử lý Dữ liệu ---
+    
     df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp'], format='mixed', errors='coerce')
     df_logs.dropna(subset=['timestamp'], inplace=True)
     if df_logs.empty:
@@ -87,18 +77,24 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         return {"empty": True}
     try:
         local_tz = get_localzone()
-        if df_logs['timestamp'].dt.tz is not None:
-            df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert(local_tz)
-        else:
-            logging.warning("Timestamp không có múi giờ. Giả định là UTC và chuyển sang local.")
+        if df_logs['timestamp'].dt.tz is None:
             df_logs['timestamp'] = df_logs['timestamp'].dt.tz_localize('UTC').dt.tz_convert(local_tz)
+        else:
+            df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert(local_tz)
     except Exception as e:
         logging.error(f"Lỗi khi chuẩn hóa múi giờ: {e}.")
     df_logs['query'] = df_logs['query'].astype(str)
-
-    # === BƯỚC 3: LẤY VÀ CHUẨN HÓA TẤT CẢ CÁC THAM SỐ CẤU HÌNH TẠI MỘT NƠI DUY NHẤT ===
     
-    # Chuyển đổi các giá trị thời gian từ chuỗi sang đối tượng time
+    def tag_maintenance_activity(row, whitelists):
+        # Nếu user là maintenance user VÀ hoạt động vào ban đêm
+        if row['user'] in whitelists.get("maintenance_users", []) and (row['timestamp'].hour < 5 or row['timestamp'].hour > 22):
+            return True
+        # Nếu query chứa các từ khóa bảo trì
+        if any(keyword in row['query'].lower() for keyword in ['backup', 'optimize table', 'analyze table']):
+            return True
+        return False
+
+    # --- Lấy và Chuẩn hóa Tham số Cấu hình ---
     try:
         p_late_night_start_time = dt_time.fromisoformat(config_params.get('p_late_night_start_time'))
         p_late_night_end_time = dt_time.fromisoformat(config_params.get('p_late_night_end_time'))
@@ -154,15 +150,22 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
 
     df_logs['is_complexity_anomaly'] = df_logs['is_complexity_anomaly'].astype(bool).fillna(False)
     df_logs['analysis_type'] = df_logs['analysis_type'].fillna("Not Analyzed")
-    anomalies_complexity = df_logs[df_logs['is_complexity_anomaly']].copy().reset_index(drop=True)
+    anomalies_complexity = df_logs[df_logs['is_complexity_anomaly'] & ~df_logs['is_whitelisted']].copy().reset_index(drop=True)
 
     # --- Áp dụng các Rules ---
+    
+    # Tạo một cột boolean để đánh dấu các hoạt động được miễn trừ
+    df_logs['is_whitelisted'] = df_logs.apply(is_whitelisted, axis=1)
+    
+    # Tạo đặc trưng mới
+    df_logs['is_maintenance'] = df_logs.apply(lambda row: tag_maintenance_activity(row, whitelists), axis=1)
+    
     # Rule 1
     df_logs['is_late_night'] = df_logs['timestamp'].apply(lambda ts: is_late_night_query(ts, p_late_night_start_time, p_late_night_end_time))
-    anomalies_late_night = df_logs[df_logs['is_late_night']].copy().reset_index(drop=True)
+    anomalies_late_night = df_logs[df_logs['is_late_night'] & ~df_logs['is_whitelisted']].copy().reset_index(drop=True)
     # Rule 2
     df_logs['is_potential_dump'] = df_logs.apply(lambda row: is_potential_large_dump(row, p_known_large_tables), axis=1)
-    anomalies_large_dump = df_logs[df_logs['is_potential_dump']].copy().reset_index(drop=True)
+    anomalies_large_dump = df_logs[df_logs['is_potential_dump'] & ~df_logs['is_whitelisted']].copy().reset_index(drop=True)
     # Rule 3
     df_logs['accessed_tables'] = df_logs['query'].apply(get_tables_with_sqlglot)
     current_time_window = pd.Timedelta(minutes=p_time_window_minutes)
@@ -237,7 +240,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                      active_end_hour = min(active_start_hour + 4, 23)
                 user_activity_profiles[user] = {'active_start': active_start_hour, 'active_end': active_end_hour}
     df_logs['unusual_activity_reason'] = df_logs.apply(lambda row: check_unusual_user_activity_time(row, user_activity_profiles), axis=1)
-    anomalies_unusual_user_time = df_logs[df_logs['unusual_activity_reason'].notna()].copy().reset_index(drop=True)
+    anomalies_unusual_user_time = df_logs[df_logs['unusual_activity_reason'].notna() & ~df_logs['is_whitelisted']].copy().reset_index(drop=True)
 
     # --- Xác định Hoạt động Bình thường ---
     anomalous_indices = set()
@@ -251,7 +254,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
             queries_df = pd.DataFrame(queries_list)
             merged = pd.merge(df_logs.reset_index(), queries_df, on=['timestamp', 'query'])
             if not merged.empty: anomalous_indices.update(merged['index'])
-    normal_activities = df_logs[~df_logs.index.isin(anomalous_indices)].copy()
+    normal_activities = df_logs[~df_logs.index.isin(anomalous_indices) & ~df_logs['is_whitelisted']].copy()
     
     # --- Xây dựng Dictionary Kết quả ---
     results = {

@@ -6,6 +6,12 @@ import sys
 import os
 import logging
 
+try:
+    from engine.mysql_log_parser import mysql_connect_regex, mysql_query_regex, mysql_init_db_regex
+except ImportError:
+    logging.error("Không thể import regex từ mysql_log_parser.py. Đảm bảo file tồn tại và đúng cấu trúc.")
+    sys.exit(1)
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import *
@@ -29,6 +35,35 @@ stream_handler.errors = 'replace'
 logger.addHandler(stream_handler)
 
 from backend_api.models import Anomaly, SessionLocal
+
+def process_pending_queries(redis_client, thread_id, session_data):
+    """
+    Hàm helper để xử lý các query đang chờ sau khi session được tạo.
+    """
+    pending_queue_key = f"pending_queries:{thread_id}"
+    pending_queries = redis_client.lrange(pending_queue_key, 0, -1)
+    
+    if not pending_queries:
+        return
+
+    logging.info(f"Tìm thấy {len(pending_queries)} query đang chờ cho thread_id: {thread_id}. Đang xử lý lại...")
+    for query_json in pending_queries:
+        try:
+            query_data = json.loads(query_json)
+            parsed_record = {
+                'timestamp': query_data['timestamp'],
+                'user': session_data['user'],
+                'client_ip': session_data['host'],
+                'database': session_data.get('db', 'N/A'),
+                'query': query_data['query'],
+                'source_dbms': 'mysql'
+            }
+            redis_client.lpush("parsed_logs_queue", json.dumps(parsed_record))
+        except json.JSONDecodeError:
+            logging.error(f"Lỗi giải mã JSON từ hàng đợi chờ: {query_json}")
+
+    redis_client.delete(pending_queue_key)
+    logging.info(f"Đã xử lý và xóa hàng đợi chờ cho thread_id: {thread_id}.")
 
 def save_anomalies_to_db(results: dict):
     """
@@ -85,30 +120,85 @@ def save_anomalies_to_db(results: dict):
         db.close()
 
 def main_loop(redis_client):
-    logging.info("Engine Worker đã khởi động, đang chờ log đã phân tích từ 'parsed_logs_queue'...")
-    Base.metadata.create_all(bind=engine) # Đảm bảo bảng tồn tại
+    logging.info("MySQL Parser Worker đã khởi động, đang chờ log từ 'raw_logs_queue'...")
     try:
         while True:
-            _, record_json = redis_client.brpop("parsed_logs_queue")
-            parsed_record = json.loads(record_json)
-            logging.info(f"Nhận được 1 bản ghi đã phân tích để xử lý.")
-            
-            # Chuyển đổi thành DataFrame một dòng để tương thích với data_processor
-            df_single_log = pd.DataFrame([parsed_record])
-            
-            # Tải cấu hình mới nhất
-            config = load_config()
-            analysis_params = config.get("analysis_params", {})
-            
-            # Gọi hàm phân tích
-            results = load_and_process_data(df_single_log, analysis_params)
-            
-            # Nếu có bất thường, ghi vào CSDL
-            if results and any(not df.empty for key, df in results.items() if "anomalies" in key):
-                logging.info("Phát hiện bất thường, đang lưu vào CSDL...")
-                save_anomalies_to_db(results)
+            try:
+                message_tuple = redis_client.brpop("raw_logs_queue", timeout=1)
+                if message_tuple is None:
+                    continue
+                    
+                _, message_json = message_tuple
+                message = json.loads(message_json)
+                
+                if message.get('dbms') != 'mysql':
+                    continue
+
+                line = message['log_line']
+                
+                connect_match = mysql_connect_regex.match(line)
+                query_match = mysql_query_regex.match(line)
+                init_db_match = mysql_init_db_regex.match(line)
+                quit_match = re.search(r"(\d+)\s+Quit\s*$", line)
+                
+                if connect_match:
+                    data = connect_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    
+                    db_name = data.get('db') or 'N/A'
+                    session_data = {'user': data.get('user'), 'host': data.get('host'), 'db': db_name}
+                    
+                    redis_client.hset(session_key, mapping=session_data)
+                    redis_client.expire(session_key, 3600)
+                    logging.info(f"Đã tạo/cập nhật session cho thread_id: {thread_id}")
+
+                    # Gọi hàm để xử lý các query đang chờ (nếu có)
+                    process_pending_queries(redis_client, thread_id, session_data)
+
+                elif init_db_match:
+                    data = init_db_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    redis_client.hset(session_key, 'db', data['db_name'])
+                    logging.info(f"Đã cập nhật DB cho thread_id: {thread_id}")
+
+                elif query_match:
+                    data = query_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    
+                    session_info = redis_client.hgetall(session_key)
+                    
+                    if session_info:
+                        # Kịch bản TỐT: Session tồn tại
+                        parsed_record = {
+                            'timestamp': data['timestamp'], 'user': session_info.get('user'),
+                            'client_ip': session_info.get('host'), 'database': session_info.get('db', 'N/A'),
+                            'query': data['query'], 'source_dbms': 'mysql'
+                        }
+                        redis_client.lpush("parsed_logs_queue", json.dumps(parsed_record))
+                        logging.info(f"Đã phân tích (session tồn tại) và đẩy 1 bản ghi từ thread_id: {thread_id}.")
+                    else:
+                        # KỊCH BẢN CHỜ: Session chưa tồn tại
+                        logging.warning(f"Không tìm thấy session cho thread_id: {thread_id}. Đưa query vào hàng đợi chờ.")
+                        pending_queue_key = f"pending_queries:{thread_id}"
+                        query_data = {'timestamp': data['timestamp'], 'query': data['query']}
+                        redis_client.rpush(pending_queue_key, json.dumps(query_data))
+                        redis_client.expire(pending_queue_key, 60)
+
+                elif quit_match:
+                    thread_id = quit_match.group(1)
+                    session_key = f"mysql_session:{thread_id}"
+                    pending_queue_key = f"pending_queries:{thread_id}"
+                    redis_client.delete(session_key, pending_queue_key) # Xóa cả session và hàng đợi chờ
+                    logging.info(f"Đã xóa session và hàng đợi chờ cho thread_id: {thread_id}")
+
+            except Exception as e:
+                logging.error(f"Lỗi không xác định trong worker: {e}", exc_info=True)
+                
     except KeyboardInterrupt:
-        logging.info("Nhận tín hiệu KeyboardInterrupt, đang dừng worker...")
+        logging.info("Nhận tín hiệu KeyboardInterrupt, đang dừng MySQL Parser Worker...")
 
 if __name__ == "__main__":
     try:

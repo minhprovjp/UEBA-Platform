@@ -13,7 +13,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
 from engine.data_processor import load_and_process_data
 from engine.config_manager import load_config
-from backend_api.models import Base, Anomaly, engine, SessionLocal
+from backend_api.models import Base, Anomaly, StagingLog, engine, SessionLocal # <-- Thêm StagingLog
+from engine.utils import bulk_insert_parsed_logs # <-- Import hàm ghi CSDL
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [EngineRunner] - %(message)s')
 
@@ -31,12 +32,12 @@ class AnalysisEngine:
         
         # --- CẤU TRÚC MỚI: DỄ DÀNG THÊM PARSER MỚI ---
         parsers_to_run = [
-            {
-                "name": "MySQL",
-                "script": MYSQL_PARSER_SCRIPT_PATH,
-                "input": SOURCE_MYSQL_LOG_PATH,
-                "output": PARSED_MYSQL_LOG_FILE_PATH
-            },
+            # {
+            #     "name": "MySQL",
+            #     "script": MYSQL_PARSER_SCRIPT_PATH,
+            #     "input": SOURCE_MYSQL_LOG_PATH,
+            #     "output": PARSED_MYSQL_LOG_FILE_PATH
+            # },
             {
                 "name": "PostgreSQL",
                 "script": POSTGRES_PARSER_SCRIPT_PATH,
@@ -69,17 +70,56 @@ class AnalysisEngine:
             except Exception as e:
                 logging.error(f"Lỗi khi chạy parser {parser_job['name']}: {e}")
     
+    def catch_up_missed_logs(self):
+        """
+        Chạy parser MySQL một lần ở chế độ catch-up để xử lý các log bị lỡ.
+        """
+        logging.info("--- Bắt đầu giai đoạn [Catch-up] để xử lý log bị lỡ ---")
+        try:
+            logging.info("Đang thực thi mysql_parser.py ở chế độ catch-up...")
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            command = [
+                sys.executable, 
+                MYSQL_PARSER_SCRIPT_PATH, 
+                "--mode", "catch-up", 
+                "--input", SOURCE_MYSQL_LOG_PATH
+            ]
+            subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env)
+            logging.info("--- Hoàn thành giai đoạn [Catch-up] ---")
+        except Exception as e:
+            logging.error(f"Lỗi trong giai đoạn [Catch-up]: {e}")
+    
     def _run_analysis_cycle(self):
         """Thực hiện một chu kỳ phân tích hoàn chỉnh cho tất cả các nguồn."""
         logging.info("=== Bắt đầu Chu kỳ Phân tích Mới ===")
         
         self.status = "running_parsers"
         self._run_all_parsers()
+        
+        self.status = "reading_from_staging_db"
+        db = SessionLocal()
+        try:
+            logging.info("Đang đọc dữ liệu từ bảng staging_logs...")
+            # Sử dụng pd.read_sql để đọc toàn bộ bảng vào một DataFrame
+            df_from_staging = pd.read_sql(db.query(StagingLog).statement, db.bind)
+            
+            if df_from_staging.empty:
+                logging.info("Không có dữ liệu trong bảng staging để phân tích.")
+                self.last_run_finish_time = datetime.now(timezone.utc).isoformat()
+                return
 
-        # --- Đọc và kết hợp TẤT CẢ các file CSV ---
+            # Sau khi đọc xong, xóa toàn bộ bảng staging
+            num_rows = db.query(StagingLog).delete()
+            db.commit()
+            logging.info(f"Đã đọc và dọn dẹp {num_rows} bản ghi từ bảng staging.")
+        finally:
+            db.close()
+
+        # # --- Đọc và kết hợp TẤT CẢ các file CSV ---
         all_parsed_logs_dfs = []
         csv_files_to_read = [
-            PARSED_MYSQL_LOG_FILE_PATH,
+            # PARSED_MYSQL_LOG_FILE_PATH,
             PARSED_POSTGRES_LOG_FILE_PATH,
             # PARSED_MONGO_LOG_FILE_PATH
         ]
@@ -87,7 +127,7 @@ class AnalysisEngine:
         for csv_file in csv_files_to_read:
             if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                 try:
-                    all_parsed_logs_dfs.append(pd.read_csv(csv_file))
+                    all_parsed_logs_dfs.append(pd.read_parquet(csv_file))
                 except Exception as e:
                     logging.error(f"Không thể đọc file {os.path.basename(csv_file)}: {e}")
 
@@ -181,6 +221,7 @@ class AnalysisEngine:
         if self._is_running:
             logging.warning("Engine đã đang chạy.")
             return
+        self.catch_up_missed_logs()
         self._is_running = True
         self._thread = threading.Thread(target=self._main_loop, daemon=True)
         self._thread.start()

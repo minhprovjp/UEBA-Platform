@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 from datetime import time as dt_time
+from sqlalchemy.orm import sessionmaker
 import logging
 
 # Thêm cấu hình logging ở đầu file
@@ -16,6 +17,16 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import *
+
+# Giả sử models.py nằm trong backend_api và engine nằm trong thư mục gốc
+# Chúng ta cần thêm đường dẫn để import
+try:
+    from backend_api.models import StagingLog, engine as main_engine
+except ImportError:
+    # Thêm logic sys.path nếu chạy file này độc lập
+    import sys, os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from backend_api.models import StagingLog, engine as main_engine
 
 # ==============================================================================
 # I. CÁC HÀM HỖ TRỢ PHÂN TÍCH THEO LUẬT (RULE-BASED ANALYSIS)
@@ -404,3 +415,33 @@ def update_config_file(new_configs: dict):
         import traceback
         traceback.print_exc()
         return False, f"Lỗi khi lưu cấu hình: {e}"
+    
+def bulk_insert_parsed_logs(records: list, source_dbms: str):
+    """
+    Nhận một list các dictionary log đã được parse và ghi chúng hàng loạt
+    vào bảng staging_logs.
+    """
+    if not records:
+        return 0
+
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=main_engine)
+    db = SessionLocal()
+    try:
+        # Thêm nguồn DBMS vào mỗi bản ghi
+        for record in records:
+            record['source_dbms'] = source_dbms
+            # Chuyển đổi chuỗi timestamp thành đối tượng datetime nếu cần
+            if isinstance(record.get('timestamp'), str):
+                record['timestamp'] = pd.to_datetime(record['timestamp'], utc=True).to_pydatetime()
+            
+        # bulk_insert_mappings là cách cực kỳ hiệu quả để chèn nhiều dòng
+        db.bulk_insert_mappings(StagingLog, records)
+        db.commit()
+        logging.info(f"Đã ghi thành công {len(records)} bản ghi từ '{source_dbms}' vào CSDL staging.")
+        return len(records)
+    except Exception as e:
+        logging.error(f"Lỗi khi bulk insert vào CSDL staging: {e}")
+        db.rollback()
+        return 0
+    finally:
+        db.close()

@@ -40,3 +40,18 @@ class Anomaly(Base):
     
     # Trạng thái để quản lý (sẽ dùng trong tương lai)
     status = Column(String, default='new', index=True) 
+    
+class StagingLog(Base):
+    __tablename__ = 'staging_logs'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Các cột dữ liệu giống hệt file CSV của bạn
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    user = Column(String, index=True)
+    client_ip = Column(String)
+    database = Column(String, nullable=True)
+    query = Column(Text, nullable=False)
+    
+    # Thêm một cột để phân biệt nguồn (MySQL, PostgreSQL)
+    source_dbms = Column(String, default='mysql', index=True)

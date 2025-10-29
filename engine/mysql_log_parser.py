@@ -30,9 +30,16 @@ import argparse
 import pandas as pd
 from datetime import datetime, timezone
 import sys
+import redis
 # Thêm thư mục gốc để import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import * # Import tất cả các hằng số từ config.py
+from engine.utils import bulk_insert_parsed_logs
+
+import logging
+# --- Cấu hình Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [MySQLParser] - %(message)s',
+                    handlers=[logging.StreamHandler(sys.stdout)]) # Chỉ in ra console cho đơn giản
 
 # ==============================================================================
 # I. CÁC BIỂU THỨC CHÍNH QUY (REGEX)
@@ -73,7 +80,7 @@ mysql_init_db_regex = re.compile(
 def read_last_known_state():
     """Đọc trạng thái lần cuối từ file .parser_state."""
     try:
-        with open(STATE_FILE_PATH, 'r') as f:
+        with open(MYSQL_STATE_FILE_PATH, 'r') as f:
             last_size = int(f.readline().strip()) # Đọc dòng đầu tiên cho size
             sessions_str = f.read() # Đọc phần còn lại cho session dictionary
             if sessions_str:
@@ -87,7 +94,7 @@ def read_last_known_state():
 
 def write_last_known_state(size, sessions):
     """Ghi kích thước và session dictionary hiện tại vào file .parser_state."""
-    with open(STATE_FILE_PATH, 'w') as f:
+    with open(MYSQL_STATE_FILE_PATH, 'w') as f:
         f.write(f"{size}\n") # Ghi kích thước file ở dòng đầu tiên
         f.write(json.dumps(sessions, indent=2)) # Ghi dictionary session dưới dạng JSON
 
@@ -238,8 +245,8 @@ def perform_hard_reset(reason: str):
             shutil.move(PARSED_MYSQL_LOG_FILE_PATH, destination_path)
             print(f"    -> Đã lưu trữ: {os.path.basename(PARSED_MYSQL_LOG_FILE_PATH)} -> {new_filename}")
     except Exception as e:
-        print(f"    -> LỖI khi lưu trữ file CSV: {e}")
-    files_to_delete = [META_FILE_PATH, STATE_FILE_PATH]
+        print(f"    -> LỖI khi lưu trữ file Parquest: {e}")
+    files_to_delete = [META_FILE_PATH, MYSQL_STATE_FILE_PATH]
     for file_path in files_to_delete:
         try:
             if os.path.exists(file_path):
@@ -338,19 +345,147 @@ def parse_and_append_log_data(new_lines, sessions):
 # V. HÀM CHÍNH (ENTRY POINT CỦA SCRIPT)
 # ==============================================================================
 
-def run_incremental_parser(source_log_path, output_csv_path, state_file_path, no_reset_check=False):
+def realtime_worker_mode():
+    
+    try:
+        redis_client = redis.Redis(decode_responses=True)
+        redis_client.ping()
+        logging.info("Parser Worker (real-time) đã kết nối Redis và bắt đầu lắng nghe 'raw_logs_queue'...")
+    except redis.exceptions.ConnectionError as e:
+        logging.critical(f"Không thể kết nối đến Redis: {e}")
+        sys.exit(1)
+    logging.info("Parser Worker (real-time) đã khởi động, đang chờ log từ 'raw_logs_queue'...")
+    try:
+        while True:
+            try:
+                # Chờ tối đa 1 giây. Nếu không có tin nhắn, nó sẽ trả về None.
+                message_tuple = redis_client.brpop("raw_logs_queue", timeout=1)
+                
+                # Nếu không có tin nhắn (timeout), tiếp tục vòng lặp
+                if message_tuple is None:
+                    continue
+                
+                _, message_json = redis_client.brpop("raw_logs_queue")
+                message = json.loads(message_json)
+                
+                if message.get('dbms') != 'mysql':
+                    continue
+
+                line = message['log_line']
+                
+                connect_match = mysql_connect_regex.match(line)
+                query_match = mysql_query_regex.match(line)
+                init_db_match = mysql_init_db_regex.match(line)
+                quit_match = re.search(r"(\d+)\s+Quit\s*$", line)
+                
+                if connect_match:
+                    data = connect_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    # Lấy giá trị 'db'. Nếu nó là None, thay thế bằng chuỗi 'N/A'
+                    db_name = data.get('db') or 'N/A'
+                    
+                    session_data = {
+                        'user': data.get('user', 'unknown'), 
+                        'host': data.get('host', 'unknown'), 
+                        'db': db_name
+                    }
+                    # session_data = {'user': data['user'], 'host': data['host'], 'db': data.get('db', 'N/A')}
+                    redis_client.hset(session_key, mapping=session_data)
+                    redis_client.expire(session_key, 3600)
+                    logging.info(f"Đã tạo/cập nhật session cho thread_id: {thread_id}")
+
+                    pending_queue_key = f"pending_queries:{thread_id}"
+                    # Lấy tất cả các query đang chờ cho thread_id này
+                    pending_queries = redis_client.lrange(pending_queue_key, 0, -1)
+                    if pending_queries:
+                        logging.info(f"Tìm thấy {len(pending_queries)} query đang chờ cho thread_id: {thread_id}. Đang xử lý lại...")
+                        for query_json in pending_queries:
+                            query_data = json.loads(query_json)
+                            # Xây dựng lại bản ghi với thông tin session chính xác
+                            parsed_record = {
+                                'timestamp': query_data['timestamp'],
+                                'user': session_data['user'],
+                                'client_ip': session_data['host'],
+                                'database': session_data.get('db', 'N/A'), # Lấy db từ session mới
+                                'query': query_data['query'],
+                                'source_dbms': 'mysql'
+                            }
+                            redis_client.lpush("parsed_logs_queue", json.dumps(parsed_record))
+                        # Xóa hàng đợi chờ sau khi đã xử lý xong
+                        redis_client.delete(pending_queue_key)
+                        
+                elif init_db_match:
+                    data = init_db_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    redis_client.hset(session_key, 'db', data['db_name'])
+                    logging.info(f"Đã cập nhật DB cho thread_id: {thread_id}")
+
+                elif query_match:
+                    data = query_match.groupdict()
+                    thread_id = data['thread_id']
+                    session_key = f"mysql_session:{thread_id}"
+                    
+                    session_info = redis_client.hgetall(session_key)
+                    
+                    # === XỬ LÝ KHI KHÔNG TÌM THẤY SESSION ===
+                    if not session_info:
+                        logging.warning(f"Không tìm thấy session cho thread_id: {thread_id}. Sử dụng session mặc định.")
+                        # Tạo một session mặc định/giả để vẫn có thể xử lý query
+                        session_info = {'user': 'unknown', 'host': 'unknown', 'db': 'N/A'}
+                        
+                    if session_info:
+                        # Kịch bản TỐT: Session đã tồn tại, xử lý như bình thường
+                        parsed_record = {
+                            'timestamp': data['timestamp'],
+                            'user': session_info.get('user'),
+                            'client_ip': session_info.get('host'),
+                            'database': session_info.get('db', 'N/A'),
+                            'query': data['query'],
+                            'source_dbms': 'mysql'
+                        }
+                        logging.info(f"Bản ghi đã được parse: {json.dumps(parsed_record)}")
+                        redis_client.lpush("parsed_logs_queue", json.dumps(parsed_record))
+                        logging.info(f"Đã phân tích và đẩy 1 bản ghi từ thread_id: {thread_id} vào 'parsed_logs_queue'.")
+                    else:
+                        # === LOGIC MỚI: KỊCH BẢN CHỜ (PENDING) ===
+                        logging.warning(f"Không tìm thấy session cho thread_id: {thread_id}. Đưa query vào hàng đợi chờ.")
+                        pending_queue_key = f"pending_queries:{thread_id}"
+                        # Chỉ lưu trữ thông tin cần thiết của query
+                        query_data = {'timestamp': data['timestamp'], 'query': data['query']}
+                        redis_client.rpush(pending_queue_key, json.dumps(query_data))
+                        # Đặt thời gian hết hạn cho hàng đợi chờ để tránh bị kẹt mãi mãi
+                        redis_client.expire(pending_queue_key, 60) # Tự xóa sau 60 giây nếu không có Connect
+                    
+                elif quit_match:
+                    thread_id = quit_match.group(1)
+                    session_key = f"mysql_session:{thread_id}"
+                    redis_client.delete(session_key)
+                    logging.info(f"Đã xóa session cho thread_id: {thread_id}")
+
+            except json.JSONDecodeError:
+                logging.error(f"Lỗi giải mã JSON từ tin nhắn.")
+            except Exception as e:
+                logging.error(f"Lỗi không xác định trong worker: {e}", exc_info=True)
+    except KeyboardInterrupt:
+        logging.info("Nhận tín hiệu KeyboardInterrupt, đang dừng MySQL Parser Worker...")
+
+def run_catch_up_mode(source_log_path, output_parquet_path, state_file_path, no_reset_check=False):
     """Hàm chính để thực thi toàn bộ logic phân tích tăng dần."""
+    
+    logging.info(f"Chạy chế độ Catch-up cho file: {source_log_path}")
     
     # --- Bước 1: Xác thực tính toàn vẹn ---
     if not args.no_reset_check:
         print("--- Chế độ khởi động: Đang thực hiện kiểm tra toàn vẹn ---")
         meta_exists = os.path.exists(META_FILE_PATH)
-        state_exists = os.path.exists(STATE_FILE_PATH)
-        csv_exists = os.path.exists(PARSED_MYSQL_LOG_FILE_PATH)
+        state_exists = os.path.exists(MYSQL_STATE_FILE_PATH)
+        parquet_exists = os.path.exists(PARSED_MYSQL_LOG_FILE_PATH)
     
         # Nếu trạng thái không đồng bộ (một file có, một file không), reset tất cả
-        if not (sum([meta_exists, state_exists, csv_exists]) in [0, 3]):
-            perform_hard_reset(f"Phát hiện trạng thái không đồng bộ (meta:{meta_exists}, state:{state_exists}, csv:{csv_exists}).")
+        if not (sum([meta_exists, state_exists, parquet_exists]) in [0, 3]):
+            perform_hard_reset(f"Phát hiện trạng thái không đồng bộ (meta:{meta_exists}, state:{state_exists}, parquet:{parquet_exists}).")
             # Sau khi reset, cập nhật lại trạng thái tồn tại của file
             meta_exists = False
             state_exists = False
@@ -430,14 +565,40 @@ def run_incremental_parser(source_log_path, output_csv_path, state_file_path, no
         write_last_known_state(current_size, updated_sessions)
         return
 
-    # Ghi nối tiếp vào file CSV
-    output_csv_path = PARSED_MYSQL_LOG_FILE_PATH
-    file_exists = os.path.exists(output_csv_path) and os.path.getsize(output_csv_path) > 0
-    df_new.to_csv(
-        output_csv_path, mode='a', header=not file_exists, index=False,
-        encoding='utf-8', quoting=csv.QUOTE_ALL
-    )
+    # # Ghi nối tiếp vào file CSV
+    # output_csv_path = PARSED_MYSQL_LOG_FILE_PATH
+    # file_exists = os.path.exists(output_csv_path) and os.path.getsize(output_csv_path) > 0
+    # df_new.to_csv(
+    #     output_csv_path, mode='a', header=not file_exists, index=False,
+    #     encoding='utf-8', quoting=csv.QUOTE_ALL
+    # )
+    # Chuyển đổi DataFrame thành list các dictionary
+    logging.info(f"Chuẩn bị ghi {len(df_new)} dòng mới vào file Parquet: {SOURCE_MYSQL_LOG_PATH}")
+    try:
+        # Thêm cột db_source để chuẩn hóa
+        df_new['db_source'] = 'MySQL'
+        
+        # Kiểm tra file đã tồn tại chưa để quyết định ghi nối tiếp (append)
+        if os.path.exists(SOURCE_MYSQL_LOG_PATH):
+            df_new.to_parquet(SOURCE_MYSQL_LOG_PATH, engine='pyarrow', append=True)
+            logging.info("Ghi nối tiếp vào file Parquet thành công.")
+        else:
+            df_new.to_parquet(SOURCE_MYSQL_LOG_PATH, engine='pyarrow')
+            logging.info("Tạo và ghi vào file Parquet mới thành công.")
+            
+        new_records = df_new.to_dict('records')
     
+        # Gọi hàm helper để ghi vào CSDL
+        rows_inserted = bulk_insert_parsed_logs(new_records, 'mysql')
+        
+        if rows_inserted > 0:
+            print(f"Thành công! Đã ghi {rows_inserted} dòng log MySQL mới vào CSDL staging.")
+
+    except Exception as e:
+        logging.error(f"Lỗi khi ghi vào file Parquet: {e}")
+        # Không cập nhật state nếu ghi lỗi
+        return
+ 
     # Cập nhật trạng thái và metadata
     write_last_known_state(current_size, updated_sessions)
     if not df_new.empty: print(f"Thành công! Đã xử lý và ghi thêm {len(df_new)} dòng mới.")
@@ -448,28 +609,29 @@ def run_incremental_parser(source_log_path, output_csv_path, state_file_path, no
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Phân tích log MySQL một cách tăng dần.")
-    parser.add_argument(
-        '--input', type=str, required=True, help="Đường dẫn đến file log thô của MySQL."
-    )
-    parser.add_argument(
-        '--output', type=str, required=True, help="Đường dẫn đến file CSV đầu ra."
-    )
+    parser.add_argument("--mode", type=str, choices=['worker', 'catch-up'], required=True)
+    # parser.add_argument("--input", type=str, help="Đường dẫn file log nguồn (chỉ cần cho catch-up)")
+    # parser.add_argument(
+    #     '--output', type=str, required=True, help="Đường dẫn đến file CSV đầu ra."
+    # )
     parser.add_argument(
         '--no-reset-check', action='store_true', help="Bỏ qua kiểm tra toàn vẹn và Hard Reset. Dùng cho chế độ real-time."
     )
     args = parser.parse_args()
 
     # Cập nhật các biến toàn cục từ tham số để các hàm khác sử dụng đúng đường dẫn
-    SOURCE_MYSQL_LOG_PATH = args.input
-    PARSED_MYSQL_LOG_FILE_PATH = args.output
-    META_FILE_PATH = args.output + ".meta"
+    # SOURCE_MYSQL_LOG_PATH = args.input
+    # PARSED_MYSQL_LOG_FILE_PATH = args.output
+    # META_FILE_PATH = args.output + ".meta"
     # Đảm bảo state file ở đúng thư mục với file output
-    STATE_FILE_PATH = os.path.join(os.path.dirname(args.output), ".mysql_parser_state")
-    
-    # Điểm khởi đầu khi chạy script này trực tiếp từ terminal
-    run_incremental_parser(
+    # MYSQL_STATE_FILE_PATH = os.path.join(os.path.dirname(args.output), ".mysql_parser_state")
+
+    if args.mode == 'worker':
+        realtime_worker_mode()
+    elif args.mode == 'catch-up':
+        run_incremental_parser(
         source_log_path=SOURCE_MYSQL_LOG_PATH,
-        output_csv_path=PARSED_MYSQL_LOG_FILE_PATH,
-        state_file_path=STATE_FILE_PATH,
+        # output_csv_path=PARSED_MYSQL_LOG_FILE_PATH,
+        state_file_path=MYSQL_STATE_FILE_PATH,
         no_reset_check=args.no_reset_check
-    )
+        )
