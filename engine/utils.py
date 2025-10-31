@@ -8,6 +8,8 @@ import json
 import re
 from datetime import time as dt_time
 import logging
+import uuid
+from datetime import datetime
 
 # Thêm cấu hình logging ở đầu file
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [Utils] - %(message)s')
@@ -286,30 +288,30 @@ def extract_query_features(sql_query):
     return features
 
 def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
-    """
-    Lưu phản hồi từ một dictionary vào file CSV với logic "UPSERT".
-    """
     try:
-        # === SỬA ĐỔI: Chuyển item_data (dict) thành Series để tái sử dụng logic cũ ===
-        item_series = pd.Series(item_data)
+        # item_data đã là dict:
+        identifier_string = f"{item_data.get('timestamp')}{item_data.get('user')}{item_data.get('query')}"
+        feedback_id = hashlib.md5(str(identifier_string).encode()).hexdigest()
 
-        identifier_string = f"{item_series.get('timestamp')}{item_series.get('user')}{item_series.get('query')}"
-        feedback_id = hashlib.md5(identifier_string.encode()).hexdigest()
-
-        new_feedback_data = item_data.to_dict()
+        new_feedback_data = dict(item_data)  # clone dict
         new_feedback_data['feedback_id'] = feedback_id
         new_feedback_data['is_anomaly_label'] = label
 
-        for key, value in new_feedback_data.items():
-            if isinstance(value, (list, tuple)):
-                new_feedback_data[key] = json.dumps(value)
-        
+        for k, v in list(new_feedback_data.items()):
+            if isinstance(v, (list, tuple)):
+                new_feedback_data[k] = json.dumps(v, ensure_ascii=False)
+
+        # đảm bảo thư mục tồn tại
+        os.makedirs(os.path.dirname(FEEDBACK_FILE_PATH) or ".", exist_ok=True)
+
         df_feedback = pd.DataFrame()
         if os.path.exists(FEEDBACK_FILE_PATH) and os.path.getsize(FEEDBACK_FILE_PATH) > 0:
             df_feedback = pd.read_csv(FEEDBACK_FILE_PATH)
 
         message = ""
-        if not df_feedback.empty and 'feedback_id' in df_feedback.columns and (feedback_id in df_feedback['feedback_id'].values):
+        if (not df_feedback.empty and
+            'feedback_id' in df_feedback.columns and
+            feedback_id in df_feedback['feedback_id'].values):
             message = f"Đã CẬP NHẬT phản hồi cho mục #{feedback_id[:8]}..."
             idx = df_feedback.index[df_feedback['feedback_id'] == feedback_id][0]
             for col, value in new_feedback_data.items():
@@ -326,18 +328,15 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         ordered_cols = ['feedback_id', 'timestamp', 'user', 'query', 'is_anomaly_label']
         all_columns = sorted(list(set(df_feedback.columns.tolist() + list(new_feedback_data.keys()))))
         final_cols = [c for c in ordered_cols if c in all_columns] + [c for c in all_columns if c not in ordered_cols]
-        
-        df_feedback.to_csv(FEEDBACK_FILE_PATH, mode='w', header=True, index=False, columns=final_cols, encoding='utf-8')
-        
-        logging.info(message) # Ghi log thay vì hiển thị toast
-        return True, message # Trả về thành công và thông báo
 
+        df_feedback.to_csv(FEEDBACK_FILE_PATH, mode='w', header=True, index=False, columns=final_cols, encoding='utf-8')
+        logging.info(message)
+        return True, message
     except Exception as e:
-        error_message = f"Đã xảy ra lỗi khi lưu phản hồi: {e}"
-        logging.error(error_message)
-        import traceback
-        traceback.print_exc()
-        return False, error_message # Trả về thất bại và thông báo lỗi
+        logging.error(f"Đã xảy ra lỗi khi lưu phản hồi: {e}")
+        import traceback; traceback.print_exc()
+        return False, f"Đã xảy ra lỗi khi lưu phản hồi: {e}"
+
         
 def update_config_file(new_configs: dict):
     """
@@ -406,3 +405,24 @@ def update_config_file(new_configs: dict):
         import traceback
         traceback.print_exc()
         return False, f"Lỗi khi lưu cấu hình: {e}"
+    
+def save_logs_to_parquet(records: list, source_dbms: str) -> int:
+    if not records:
+        return 0
+    try:
+        df = pd.DataFrame(records)
+        if 'source_dbms' not in df.columns:
+            df['source_dbms'] = source_dbms
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+
+        os.makedirs(STAGING_DATA_DIR, exist_ok=True)  # <-- thêm dòng này
+
+        filename = f"{source_dbms}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+        file_path = os.path.join(STAGING_DATA_DIR, filename)
+        df.to_parquet(file_path, engine='pyarrow', index=False)
+        logging.info(f"Đã lưu {len(df)} bản ghi từ '{source_dbms}' vào file: {filename}")
+        return len(df)
+    except Exception as e:
+        logging.error(f"Lỗi khi lưu file Parquet: {e}")
+        return 0
