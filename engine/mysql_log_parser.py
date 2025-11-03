@@ -16,7 +16,7 @@ from config import (
     STAGING_DATA_DIR,
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [MySQLParser] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [MySQLParser] - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 
 # --- REGEX: sửa CONNECT để cho phép DB trống ("on  using ...")
 mysql_connect_regex = re.compile(

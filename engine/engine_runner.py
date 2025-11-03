@@ -13,9 +13,16 @@ from datetime import datetime, timezone
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import *
+from config import (
+    LATE_NIGHT_START_TIME_DEFAULT, LATE_NIGHT_END_TIME_DEFAULT,
+    SAFE_HOURS_START_DEFAULT, SAFE_HOURS_END_DEFAULT,
+    SENSITIVE_TABLES_DEFAULT, ALLOWED_USERS_FOR_SENSITIVE_DEFAULT,
+    TIME_WINDOW_DEFAULT_MINUTES, MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT,
+    KNOWN_LARGE_TABLES_DEFAULT
+)
 from engine.data_processor import load_and_process_data
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [EngineRunner] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [EngineRunner] - %(message)s', handlers=[logging.StreamHandler(sys.stdout)], force=True)
 
 def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if 'timestamp' not in df.columns:
@@ -51,7 +58,7 @@ class AnalysisEngine:
                 command = [sys.executable, parser_job["script"], "--mode", "catch-up"]
                 env = os.environ.copy()
                 env["PYTHONIOENCODING"] = "utf-8"
-                cp = subprocess.run(command, check=True, capture_output=True, text=True, errors='ignore', env=env)
+                cp = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
                 if cp.stdout:
                     logging.info(f"[{parser_job['name']} stdout]\n{cp.stdout.strip()}")
                 if cp.stderr:
@@ -100,7 +107,26 @@ class AnalysisEngine:
         logging.info(f"Tổng hợp được {len(df_combined_logs)} dòng log để phân tích.")
 
         # 3) chạy phân tích
-        config_params = {}
+        config_params = {
+            # Luật 1: Late Night (TRUYỀN THẲNG dt_time)
+            "late_night_start": LATE_NIGHT_START_TIME_DEFAULT,   # dt_time(0, 0)
+            "late_night_end":   LATE_NIGHT_END_TIME_DEFAULT,     # dt_time(5, 0)
+
+            # Luật 4: Sensitive Access (giờ an toàn là số giờ nguyên)
+            "safe_hours_start": SAFE_HOURS_START_DEFAULT,        # ví dụ: 8
+            "safe_hours_end":   SAFE_HOURS_END_DEFAULT,          # ví dụ: 18
+            "safe_weekdays":    SAFE_WEEKDAYS_DEFAULT,           # [0..4]
+
+            "sensitive_tables": SENSITIVE_TABLES_DEFAULT,
+            "allowed_users_for_sensitive": ALLOWED_USERS_FOR_SENSITIVE_DEFAULT,
+
+            # Luật 3: Multi-table
+            "multi_table_window_minutes": TIME_WINDOW_DEFAULT_MINUTES,
+            "multi_table_min_distinct":   MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT,
+
+            # Luật 2: Large dump
+            "known_large_tables": KNOWN_LARGE_TABLES_DEFAULT,
+        }
         self.status = "processing_data"
         results = load_and_process_data(df_combined_logs, config_params)
 
