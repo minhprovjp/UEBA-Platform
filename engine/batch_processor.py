@@ -1,0 +1,120 @@
+# engine/batch_processor.py
+import time
+import sys
+import os
+import pandas as pd
+import logging
+import glob
+import shutil
+from datetime import datetime, timezone
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from config import *
+    from data_processor import load_and_process_data
+    from engine.db_writer import save_anomalies_to_db
+except ImportError:
+    print("Lỗi: Không thể import 'config', 'data_processor' hoặc 'db_writer'.")
+    sys.exit(1)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [BatchProcessor] - %(message)s', force=True)
+
+# Xây dựng dict config một lần (giống realtime_engine)
+CFG = dict(
+    p_late_night_start_time=LATE_NIGHT_START_TIME_DEFAULT,
+    p_late_night_end_time=LATE_NIGHT_END_TIME_DEFAULT,
+    p_known_large_tables=KNOWN_LARGE_TABLES_DEFAULT,
+    p_time_window_minutes=TIME_WINDOW_DEFAULT_MINUTES,
+    p_min_distinct_tables=MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT,
+    p_sensitive_tables=SENSITIVE_TABLES_DEFAULT,
+    p_allowed_users_sensitive=ALLOWED_USERS_FOR_SENSITIVE_DEFAULT,
+    p_safe_hours_start=SAFE_HOURS_START_DEFAULT,
+    p_safe_hours_end=SAFE_HOURS_END_DEFAULT,
+    p_safe_weekdays=SAFE_WEEKDAYS_DEFAULT,
+    p_quantile_start=QUANTILE_START_DEFAULT,
+    p_quantile_end=QUANTILE_END_DEFAULT,
+    p_min_queries_for_profile=MIN_QUERIES_FOR_PROFILE_DEFAULT,
+)
+
+def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+    if 'timestamp' not in df.columns:
+        return df
+    try:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+    except Exception:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+    df = df[df['timestamp'].notna()].reset_index(drop=True)
+    return df
+
+def run_analysis_cycle():
+    """
+    Quét thư mục staging, xử lý file, lưu kết quả, và dọn dẹp.
+    """
+    logging.info("=== Bắt đầu Chu kỳ Xử lý Batch (Staging) ===")
+    
+    # 1. Gom file staging (chỉ parquet)
+    parquet_files = glob.glob(os.path.join(STAGING_DATA_DIR, "*.parquet"))
+    if not parquet_files:
+        logging.info("Không có file dữ liệu mới trong staging để xử lý.")
+        return
+
+    logging.info(f"Tìm thấy {len(parquet_files)} file parquet mới đang chờ xử lý.")
+    dfs, files_to_archive = [], []
+
+    for f_path in parquet_files:
+        try:
+            df = pd.read_parquet(f_path)
+            df = _normalize_timestamp(df)
+            if not df.empty:
+                dfs.append(df)
+            files_to_archive.append(f_path)
+        except Exception as e:
+            logging.error(f"Lỗi khi đọc file {os.path.basename(f_path)}: {e}")
+
+    if not dfs:
+        logging.warning("Các file staging đều rỗng hoặc lỗi. Không có dữ liệu để phân tích.")
+        return
+
+    df_combined_logs = pd.concat(dfs, ignore_index=True)
+    logging.info(f"Tổng hợp được {len(df_combined_logs)} dòng log (ví dụ: từ PostgreSQL) để phân tích.")
+
+    # 2. Chạy phân tích
+    results = load_and_process_data(df_combined_logs, CFG)
+
+    # 3. Lưu bất thường vào CSDL
+    try:
+        save_anomalies_to_db(results)
+    except Exception as e:
+        logging.error(f"Failed to save batch anomalies to DB: {e}", exc_info=True)
+
+    # 4. Dọn staging -> archive
+    logging.info("Đang dọn dẹp thư mục staging...")
+    os.makedirs(ARCHIVE_DATA_DIR, exist_ok=True)
+    for f_path in files_to_archive:
+        try:
+            shutil.move(f_path, os.path.join(ARCHIVE_DATA_DIR, os.path.basename(f_path)))
+        except Exception as e:
+            logging.error(f"Không thể di chuyển file {os.path.basename(f_path)}: {e}")
+
+    logging.info("Hoàn thành chu kỳ xử lý batch.")
+
+def main_loop():
+    logging.info("Batch Processor (Staging) started.")
+    logging.info("Processor đang chạy... Nhấn Ctrl+C để dừng.")
+    while True:
+        try:
+            run_analysis_cycle()
+            logging.info(f"Batch processor đang ngủ {ENGINE_SLEEP_INTERVAL_SECONDS} giây...")
+            time.sleep(ENGINE_SLEEP_INTERVAL_SECONDS)
+        except KeyboardInterrupt:
+            logging.info("Đã nhận tín hiệu (Ctrl+C). Batch Processor đang dừng...")
+            break
+        except Exception as e:
+            logging.error(f"Lỗi nghiêm trọng trong main loop (batch): {e}", exc_info=True)
+            time.sleep(30) # Chờ lâu hơn nếu có lỗi
+    
+    logging.info("Batch Processor đã dừng.")
+
+if __name__ == "__main__":
+    main_loop()

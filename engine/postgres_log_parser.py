@@ -1,16 +1,20 @@
-# engine/postgres_parser.py
+# engine/postgres_log_parser.py
 import pandas as pd
 import os
 import sys
 import csv
 import re
 import json
-import argparse # <--- THÊM IMPORT NÀY
+import argparse
 from datetime import datetime
 
-# Thêm thư mục gốc để import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# Không cần import config nữa vì các đường dẫn sẽ được truyền qua tham số
+try:
+    from config import *
+    from engine.utils import save_logs_to_parquet
+except ImportError:
+    print("Lỗi: Không thể import 'config' hoặc 'engine.utils'.")
+    sys.exit(1)
 
 # --- CÁC HÀM QUẢN LÝ TRẠNG THÁI (Không đổi) ---
 def read_parser_state(state_file_path):
@@ -45,16 +49,18 @@ def parse_single_log_file(log_path, start_byte=0):
                         'user': row[1],
                         'client_ip': row[4].split(':')[0] if row[4] else 'N/A',
                         'database': row[2],
-                        'query': message.removeprefix("statement: ").strip()
+                        'query': message.removeprefix("statement: ").strip(),
+                        'source_dbms': 'PostgreSQL' # Thêm nguồn
                     })
     except Exception as e:
         print(f"    -> Lỗi khi đọc file '{os.path.basename(log_path)}': {e}")
     return parsed_records
 
 # --- HÀM CHÍNH ĐÃ ĐƯỢC NÂNG CẤP ---
-def run_postgres_parser(source_log_dir, output_csv_path, state_file_path):
+def run_postgres_parser(source_log_dir, state_file_path):
     """
-    Hàm chính: Quét thư mục log, phân tích file mới/thay đổi, và ghi đè file CSV đầu ra.
+    Hàm chính: Quét thư mục log, phân tích file mới/thay đổi,
+    VÀ GHI RA STAGING PARQUET.
     """
     if not os.path.isdir(source_log_dir):
         print(f"Lỗi: Thư mục log nguồn của PostgreSQL không tồn tại tại '{source_log_dir}'")
@@ -74,7 +80,11 @@ def run_postgres_parser(source_log_dir, output_csv_path, state_file_path):
 
     for filename in log_files:
         full_path = os.path.join(source_log_dir, filename)
-        current_size = os.path.getsize(full_path)
+        try:
+            current_size = os.path.getsize(full_path)
+        except FileNotFoundError:
+            continue # File đã bị xoá
+            
         last_processed_size = processed_files_state.get(filename, 0)
         
         if current_size > last_processed_size:
@@ -82,59 +92,36 @@ def run_postgres_parser(source_log_dir, output_csv_path, state_file_path):
             if new_records:
                 all_new_records.extend(new_records)
             processed_files_state[filename] = current_size
+        elif current_size < last_processed_size:
+             # File đã bị xoay vòng (rotated) hoặc cắt bớt
+            logging.warning(f"Phát hiện xoay vòng file log: {filename}. Đọc lại từ đầu.")
+            new_records = parse_single_log_file(full_path, start_byte=0)
+            if new_records:
+                all_new_records.extend(new_records)
+            processed_files_state[filename] = current_size
+
 
     if not all_new_records:
         print("Không có dữ liệu log mới nào được tìm thấy.")
+        write_parser_state(state, state_file_path) # Vẫn lưu state (ví dụ: last_run_utc)
         return
 
-    df_new = pd.DataFrame(all_new_records)
-    df_new['timestamp'] = pd.to_datetime(df_new['timestamp'], utc=True, errors='coerce')
-    df_new.dropna(subset=['timestamp'], inplace=True)
+    # === LOGIC GHI FILE ĐÃ THAY ĐỔI ===
+    # Thay vì đọc/ghi file CSV lớn, chỉ cần ghi batch mới ra staging
+    num_saved = save_logs_to_parquet(all_new_records, source_dbms="PostgreSQL")
     
-    if df_new.empty:
-        print("Không có bản ghi hợp lệ nào sau khi xử lý.")
+    if num_saved > 0:
+        # Lưu lại trạng thái mới nhất
         write_parser_state(state, state_file_path)
-        return
-        
-    # === SỬA ĐỔI LOGIC GHI FILE: GHI ĐÈ THAY VÌ NỐI TIẾP ===
-    # Đọc file CSV cũ (nếu có)
-    try:
-        df_old = pd.read_csv(output_csv_path)
-        # Chuyển đổi timestamp của file cũ để đảm bảo có thể nối
-        df_old['timestamp'] = pd.to_datetime(df_old['timestamp'], utc=True, errors='coerce')
-        # Nối dữ liệu cũ và mới
-        df_combined = pd.concat([df_old, df_new], ignore_index=True)
-    except FileNotFoundError:
-        # Nếu file cũ không tồn tại, file mới chính là file kết hợp
-        df_combined = df_new
-
-    # Xử lý trùng lặp và sắp xếp lại
-    df_combined.drop_duplicates(subset=['timestamp', 'user', 'query'], keep='last', inplace=True)
-    df_combined.sort_values(by='timestamp', inplace=True)
-
-    # Tự động tạo thư mục đầu ra
-    output_dir = os.path.dirname(output_csv_path)
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Ghi đè toàn bộ file CSV với dữ liệu đã được kết hợp và làm sạch
-    df_combined.to_csv(output_csv_path, index=False, encoding='utf-8')
-    
-    # Lưu lại trạng thái mới nhất
-    write_parser_state(state, state_file_path)
-    
-    print(f"--- Hoàn thành ---")
-    print(f"Phân tích log PostgreSQL thành công. File '{os.path.basename(output_csv_path)}' hiện có {len(df_combined)} dòng.")
+        print(f"--- Hoàn thành ---")
+        print(f"Đã phân tích và lưu {num_saved} bản ghi PostgreSQL mới vào thư mục staging.")
+    else:
+        print("Đã phân tích log nhưng không lưu được file parquet.")
 
 # --- ĐIỂM KHỞI ĐỘNG CỦA SCRIPT ---
 if __name__ == "__main__":
-    # Thiết lập argparse để nhận tham số từ dòng lệnh
-    parser = argparse.ArgumentParser(description="Phân tích log PostgreSQL một cách tăng dần.")
-    parser.add_argument("--input", type=str, required=True, help="Đường dẫn đến THƯ MỤC chứa file log của PostgreSQL.")
-    parser.add_argument("--output", type=str, required=True, help="Đường dẫn đến file CSV đầu ra.")
-    args = parser.parse_args()
-    
-    # Tạo đường dẫn file trạng thái dựa trên file output
-    state_file = os.path.join(os.path.dirname(args.output), ".postgres_parser_state.json")
-    
-    # Gọi hàm chính với các tham số đã nhận
-    run_postgres_parser(args.input, args.output, state_file)
+    # Sử dụng config.py thay vì tham số dòng lệnh
+    run_postgres_parser(
+        source_log_dir=SOURCE_POSTGRES_LOG_PATH,
+        state_file_path=POSTGRES_STATE_FILE_PATH
+    )

@@ -85,84 +85,39 @@ def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     return bool(accessed_sensitive), accessed_sensitive
 
 
-# def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
-#                              safe_start, safe_end, safe_days):
-#     """
-#     Phân tích một truy cập vào bảng nhạy cảm để tìm các vi phạm chính sách.
-#     Một truy cập bị coi là vi phạm nếu nó truy cập bảng nhạy cảm VÀ không thỏa mãn
-#     điều kiện về người dùng HOẶC thời gian.
-#     """
-#     # Lấy các thông tin cần thiết từ dòng dữ liệu.
-#     accessed_tables = row['accessed_tables']
-#     user = row['user']
-#     timestamp = row['timestamp']
-#
-#     # Kiểm tra xem có bảng nhạy cảm nào bị truy cập không.
-#     is_sensitive_hit, specific_sensitive_tables = is_sensitive_table_accessed(accessed_tables, sensitive_tables_list)
-#     # Nếu không, không cần phân tích thêm, trả về None.
-#     if not is_sensitive_hit:
-#         return None
-#
-#     # Kiểm tra các điều kiện chính sách.
-#     user_is_allowed = (not pd.isna(user) and user in allowed_users_list)
-#     is_outside_safe_hours = not (safe_start <= timestamp.hour < safe_end and timestamp.weekday() in safe_days)
-#
-#     # Thu thập các lý do vi phạm.
-#     anomaly_reasons = []
-#     if not user_is_allowed:
-#         anomaly_reasons.append(f"User '{user if not pd.isna(user) else 'N/A'}' không được phép.")
-#     if is_outside_safe_hours:
-#         anomaly_reasons.append("Truy cập ngoài giờ làm việc an toàn.")
-#
-#     # Nếu có bất kỳ lý do vi phạm nào, trả về một dictionary chứa thông tin chi tiết.
-#     if anomaly_reasons:
-#         return {
-#             "violation_reason": ", ".join(anomaly_reasons),
-#             "accessed_sensitive_tables_list": specific_sensitive_tables
-#         }
-#
-#     # Nếu không có vi phạm nào, trả về None.
-#     return None
 def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
                              safe_start, safe_end, safe_days):
-    """
-    Phân tích truy cập bảng nhạy cảm với logic đã được sửa đổi.
-    LOGIC MỚI: Nếu một user được phép, hàm sẽ trả về None ngay lập tức
-    """
-    # Bước 1: Trích xuất thông tin cần thiết từ dòng dữ liệu
+
     accessed_tables = row.get('accessed_tables', [])
     user = row.get('user')
     timestamp = row.get('timestamp')
 
-    # Bước 2: Kiểm tra xem có truy cập vào bảng nhạy cảm không
     is_sensitive_hit, specific_sensitive_tables = is_sensitive_table_accessed(accessed_tables, sensitive_tables_list)
-    # Nếu không, không phải là bất thường -> kết thúc sớm
+
+    # Nếu không truy cập bảng nhạy cảm, bỏ qua
     if not is_sensitive_hit:
         return None
 
-        # --- THAY ĐỔI LOGIC CHÍNH NẰM Ở ĐÂY ---
-    # Bước 3: Kiểm tra xem user có nằm trong danh sách được phép không
+    # Kiểm tra các điều kiện
     user_is_allowed = (not pd.isna(user) and user in allowed_users_list)
-
-    # Nếu user đã được phép, coi như đây là hành động hợp lệ và không cần kiểm tra thêm.
-    if user_is_allowed:
-        return None
-
-    # Bước 4: Nếu user KHÔNG được phép, tiếp tục kiểm tra các điều kiện khác
-    # Chỉ những user không thuộc danh sách "allowed" mới bị xét đến các quy tắc phụ.
     is_outside_safe_hours = not (safe_start <= timestamp.hour < safe_end and timestamp.weekday() in safe_days)
 
-    # Xây dựng lý do bất thường
+    # LỖ HỔNG LÀ Ở ĐÂY. Logic cũ của bạn là `if user_is_allowed: return None`.
+    # Logic ĐÚNG là:
+
+    # CHỈ COI LÀ HỢP LỆ (return None) NẾU
+    # user được phép VÀ truy cập TRONG giờ an toàn.
+    if user_is_allowed and not is_outside_safe_hours:
+        return None
+
+    # Tất cả các trường hợp khác đều là bất thường.
+    # Xây dựng lý do:
     anomaly_reasons = []
-    # Lý do chính luôn là vì user không được phép
-    anomaly_reasons.append(f"User '{user if not pd.isna(user) else 'N/A'}' không có trong danh sách được phép.")
-
-    # Thêm lý do phụ về thời gian nếu có
+    if not user_is_allowed:
+        anomaly_reasons.append(f"User '{user if not pd.isna(user) else 'N/A'}' không có trong danh sách được phép.")
     if is_outside_safe_hours:
-        anomaly_reasons.append("Truy cập ngoài giờ làm việc an toàn..")
+        anomaly_reasons.append("Truy cập ngoài giờ làm việc an toàn.")
 
-    # Vì user chắc chắn không được phép ở bước này, `anomaly_reasons` sẽ không bao giờ rỗng.
-    # Trả về kết quả bất thường.
     return {
         "violation_reason": " ".join(anomaly_reasons),
         "accessed_sensitive_tables_list": specific_sensitive_tables
@@ -190,6 +145,33 @@ def check_unusual_user_activity_time(row, user_profiles_dict):
     # Nếu nằm trong giờ bình thường, trả về None.
     return None
 
+# --- RULE MỚI: PHÁT HIỆN HÀM NGHI VẤN (SQLi) ---
+def is_suspicious_function_used(query: str):
+    """
+    Kiểm tra query có chứa các hàm đáng ngờ thường dùng trong SQLi/Exfiltration.
+    Trả về (bool, str) - (Có đáng ngờ không, Tên hàm đáng ngờ)
+    """
+    if pd.isna(query):
+        return False, None
+    query_lower = str(query).lower()
+    for func in SUSPICIOUS_FUNCTIONS:
+        if f"{func}(" in query_lower:
+            return True, func
+    return False, None
+
+# --- RULE MỚI: PHÁT HIỆN THAY ĐỔI QUYỀN (DCL/DDL) ---
+def is_privilege_change(query: str):
+    """
+    Kiểm tra query có phải là lệnh thay đổi quyền hoặc user không.
+    Trả về (bool, str) - (Có thay đổi không, Lệnh)
+    """
+    if pd.isna(query):
+        return False, None
+    query_lower = str(query).lower().strip()
+    for cmd in PRIVILEGE_COMMANDS:
+        if query_lower.startswith(cmd):
+            return True, cmd
+    return False, None
 
 # ==============================================================================
 # II. CÁC HÀM HỖ TRỢ FEATURE ENGINEERING VÀ FEEDBACK
