@@ -43,25 +43,36 @@ def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
 
 def is_potential_large_dump(row, large_tables_list):
     """
-    Kiểm tra xem một truy vấn có khả năng là một hành vi kết xuất (dump) dữ liệu lớn không.
-    Nó tìm kiếm các mẫu truy vấn nguy hiểm.
+    CẬP NHẬT: Kiểm tra ý định (intent) trích xuất dữ liệu,
+    vì chúng ta không có 'rows_returned'.
     """
-    # Chuyển câu query về chữ thường để việc so sánh chuỗi không phân biệt hoa/thường.
     query = str(row['query']).lower()
     
-    # Lặp qua danh sách các bảng được coi là lớn.
+    # Rule 1: SELECT *
+    has_select_star = "select *" in query
+    
+    # Rule 2: Không có WHERE hoặc WHERE luôn đúng (Tautology)
+    has_no_where = "where" not in query
+    has_tautology = re.search(r"where\s+1\s*=\s*1", query, re.IGNORECASE) or \
+                    re.search(r"where\s+['\"]\w['\"]\s*=\s*['\"]\w['\"]", query, re.IGNORECASE)
+
+    # Rule 3: Truy cập bảng lớn
+    accesses_large_table = False
     for table in large_tables_list:
         table_lower = table.lower()
-        # Kiểm tra mẫu "SELECT *" từ một bảng lớn mà không có điều kiện lọc `WHERE` hoặc `LIMIT`.
-        if (f"from {table_lower}" in query or f"from `{table_lower}`" in query) and "select *" in query:
-            if "where" not in query and "limit" not in query:
-                return True # Nếu tìm thấy, trả về True ngay lập tức.
-    
-    # Kiểm tra mẫu lệnh xuất dữ liệu thẳng ra file.
+        if (f"from {table_lower}" in query or f"from `{table_lower}`" in query):
+            accesses_large_table = True
+            break
+            
+    # Bất thường NẾU:
+    # 1. Nó truy cập một bảng lớn VÀ (không có WHERE HOẶC có Tautology)
+    if accesses_large_table and (has_no_where or has_tautology):
+        return True
+        
+    # 2. Hoặc nó là một lệnh 'select into outfile'
     if "select into outfile" in query:
         return True
         
-    # Nếu không có mẫu nào khớp, trả về False.
     return False
 
 

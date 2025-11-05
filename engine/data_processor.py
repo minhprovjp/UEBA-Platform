@@ -27,8 +27,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [D
 
 # --- Import nội bộ ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import *
-from utils import *
+from config import MODELS_DIR, USER_MODELS_DIR
+
+from utils import (
+    is_late_night_query, is_potential_large_dump, get_tables_with_sqlglot,
+    analyze_sensitive_access, check_unusual_user_activity_time, extract_query_features,
+    is_suspicious_function_used, is_privilege_change
+)
 
 # Đảm bảo thư mục model tồn tại
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -84,13 +89,15 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         logging.warning("DataFrame đầu vào rỗng hoặc None, không có dữ liệu để xử lý.")
         empty = pd.DataFrame()
         return {
-            "all_logs": empty,
-            "anomalies_late_night": empty,
+            "all_logs": empty, 
+            "anomalies_late_night": empty, 
             "anomalies_dump": empty,
-            "anomalies_multi_table": empty,
+            "anomalies_multi_table": empty, 
             "anomalies_sensitive": empty,
-            "anomalies_user_time": empty,
+            "anomalies_user_time": empty, 
             "anomalies_complexity": empty,
+            "anomalies_sqli": empty, 
+            "anomalies_privilege": empty,
             "normal_activities": empty
         }
 
@@ -99,7 +106,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # --- BƯỚC 2: TIỀN XỬ LÝ DỮ LIỆU ---
     # Chuẩn hoá timestamp: hỗ trợ sẵn datetime, epoch ms, epoch s
     def _normalize_ts(series):
-        import pandas as pd
         s = series.copy()
         # Nếu đã là datetime -> giữ nguyên
         if pd.api.types.is_datetime64_any_dtype(s):
@@ -131,7 +137,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs['query'] = df_logs['query'].astype(str)
 
     # === BƯỚC 3: LẤY & CHUẨN HÓA CÁC THAM SỐ CẤU HÌNH ===
-    from datetime import time as dt_time
 
     def _ensure_time(v, fallback):
         # Cho phép truyền trực tiếp dt_time hoặc string ISO "HH:MM[:SS]"
@@ -145,12 +150,12 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         return fallback
 
     p_late_night_start_time = _ensure_time(
-        config_params.get('p_late_night_start_time', LATE_NIGHT_START_TIME_DEFAULT),
-        LATE_NIGHT_START_TIME_DEFAULT
+        config_params.get('p_late_night_start_time'),
+        dt_time(0, 0)
     )
     p_late_night_end_time   = _ensure_time(
-        config_params.get('p_late_night_end_time', LATE_NIGHT_END_TIME_DEFAULT),
-        LATE_NIGHT_END_TIME_DEFAULT
+        config_params.get('p_late_night_end_time'),
+        dt_time(5, 0)
     )
 
     # Known large tables

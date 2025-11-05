@@ -25,10 +25,7 @@ load_dotenv(override=True)
 # ==============================================================================
 # Mục này định nghĩa tất cả các đường dẫn file mà ứng dụng sử dụng.
 
-# --- Đường dẫn cho quá trình Phân tích Log (Parsing) ---
-
 # Lấy đường dẫn đến thư mục gốc của project một cách tự động.
-# Điều này giúp project có thể chạy trên bất kỳ máy nào mà không cần sửa đường dẫn.
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # --- CÁC ĐƯỜNG DẪN ĐƯỢC TÍNH TOÁN DỰA TRÊN THƯ MỤC GỐC ---
@@ -36,8 +33,18 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 ENGINE_DIR = os.path.join(PROJECT_ROOT, "engine")
 
+# Thêm URL PostgreSQL:
+# Thay 'user:password' và 'db_name' cho đúng
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://uba_user:password@localhost:5432/uba_db")
 
-DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'app_database.db')}"
+# Hãy đảm bảo user/password này có quyền SELECT trên bảng mysql.general_log
+MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost:3306/mysql"
+
+# SQLite cũ:
+# DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'app_database.db')}"
+
+# --- ĐƯỜNG DẪN FILE CẤU HÌNH ĐỘNG ---
+RULES_CONFIG_FILE_PATH = os.path.join(ENGINE_DIR, "rules_config.json")
 
 # Đường dẫn ĐẦY ĐỦ đến file log thô của MySQL (ví dụ: general_log).
 # Đây là file ĐẦU VÀO cho script `log_parser.py`.
@@ -48,7 +55,7 @@ SOURCE_MYSQL_LOG_PATH = r"C:/mysql_logs/query.log"
 SOURCE_POSTGRES_LOG_PATH = r'C:/psql_logs'
 
 # ------ Posstgresql log config ----------
-PARSED_POSTGRES_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_postgres_logs.csv")
+PARSED_POSTGRES_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_postgres_logs.parquet")
 
 POSTGRES_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "postgres_log_parser.py")
 
@@ -56,13 +63,15 @@ POSTGRES_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".postgres_parser_state.json")
 
 # ------ MongoDB log config --------
 SOURCE_MONGO_LOG_PATH = r"C:/mongo_logs"
-PARSED_MONGO_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_mongodb_logs.csv")
+PARSED_MONGO_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_mongodb_logs.parquet")
 MONGO_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "mongodb_log_parser.py")
 
 # ------ MySQL log config ---------
 
 # Tên file CSV sẽ được tạo ra sau khi `log_parser.py` chạy.
-PARSED_MYSQL_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_mysql_logs.csv")
+PARSED_MYSQL_LOG_PARQUET_PATH = os.path.join(LOGS_DIR, "parsed_mysql_logs.parquet")
+STAGING_DATA_DIR = os.path.join(DATA_DIR, "staging")   # Nơi chứa các file Parquet chờ xử lý
+ARCHIVE_DATA_DIR = os.path.join(DATA_DIR, "archive")   # (Tùy chọn) Nơi lưu trữ file đã xử lý
 
 # Thư mục để lưu trữ các file log đã phân tích bị không đồng bộ
 MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch")
@@ -75,7 +84,6 @@ META_FILE_PATH = MYSQL_PARSER_SCRIPT_PATH + ".meta"
 
 # Tên file chứa trạng thái của parser (ví dụ: vị trí cuối cùng đã đọc trong file log).
 MYSQL_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".mysql_parser_state")
-
 
 # --- Đường dẫn cho các mô hình AI và Feedback ---
 
@@ -90,7 +98,6 @@ FEEDBACK_FILE_PATH = 'feedback.csv'
 
 # Tên file JSON để lưu danh sách các model AI đã được xác thực thành công.
 VALID_MODELS_FILE_PATH = 'valid_models.json'
-
 
 # ==============================================================================
 # III. CẤU HÌNH CÁC LUẬT PHÁT HIỆN BẤT THƯỜNG
@@ -122,58 +129,20 @@ QUANTILE_START_DEFAULT = 0.15               # Mốc 15% thời gian hoạt độ
 QUANTILE_END_DEFAULT = 0.85                 # Mốc 85% thời gian hoạt động muộn nhất.
 MIN_QUERIES_FOR_PROFILE_DEFAULT = 10        # Số lượng truy vấn tối thiểu cần có để xây dựng hồ sơ hành vi.
 
+SUSPICIOUS_FUNCTIONS = ['sleep', 'benchmark', 'load_file', 'updatexml', 'extractvalue']
+PRIVILEGE_COMMANDS = ['grant', 'revoke', 'create user', 'drop user', 'alter user']
 
 # ==============================================================================
-# IV. CẤU HÌNH GIAO DIỆN NGƯỜI DÙNG (UI)
-# ==============================================================================
-# Các hằng số và dictionary dùng để hiển thị trên giao diện.
-
-# Ánh xạ giữa tên hiển thị trên UI và key nội bộ của từng loại bất thường.
-ANOMALY_TYPES_AVAILABLE = {
-    "🕒 Truy vấn giờ khuya": "late_night",
-    "💾 Dữ Liệu Lớn": "dump",
-    "🔗 Nhiều Bảng": "multi_table",
-    "🛡️ Nhạy Cảm": "sensitive",
-    "👤 Hoạt Động Bất Thường": "user_time",
-    "🤖 Độ Phức Tạp (AI)": "complexity"
-}
-
-# Ánh xạ từ tên các ngày trong tuần sang chỉ số (index) của Python (0-6).
-DAYS_MAP = {
-    "Thứ 2": 0, "Thứ 3": 1, "Thứ 4": 2, "Thứ 5": 3, 
-    "Thứ 6": 4, "Thứ 7": 5, "Chủ Nhật": 6
-}
-
-# Ánh xạ từ tên hiển thị tiếng Việt sang tên tiếng Anh (dùng cho prompt LLM).
-ANOMALY_TYPE_MAP = {
-    "Truy Vấn Giờ Khuya": "Late Night Query",
-    "Kết Xuất Dữ Liệu Lớn": "Potential Data Dump",
-    "Truy Cập Nhiều Bảng": "Multi-Table Access Session",
-    "Truy Cập Bảng Nhạy cảm": "Sensitive Table Access",
-    "Hoạt Động User Bất Thường": "Unusual User Activity Window",
-    "Độ Phức Tạp Bất Thường (AI)": "Anomalous Complexity (AI Detection)"    
-}
-
-# Ánh xạ từ key nội bộ của loại phân tích AI sang tên hiển thị tiếng Việt.
-AI_ANALYSIS_TYPE_MAP = {
-    "Per-User Profile": "Theo Hồ sơ User",
-    "Global Fallback": "Theo Toàn cục",
-    "Supervised Feedback": "Theo Phản hồi",
-    "Không phân tích": "Không phân tích"
-}
-
-# ==============================================================================
-# V. CẤU HÌNH CÁC DỊCH VỤ NGOÀI VÀ HỆ THỐNG
+# IV. CẤU HÌNH CÁC DỊCH VỤ NGOÀI VÀ HỆ THỐNG
 # ==============================================================================
 
-# --- 1. Cấu hình Theo dõi File (File Watcher) ---
+# --- 1. Cấu hình Theo dõi File ---
 # Thời gian (giây) mà ứng dụng sẽ chờ giữa mỗi lần kiểm tra file log.
-POLLING_TIME_WATCHER_SECONDS = 5
 
 ENGINE_SLEEP_INTERVAL_SECONDS = 60
 
 # --- 2. Cấu hình Server Ollama ---
-DEFAULT_OLLAMA_HOST = 'http://localhost:11434'  # Địa chỉ mặc định của server Ollama.
+DEFAULT_OLLAMA_HOST = 'http://192.168.2.239:11434'  # Địa chỉ mặc định của server Ollama.
 DEFAULT_OLLAMA_MODEL = 'seneca'                 # Tên model mặc định sẽ được sử dụng.
 OLLAMA_TIMEOUT_SECONDS = 3600                   # Thời gian chờ tối đa (giây) khi gọi AI (1 giờ).
 
@@ -201,3 +170,19 @@ ALERT_EMAIL_SETTINGS = {
     # Danh sách người nhận ẩn danh (BCC).
     "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
 }
+
+# ==== REDIS / REALTIME PIPELINE ====
+# --- Redis & Streams ---
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# Streams đặt tên rõ để dễ mở rộng đa DBMS sau này
+REDIS_STREAM_LOGS = os.getenv("REDIS_STREAM_LOGS", "uba:logs")
+REDIS_GROUP_ENGINE = os.getenv("REDIS_GROUP_ENGINE", "uba_engine")
+REDIS_CONSUMER_NAME = os.getenv("REDIS_CONSUMER_NAME", os.getenv("COMPUTERNAME", "consumer"))
+
+# Kích thước micro-batch cho engine (tuỳ chọn)
+ENGINE_BATCH_MAX_MESSAGES = int(os.getenv("ENGINE_BATCH_MAX_MESSAGES", "10000"))
+ENGINE_BATCH_MAX_BLOCK_MS  = int(os.getenv("ENGINE_BATCH_MAX_BLOCK_MS", "1000"))  # 15s block chờ
+
+# Các Stream cần lắng nghe (chỉ MySQL)
+STREAMS = {f"{REDIS_STREAM_LOGS}:mysql": ">"} 

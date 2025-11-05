@@ -17,8 +17,21 @@ logging.basicConfig(
 
 STREAM_KEY = None # Sẽ được set khi chạy
 
+# --- HÀM KẾT NỐI REDIS TIN CẬY ---
+def connect_redis():
+    """Kết nối đến Redis với cơ chế thử lại vô hạn."""
+    while True:
+        try:
+            r = Redis.from_url(REDIS_URL, decode_responses=True)
+            r.ping()
+            logging.info("Kết nối Redis (Publisher) thành công.")
+            return r
+        except ConnectionError as e:
+            logging.error(f"Kết nối Redis (Publisher) thất bại: {e}. Thử lại sau 5 giây...")
+            time.sleep(5)
+
 # ==============================================================================
-# LOGIC TỪ MYSQL_LOG_PARSER.PY (ĐÃ GỘP VÀO ĐÂY)
+# LOGIC TỪ MYSQL_LOG_PARSER.PY
 # ==============================================================================
 
 mysql_connect_regex = re.compile(
@@ -121,7 +134,7 @@ def parse_and_append_log_data(new_lines, sessions):
     return pd.DataFrame(parsed_data), sessions
 
 # ==============================================================================
-# LOGIC PUBLISHER (KHÔNG ĐỔI)
+# LOGIC PUBLISHER
 # ==============================================================================
 
 def _open_log(path: str):
@@ -143,15 +156,13 @@ def monitor_log_file(
     stream_key: str,
     state_file_path: str = MYSQL_STATE_FILE_PATH,
     poll_interval_ms: int = 200,          # Tần suất "nhìn" file
-    idle_flush_ms: int = 1000,            # Thời gian nghỉ để "flush" parquet nhỏ
-    backup_parquet: bool = True,          # Bật/tắt ghi parquet dự phòng
     stop_event: Optional[threading.Event] = None
 ):
     """
     Theo dõi file log, parse và publish realtime vào Redis Streams.
     Tự xử lý "catch-up" khi khởi động.
     """
-    r = Redis.from_url(redis_url, decode_responses=True)
+    r = connect_redis()
 
     os.makedirs(os.path.dirname(source_log_path) or ".", exist_ok=True)
     os.makedirs(STAGING_DATA_DIR, exist_ok=True)
@@ -159,6 +170,9 @@ def monitor_log_file(
     # Trạng thái đọc (từ file JSON)
     last_size, sessions = read_last_known_state(state_file_path)
     published_total = 0
+    f = None
+    logging.info(f"Start monitoring {source_log_path} → {stream_key} (poll={poll_interval_ms}ms)")
+    logging.info("Publisher đang chạy... Nhấn Ctrl+C để dừng.")
 
     try:
         # Mở file & seek đến vị trí đã đọc
@@ -176,101 +190,85 @@ def monitor_log_file(
             except Exception:
                 f.seek(0)
                 last_size = 0
-
-        micro_batch_records = []
-        last_flush_ts = time.monotonic()
-
-        logging.info(f"Start monitoring {source_log_path} → {stream_key} (poll={poll_interval_ms}ms)")
-
+                
         while True:
             if stop_event and stop_event.is_set():
                 logging.info("Stop signal received. Exiting monitor loop...")
                 break
+            try:
+                # (Re)open if needed
+                if f is None:
+                    try:
+                        f = _open_log(source_log_path)
+                        f.seek(last_size)  # Tiếp tục từ vị trí đã biết
+                        logging.info(f"File opened. Resuming from byte {last_size}.")
+                    except FileNotFoundError:
+                        time.sleep(poll_interval_ms / 1000.0)
+                        continue
 
-            # (Re)open if needed
-            if f is None:
+                # Kiểm tra rotation
                 try:
-                    f = _open_log(source_log_path)
-                    f.seek(last_size)  # Tiếp tục từ vị trí đã biết
-                    logging.info(f"File opened. Resuming from byte {last_size}.")
+                    current_size = os.path.getsize(source_log_path)
                 except FileNotFoundError:
+                    logging.warning("Log file missing, waiting to reappear...")
+                    try: f.close()
+                    except Exception: pass
+                    f = None
                     time.sleep(poll_interval_ms / 1000.0)
                     continue
-
-            # Kiểm tra rotation
-            try:
-                current_size = os.path.getsize(source_log_path)
-            except FileNotFoundError:
-                logging.warning("Log file missing, waiting to reappear...")
-                try: f.close()
-                except Exception: pass
-                f = None
-                time.sleep(poll_interval_ms / 1000.0)
-                continue
-            
-            try:
-                current_pos = f.tell()
-            except Exception:
-                current_pos = last_size # Fallback
-
-            if current_size < current_pos:
-                logging.warning("Detected rotation/truncate → reopen & reset sessions.")
-                try: f.close()
-                except Exception: pass
-                f = _open_log(source_log_path)
-                f.seek(0)
-                last_size = 0
-                sessions = {}
-
-            # Đọc phần mới
-            new_lines = f.readlines()
-            if new_lines:
-                try:
-                    last_size = f.tell() # Cập nhật last_size ngay sau khi đọc
-                except Exception:
-                    last_size = current_size # Fallback
-
-                # Parse & publish
-                df_new, sessions = parse_and_append_log_data(new_lines, sessions)
-                if not df_new.empty:
-                    pipe = r.pipeline()
-                    recs = df_new.to_dict(orient="records")
-                    for rec in recs:
-                        # 1. Gửi đến Redis Stream (Luồng nóng)
-                        pipe.xadd(stream_key, {"data": _jsonify_record(rec)})
-                    pipe.execute()
-                    published_total += len(recs)
-
-                    if backup_parquet:
-                        # 2. Thêm vào batch để backup (Luồng lạnh)
-                        micro_batch_records.extend(recs)
                 
-                # Ghi state sau mỗi đợt đọc thành công
-                write_last_known_state(last_size, sessions, state_file_path)
-
-            else:
-                # không có dòng mới
-                time.sleep(poll_interval_ms / 1000.0)
-
-            # Flush parquet micro-batch nếu idle
-            now = time.monotonic()
-            if backup_parquet and micro_batch_records and (now - last_flush_ts) * 1000 >= idle_flush_ms:
                 try:
-                    n = save_logs_to_parquet(micro_batch_records, source_dbms="MySQL")
-                    logging.info(f"Parquet backup flushed ({n} records).")
-                except Exception as e:
-                    logging.error(f"Backup parquet error: {e}")
-                micro_batch_records.clear()
-                last_flush_ts = now
-    finally:
-        # Thoát vòng lặp: flush phần còn lại
-        if backup_parquet and micro_batch_records:
-            try:
-                n = save_logs_to_parquet(micro_batch_records, source_dbms="MySQL")
-                logging.info(f"Final parquet backup flushed ({n} records).")
-            except Exception as e:
-                logging.error(f"Final parquet backup error: {e}")
+                    current_pos = f.tell()
+                except Exception:
+                    current_pos = last_size # Fallback
 
+                if current_size < current_pos:
+                    logging.warning("Detected rotation/truncate → reopen & reset sessions.")
+                    try: f.close()
+                    except Exception: pass
+                    f = _open_log(source_log_path)
+                    f.seek(0)
+                    last_size = 0
+                    sessions = {}
+
+                # Đọc phần mới
+                new_lines = f.readlines()
+                if new_lines:
+                    try:
+                        last_size = f.tell() # Cập nhật last_size ngay sau khi đọc
+                    except Exception:
+                        last_size = current_size # Fallback
+
+                    # Parse & publish
+                    df_new, sessions = parse_and_append_log_data(new_lines, sessions)
+                    if not df_new.empty:
+                        pipe = r.pipeline()
+                        recs = df_new.to_dict(orient="records")
+                        for rec in recs:
+                            # 1. Gửi đến Redis Stream (Luồng nóng)
+                            pipe.xadd(stream_key, {"data": _jsonify_record(rec)})
+                        pipe.execute()
+                        published_total += len(recs)
+                    
+                    # Ghi state sau mỗi đợt đọc thành công
+                    write_last_known_state(last_size, sessions, state_file_path)
+
+                else:
+                    # không có dòng mới
+                    time.sleep(poll_interval_ms / 1000.0)
+            
+            except ConnectionError as e:
+                logging.error(f"Mất kết nối Redis (Publisher): {e}. Đang kết nối lại...")
+                r = connect_redis()
+                
+            except Exception as e:
+                logging.error(f"Lỗi không xác định trong publisher loop: {e}", exc_info=True)
+                time.sleep(5)
+
+    except KeyboardInterrupt:
+        logging.info("Đã nhận tín hiệu (Ctrl+C). Publisher đang dừng...")
+        
+    finally:
         if f:
             f.close()
         
@@ -286,8 +284,6 @@ def start_mysql_publisher_blocking():
         stream_key=STREAM_KEY,
         state_file_path=MYSQL_STATE_FILE_PATH,
         poll_interval_ms=200,
-        idle_flush_ms=1000,
-        backup_parquet=True,
         stop_event=None
     )
 

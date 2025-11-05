@@ -109,3 +109,6 @@ Setup frontend
 npm create vite@latest uba-frontend -- --template react-ts
 npm install axios 
 npm install chart.js react-chartjs-2
+
+
+Nếu bạn đang dùng Docker Redis: docker run -p 6379:6379 redis:7

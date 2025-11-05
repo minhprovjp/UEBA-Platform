@@ -1,0 +1,36 @@
+{
+  "p_late_night_start_time": "00:00:00",
+  "p_late_night_end_time": "05:00:00",
+  "p_known_large_tables": [
+    "customers",
+    "products",
+    "orders",
+    "order_items",
+    "test_log"
+  ],
+  "p_time_window_minutes": 5,
+  "p_min_distinct_tables": 3,
+  "p_sensitive_tables": [
+    "sensitive_data",
+    "customers",
+    "products",
+    "employees"
+  ],
+  "p_allowed_users_sensitive": [
+    "root",
+    "db_admin",
+    "data_analyst_trusted"
+  ],
+  "p_safe_hours_start": 8,
+  "p_safe_hours_end": 18,
+  "p_safe_weekdays": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "p_quantile_start": 0.15,
+  "p_quantile_end": 0.85,
+  "p_min_queries_for_profile": 10
+}

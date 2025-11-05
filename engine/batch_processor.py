@@ -7,7 +7,7 @@ import logging
 import glob
 import shutil
 from datetime import datetime, timezone
-
+import json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
@@ -20,22 +20,15 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [BatchProcessor] - %(message)s', force=True)
 
-# Xây dựng dict config một lần (giống realtime_engine)
-CFG = dict(
-    p_late_night_start_time=LATE_NIGHT_START_TIME_DEFAULT,
-    p_late_night_end_time=LATE_NIGHT_END_TIME_DEFAULT,
-    p_known_large_tables=KNOWN_LARGE_TABLES_DEFAULT,
-    p_time_window_minutes=TIME_WINDOW_DEFAULT_MINUTES,
-    p_min_distinct_tables=MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT,
-    p_sensitive_tables=SENSITIVE_TABLES_DEFAULT,
-    p_allowed_users_sensitive=ALLOWED_USERS_FOR_SENSITIVE_DEFAULT,
-    p_safe_hours_start=SAFE_HOURS_START_DEFAULT,
-    p_safe_hours_end=SAFE_HOURS_END_DEFAULT,
-    p_safe_weekdays=SAFE_WEEKDAYS_DEFAULT,
-    p_quantile_start=QUANTILE_START_DEFAULT,
-    p_quantile_end=QUANTILE_END_DEFAULT,
-    p_min_queries_for_profile=MIN_QUERIES_FOR_PROFILE_DEFAULT,
-)
+def load_rules_config():
+    """Tải cấu hình quy tắc từ file JSON."""
+    try:
+        with open(RULES_CONFIG_FILE_PATH, 'r') as f:
+            logging.info(f"Đã tải cấu hình quy tắc từ {RULES_CONFIG_FILE_PATH}")
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"LỖI NGHIÊM TRỌNG: Không thể tải {RULES_CONFIG_FILE_PATH}. Sử dụng dict rỗng. Lỗi: {e}")
+        return {}
 
 def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if 'timestamp' not in df.columns:
@@ -47,7 +40,7 @@ def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df['timestamp'].notna()].reset_index(drop=True)
     return df
 
-def run_analysis_cycle():
+def run_analysis_cycle(CFG: dict):
     """
     Quét thư mục staging, xử lý file, lưu kết quả, và dọn dẹp.
     """
@@ -102,9 +95,12 @@ def run_analysis_cycle():
 def main_loop():
     logging.info("Batch Processor (Staging) started.")
     logging.info("Processor đang chạy... Nhấn Ctrl+C để dừng.")
+    
+    CFG = load_rules_config()
+    
     while True:
         try:
-            run_analysis_cycle()
+            run_analysis_cycle(CFG)
             logging.info(f"Batch processor đang ngủ {ENGINE_SLEEP_INTERVAL_SECONDS} giây...")
             time.sleep(ENGINE_SLEEP_INTERVAL_SECONDS)
         except KeyboardInterrupt:
@@ -112,6 +108,8 @@ def main_loop():
             break
         except Exception as e:
             logging.error(f"Lỗi nghiêm trọng trong main loop (batch): {e}", exc_info=True)
+            if "config" in str(e).lower():
+                CFG = load_rules_config()
             time.sleep(30) # Chờ lâu hơn nếu có lỗi
     
     logging.info("Batch Processor đã dừng.")

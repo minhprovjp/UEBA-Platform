@@ -15,21 +15,29 @@ from engine.db_writer import save_anomalies_to_db
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [RealtimeEngine] - %(message)s")
 
 # Xây dựng dict config một lần
-CFG = dict(
-    p_late_night_start_time=LATE_NIGHT_START_TIME_DEFAULT,
-    p_late_night_end_time=LATE_NIGHT_END_TIME_DEFAULT,
-    p_known_large_tables=KNOWN_LARGE_TABLES_DEFAULT,
-    p_time_window_minutes=TIME_WINDOW_DEFAULT_MINUTES,
-    p_min_distinct_tables=MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT,
-    p_sensitive_tables=SENSITIVE_TABLES_DEFAULT,
-    p_allowed_users_sensitive=ALLOWED_USERS_FOR_SENSITIVE_DEFAULT,
-    p_safe_hours_start=SAFE_HOURS_START_DEFAULT,
-    p_safe_hours_end=SAFE_HOURS_END_DEFAULT,
-    p_safe_weekdays=SAFE_WEEKDAYS_DEFAULT,
-    p_quantile_start=QUANTILE_START_DEFAULT,
-    p_quantile_end=QUANTILE_END_DEFAULT,
-    p_min_queries_for_profile=MIN_QUERIES_FOR_PROFILE_DEFAULT,
-)
+# --- TẢI CẤU HÌNH ĐỘNG TỪ JSON ---
+def load_rules_config():
+    """Tải cấu hình quy tắc từ file JSON."""
+    try:
+        with open(RULES_CONFIG_FILE_PATH, 'r') as f:
+            logging.info(f"Đã tải cấu hình quy tắc từ {RULES_CONFIG_FILE_PATH}")
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"LỖI NGHIÊM TRỌNG: Không thể tải {RULES_CONFIG_FILE_PATH}. Sử dụng dict rỗng. Lỗi: {e}")
+        return {}
+    
+# --- HÀM KẾT NỐI REDIS TIN CẬY ---
+def connect_redis():
+    """Kết nối đến Redis với cơ chế thử lại vô hạn."""
+    while True:
+        try:
+            r = Redis.from_url(REDIS_URL, decode_responses=True)
+            r.ping()
+            logging.info("Kết nối Redis (Engine) thành công.")
+            return r
+        except ConnectionError as e:
+            logging.error(f"Kết nối Redis (Engine) thất bại: {e}. Thử lại sau 5 giây...")
+            time.sleep(5)
 
 def ensure_group(r: Redis, stream: str, group: str):
     """Đảm bảo Consumer Group tồn tại"""
@@ -88,7 +96,8 @@ def check_and_send_alert(results: dict):
             logging.error(f"Lỗi nghiêm trọng khi gọi send_email_alert: {e}")
 
 def start_engine():
-    r = Redis.from_url(REDIS_URL, decode_responses=True)
+    r = connect_redis()
+    CFG = load_rules_config()
 
     for s in STREAMS:
         ensure_group(r, s, REDIS_GROUP_ENGINE)
@@ -133,22 +142,35 @@ def start_engine():
             results = load_and_process_data(df, CFG)
 
             # 2. LƯU BẤT THƯỜNG
+            db_save_success = False
             try:
                 save_anomalies_to_db(results)
+                db_save_success = True
             except Exception as e:
-                logging.error(f"Failed to save anomalies to DB: {e}", exc_info=True)
+                # LỖI CSDL (ví dụ: CSDL sập, "database is locked")
+                logging.error(f"Lỗi khi lưu vào CSDL: {e}. Tin nhắn SẼ KHÔNG được ACK và sẽ được xử lý lại.")
+                # KHÔNG `continue` hay `break`, để db_save_success = False
 
-            # 3. GỬI CẢNH BÁO (MỚI)
-            check_and_send_alert(results)
+            # 3. GỬI CẢNH BÁO KHI LƯU CSDL THÀNH CÔNG
+            if db_save_success:
+                check_and_send_alert(results)
 
-            # 4. ACK MESSAGE
-            for stream, ids in ack_ids_map.items():
-                if ids:
-                    r.xack(stream, REDIS_GROUP_ENGINE, *ids)
+                # 4. ACK MESSAGE
+                for stream, ids in ack_ids_map.items():
+                    if ids:
+                        r.xack(stream, REDIS_GROUP_ENGINE, *ids)
+            else:
+                # Nếu lưu CSDL lỗi, chúng ta KHÔNG ACK
+                logging.warning("Do lỗi CSDL, các tin nhắn trong batch này sẽ được xử lý lại sau.")
+                # Tạm dừng 1 chút để tránh vòng lặp nóng nếu CSDL lỗi liên tục
+                time.sleep(5)
         
         except KeyboardInterrupt:
             logging.info("Đã nhận tín hiệu (Ctrl+C). Engine đang dừng...")
             break
+        except ConnectionError as e:
+            logging.error(f"Mất kết nối Redis (Engine): {e}. Đang kết nối lại...")
+            r = connect_redis() # Thử kết nối lại
         except ResponseError as e:
             logging.error(f"Redis Response Error: {e}. Re-checking group...")
             time.sleep(1)
