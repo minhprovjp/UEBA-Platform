@@ -3,6 +3,16 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
+from contextlib import asynccontextmanager
+import asyncio
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
@@ -21,18 +31,77 @@ from pydantic import BaseModel
 # Import hàm phân tích LLM
 from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
 
-# === TẠO MỘT INSTANCE DUY NHẤT CỦA ENGINE ===
-# Instance này sẽ tồn tại suốt vòng đời của API server
-engine_instance = AnalysisEngine()
+from pydantic import BaseModel
+# Import hàm phân tích LLM
+from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
 
-# Tạo các bảng trong CSDL nếu chúng chưa tồnTAIN (chỉ chạy khi API khởi động)
-models.Base.metadata.create_all(bind=engine)
+# Global variable to store engine instance
+engine_instance = None
 
-# Khởi tạo ứng dụng FastAPI
+# === LIFECYCLE MANAGEMENT ===
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global engine_instance
+    try:
+        logger.info("Starting up UBA API server...")
+        engine_instance = AnalysisEngine()
+        
+        # Tạo các bảng trong CSDL nếu chúng chưa tồn tại
+        models.Base.metadata.create_all(bind=engine)
+        logger.info("Database tables initialized")
+        
+        logger.info("UBA API server started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        raise
+    
+    yield
+    
+    # Shutdown
+    try:
+        logger.info("Shutting down UBA API server...")
+        if engine_instance:
+            # Stop the engine gracefully if it's running
+            try:
+                engine_instance.stop()
+                logger.info("Analysis engine stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping engine: {e}")
+        
+        # Close database connections
+        try:
+            engine.dispose()
+            logger.info("Database connections closed")
+        except Exception as e:
+            logger.warning(f"Error closing database: {e}")
+        
+        logger.info("UBA API server shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+
+# Khởi tạo ứng dụng FastAPI với lifecycle management
 app = FastAPI(
     title="User Behavior Analytics API",
     description="API để truy vấn các bất thường được phát hiện bởi Engine Phân tích Log.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Cấu hình CORS
+origins = [
+    "http://localhost:5173",  # Địa chỉ của Vite React dev server
+    "http://localhost:3000",  # Thêm địa chỉ phổ biến khác của React
+    "http://127.0.0.1:3000",   # Next.js default
+    "http://127.0.0.1:5173",   # Alternative localhost format
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Cho phép các nguồn gốc trong danh sách
+    allow_credentials=True, # Cho phép gửi cookie (nếu có)
+    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, PUT, DELETE,...)
+    allow_headers=["*"],    # Cho phép tất cả các header
 )
 
 # Cấu hình CORS
@@ -121,21 +190,33 @@ def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest):
 @app.get("/api/engine/status", tags=["Engine Control"])
 def get_engine_status():
     """Lấy trạng thái hiện tại của Engine Phân tích."""
+    if engine_instance is None:
+        raise HTTPException(status_code=503, detail="Engine instance not available")
     return engine_instance.get_status()
 
 @app.post("/api/engine/start", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
 def start_engine():
     """Khởi động vòng lặp phân tích của Engine trong nền."""
-    if engine_instance.get_status()["is_running"]:
+    if engine_instance is None:
+        raise HTTPException(status_code=503, detail="Engine instance not available")
+    
+    status_info = engine_instance.get_status()
+    if status_info.get("is_running", False):
         raise HTTPException(status_code=409, detail="Engine đã đang chạy.")
+    
     engine_instance.start()
     return {"message": "Đã gửi yêu cầu khởi động Engine."}
 
 @app.post("/api/engine/stop", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
 def stop_engine():
     """Dừng vòng lặp phân tích của Engine."""
-    if not engine_instance.get_status()["is_running"]:
+    if engine_instance is None:
+        raise HTTPException(status_code=503, detail="Engine instance not available")
+    
+    status_info = engine_instance.get_status()
+    if not status_info.get("is_running", False):
         raise HTTPException(status_code=409, detail="Engine đã dừng.")
+    
     engine_instance.stop()
     return {"message": "Đã gửi yêu cầu dừng Engine."}
 
@@ -153,6 +234,7 @@ def update_engine_config(config_data: Dict[str, Any]):
     success, message = save_config(config_data)
     if not success:
         raise HTTPException(status_code=500, detail=message)
+<<<<<<< Updated upstream
     # Tải lại cấu hình cho instance đang chạy
     engine_instance.config = load_config()
     return {"message": message}
@@ -184,6 +266,21 @@ def update_engine_config(config_data: Dict[str, Any]):
         
     return {"message": message}
 
+=======
+    
+    # Tải lại cấu hình cho instance đang chạy (nếu có)
+    if engine_instance is not None:
+        try:
+            engine_instance.config = load_config()
+        except Exception as e:
+            logger.warning(f"Could not update engine instance config: {e}")
+    
+    return {"message": message}
+
+# === NOTE: Engine config endpoints are already defined above ===
+# Removed duplicate endpoint definitions to avoid conflicts
+
+>>>>>>> Stashed changes
 # === THÊM ENDPOINT MỚI ĐỂ NHẬN FEEDBACK ===
 @app.post("/api/feedback/", status_code=status.HTTP_201_CREATED, tags=["Feedback"])
 def submit_feedback(feedback: schemas.FeedbackCreate):

@@ -159,25 +159,25 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     )
 
     # Known large tables
-    p_known_large_tables = config_params.get('p_known_large_tables', KNOWN_LARGE_TABLES_DEFAULT)
+    p_known_large_tables = config_params.get('p_known_large_tables', [])
 
     # Multi-table window & threshold
-    p_time_window_minutes = int(config_params.get('p_time_window_minutes', TIME_WINDOW_DEFAULT_MINUTES))
-    p_min_distinct_tables = int(config_params.get('p_min_distinct_tables', MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT))
+    p_time_window_minutes = int(config_params.get('p_time_window_minutes', 5))
+    p_min_distinct_tables = int(config_params.get('p_min_distinct_tables', 3))
 
     # Sensitive tables & allowlist
-    p_sensitive_tables = config_params.get('p_sensitive_tables', SENSITIVE_TABLES_DEFAULT)
-    p_allowed_users_sensitive = config_params.get('p_allowed_users_sensitive', ALLOWED_USERS_FOR_SENSITIVE_DEFAULT)
+    p_sensitive_tables = config_params.get('p_sensitive_tables', [])
+    p_allowed_users_sensitive = config_params.get('p_allowed_users_sensitive', [])
 
     # Safe hours (giờ nguyên) & weekdays
-    p_safe_hours_start = int(config_params.get('p_safe_hours_start', SAFE_HOURS_START_DEFAULT))
-    p_safe_hours_end   = int(config_params.get('p_safe_hours_end',   SAFE_HOURS_END_DEFAULT))
-    p_safe_weekdays    = config_params.get('p_safe_weekdays', SAFE_WEEKDAYS_DEFAULT)
+    p_safe_hours_start = int(config_params.get('p_safe_hours_start', 8))
+    p_safe_hours_end   = int(config_params.get('p_safe_hours_end',   18))
+    p_safe_weekdays    = config_params.get('p_safe_weekdays', [0, 1, 2, 3, 4])
 
     # User profile quantiles & minimum samples
-    p_quantile_start = float(config_params.get('p_quantile_start', QUANTILE_START_DEFAULT))
-    p_quantile_end   = float(config_params.get('p_quantile_end',   QUANTILE_END_DEFAULT))
-    p_min_queries_for_profile = int(config_params.get('p_min_queries_for_profile', MIN_QUERIES_FOR_PROFILE_DEFAULT))
+    p_quantile_start = float(config_params.get('p_quantile_start', 0.15))
+    p_quantile_end   = float(config_params.get('p_quantile_end',   0.85))
+    p_min_queries_for_profile = int(config_params.get('p_min_queries_for_profile', 10))
 
     logging.info(
         f"LateNight={p_late_night_start_time}-{p_late_night_end_time} "
