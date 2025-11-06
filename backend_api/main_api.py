@@ -1,18 +1,9 @@
 # backend_api/main_api.py
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Security
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
-from contextlib import asynccontextmanager
-import asyncio
-import logging
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
@@ -23,127 +14,87 @@ import sys
 import os
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from engine.engine_runner import AnalysisEngine
-from engine.config_manager import load_config, save_config
-from engine.utils import save_feedback_to_csv
+
+# === CÁC IMPORT CẦN THIẾT CHO CÁC API CÒN LẠI ===
+# (LƯU Ý: Chúng ta vẫn cần __init__.py trong thư mục 'engine' để các lệnh này hoạt động)
+try:
+    from engine.config_manager import load_config, save_config
+    from engine.utils import save_feedback_to_csv
+    from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
+except ImportError as e:
+    print("="*50)
+    print(f"LỖI IMPORT NGHIÊM TRỌNG: {e}")
+    print(">>> BẠN ĐÃ TẠO FILE TRỐNG 'engine/__init__.py' CHƯA? <<<")
+    print("="*50)
+    sys.exit(1)
 
 from pydantic import BaseModel
-# Import hàm phân tích LLM
-from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
 
-from pydantic import BaseModel
-# Import hàm phân tích LLM
-from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
+# === BỎ LOGIC AnalysisEngine CŨ ===
+# (ĐÃ XÓA) engine_instance = AnalysisEngine()
 
-# Global variable to store engine instance
-engine_instance = None
+# Tạo các bảng trong CSDL nếu chúng chưa tồn tại
+# models.Base.metadata.create_all(bind=engine)
 
-# === LIFECYCLE MANAGEMENT ===
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    global engine_instance
-    try:
-        logger.info("Starting up UBA API server...")
-        engine_instance = AnalysisEngine()
-        
-        # Tạo các bảng trong CSDL nếu chúng chưa tồn tại
-        models.Base.metadata.create_all(bind=engine)
-        logger.info("Database tables initialized")
-        
-        logger.info("UBA API server started successfully")
-    except Exception as e:
-        logger.error(f"Failed to start server: {e}")
-        raise
-    
-    yield
-    
-    # Shutdown
-    try:
-        logger.info("Shutting down UBA API server...")
-        if engine_instance:
-            # Stop the engine gracefully if it's running
-            try:
-                engine_instance.stop()
-                logger.info("Analysis engine stopped")
-            except Exception as e:
-                logger.warning(f"Error stopping engine: {e}")
-        
-        # Close database connections
-        try:
-            engine.dispose()
-            logger.info("Database connections closed")
-        except Exception as e:
-            logger.warning(f"Error closing database: {e}")
-        
-        logger.info("UBA API server shutdown complete")
-    except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
-
-# Khởi tạo ứng dụng FastAPI với lifecycle management
+# Khởi tạo ứng dụng FastAPI
 app = FastAPI(
     title="User Behavior Analytics API",
     description="API để truy vấn các bất thường được phát hiện bởi Engine Phân tích Log.",
-    version="1.0.0",
-    lifespan=lifespan
+    version="1.0.0"
 )
 
-# Cấu hình CORS
+# Cấu hình CORS (Giữ nguyên, rất quan trọng cho Frontend)
 origins = [
     "http://localhost:5173",  # Địa chỉ của Vite React dev server
-    "http://localhost:3000",  # Thêm địa chỉ phổ biến khác của React
-    "http://127.0.0.1:3000",   # Next.js default
-    "http://127.0.0.1:5173",   # Alternative localhost format
+    "http://localhost:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Cho phép các nguồn gốc trong danh sách
-    allow_credentials=True, # Cho phép gửi cookie (nếu có)
-    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, PUT, DELETE,...)
-    allow_headers=["*"],    # Cho phép tất cả các header
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Cấu hình CORS
-origins = [
-    "http://localhost:5173",  # Địa chỉ của Vite React dev server
-    "http://localhost:3000",  # Thêm địa chỉ phổ biến khác của React
-]
+# API Security
+API_KEY_NAME = "X-API-Key"
+API_KEY_HEADER = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,  # Cho phép các nguồn gốc trong danh sách
-    allow_credentials=True, # Cho phép gửi cookie (nếu có)
-    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, PUT, DELETE,...)
-    allow_headers=["*"],    # Cho phép tất cả các header
-)
+# Lấy API Key an toàn từ biến môi trường
+# Hãy đặt biến này trong file .env của bạn: API_KEY="your_super_secret_key"
+EXPECTED_API_KEY = os.getenv("API_KEY", "default_secret_key_change_me")
+
+async def get_api_key(api_key_header: str = Security(API_KEY_HEADER)):
+    """Kiểm tra xem API key được gửi lên có hợp lệ không."""
+    if api_key_header == EXPECTED_API_KEY:
+        return api_key_header
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
 
 # --- Dependency Injection: Cung cấp DB Session cho các endpoint ---
 def get_db():
-    """
-    Tạo và cung cấp một session CSDL cho mỗi yêu cầu, và đảm bảo nó
-    luôn được đóng lại sau khi yêu cầu hoàn tất.
-    """
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-# === ĐỊNH NGHĨA API ENDPOINT ĐẦU TIÊN ===
+# === CÁC ENDPOINT LẤY DỮ LIỆU BẤT THƯỜNG (CHO FRONTEND) ===
 
 @app.get("/api/anomalies/", response_model=List[schemas.Anomaly], tags=["Anomalies"])
-def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
     """
     Lấy ra một danh sách các bất thường, hỗ trợ phân trang (pagination).
-    - **skip**: Bỏ qua bao nhiêu bản ghi đầu tiên.
-    - **limit**: Giới hạn số lượng bản ghi trả về.
     """
     anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
     return anomalies
 
 @app.get("/api/anomalies/{anomaly_id}", response_model=schemas.Anomaly, tags=["Anomalies"])
-def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db)):
+def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
     """
     Lấy thông tin chi tiết của một bất thường cụ thể bằng ID của nó.
     """
@@ -152,23 +103,19 @@ def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return anomaly
 
+# === ENDPOINT PHÂN TÍCH LLM ===
+
 @app.post("/api/llm/analyze-anomaly", tags=["LLM Analysis"])
-def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest):
+def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest, api_key: str = Security(get_api_key)):
     """
     Nhận thông tin về một bất thường và yêu cầu LLM phân tích nó.
     """
     try:
-        # 1. Đọc cấu hình engine hiện tại từ file
         engine_config = load_config()
-        
-        # 2. Lấy ra các phần cấu hình cần thiết
-        llm_settings = engine_config.get("llm_config", {}) # Giả sử bạn sẽ tạo mục này
+        llm_settings = engine_config.get("llm_config", {})
         rules_settings = engine_config.get("analysis_params", {})
-        
-        # 3. Chuyển đổi request Pydantic thành dictionary
         anomaly_data = request.model_dump()
         
-        # 4. Gọi hàm phân tích đã được tái cấu trúc
         analysis_result = analyze_query_with_llm(
             anomaly_row=anomaly_data,
             anomaly_type_from_system=anomaly_data['anomaly_type'],
@@ -179,69 +126,17 @@ def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest):
         return analysis_result
         
     except (ValueError, ConnectionError) as e:
-        # Bắt các lỗi cụ thể mà hàm phân tích ném ra
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        # Bắt các lỗi không lường trước khác
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
 
-# === CÁC ENDPOINT MỚI ĐỂ ĐIỀU KHIỂN ENGINE ===
+# === CÁC ENDPOINT MỚI ĐỂ ĐIỀU KHIỂN ENGINE (ĐÃ XÓA) ===
+# Các endpoint /api/engine/status, /start, /stop đã bị xóa
+# vì Engine giờ là một tiến trình riêng biệt.
 
-@app.get("/api/engine/status", tags=["Engine Control"])
-def get_engine_status():
-    """Lấy trạng thái hiện tại của Engine Phân tích."""
-    if engine_instance is None:
-        raise HTTPException(status_code=503, detail="Engine instance not available")
-    return engine_instance.get_status()
-
-@app.post("/api/engine/start", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def start_engine():
-    """Khởi động vòng lặp phân tích của Engine trong nền."""
-    if engine_instance is None:
-        raise HTTPException(status_code=503, detail="Engine instance not available")
-    
-    status_info = engine_instance.get_status()
-    if status_info.get("is_running", False):
-        raise HTTPException(status_code=409, detail="Engine đã đang chạy.")
-    
-    engine_instance.start()
-    return {"message": "Đã gửi yêu cầu khởi động Engine."}
-
-@app.post("/api/engine/stop", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def stop_engine():
-    """Dừng vòng lặp phân tích của Engine."""
-    if engine_instance is None:
-        raise HTTPException(status_code=503, detail="Engine instance not available")
-    
-    status_info = engine_instance.get_status()
-    if not status_info.get("is_running", False):
-        raise HTTPException(status_code=409, detail="Engine đã dừng.")
-    
-    engine_instance.stop()
-    return {"message": "Đã gửi yêu cầu dừng Engine."}
-
-@app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Engine Control"])
-def get_engine_config():
-    """Đọc cấu hình hiện tại của Engine từ file engine_config.json."""
-    return load_config()
-
-@app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Engine Control"])
-def update_engine_config(config_data: Dict[str, Any]):
-    """
-    Cập nhật và ghi đè file engine_config.json.
-    Engine sẽ tự động áp dụng cấu hình mới ở chu kỳ tiếp theo.
-    """
-    success, message = save_config(config_data)
-    if not success:
-        raise HTTPException(status_code=500, detail=message)
-<<<<<<< Updated upstream
-    # Tải lại cấu hình cho instance đang chạy
-    engine_instance.config = load_config()
-    return {"message": message}
-
-# === CÁC ENDPOINT ĐỂ QUẢN LÝ CẤU HÌNH ===
+# === CÁC ENDPOINT ĐỂ QUẢN LÝ CẤU HÌNH (VẪN CẦN THIẾT) ===
 @app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Configuration"])
-def get_engine_config():
+def get_engine_config(api_key: str = Security(get_api_key)):
     """
     Đọc và trả về nội dung hiện tại của file engine_config.json.
     """
@@ -251,44 +146,27 @@ def get_engine_config():
     return config
 
 @app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Configuration"])
-def update_engine_config(config_data: Dict[str, Any]):
+def update_engine_config(config_data: Dict[str, Any], api_key: str = Security(get_api_key)):
     """
     Nhận một đối tượng JSON và ghi đè hoàn toàn file engine_config.json.
-    Engine sẽ tự động áp dụng cấu hình mới ở chu kỳ tiếp theo.
+    (Các engine độc lập sẽ cần phải được khởi động lại để nhận cấu hình này,
+    hoặc chúng ta sẽ cải tiến chúng để tự đọc lại file)
     """
     success, message = save_config(config_data)
     if not success:
         raise HTTPException(status_code=500, detail=message)
     
-    # Tải lại cấu hình cho instance engine đang chạy để nó áp dụng ngay lập tức
-    if 'engine_instance' in globals():
-        engine_instance.config = load_config()
+    # (Đã Xóa) engine_instance.config = load_config()
         
     return {"message": message}
 
-=======
-    
-    # Tải lại cấu hình cho instance đang chạy (nếu có)
-    if engine_instance is not None:
-        try:
-            engine_instance.config = load_config()
-        except Exception as e:
-            logger.warning(f"Could not update engine instance config: {e}")
-    
-    return {"message": message}
-
-# === NOTE: Engine config endpoints are already defined above ===
-# Removed duplicate endpoint definitions to avoid conflicts
-
->>>>>>> Stashed changes
-# === THÊM ENDPOINT MỚI ĐỂ NHẬN FEEDBACK ===
+# === ENDPOINT ĐỂ NHẬN FEEDBACK ===
 @app.post("/api/feedback/", status_code=status.HTTP_201_CREATED, tags=["Feedback"])
-def submit_feedback(feedback: schemas.FeedbackCreate):
+def submit_feedback(feedback: schemas.FeedbackCreate, api_key: str = Security(get_api_key)):
     """
     Nhận phản hồi từ người dùng và lưu vào file feedback.csv.
     """
     try:
-        # Gọi hàm logic cốt lõi từ utils
         success, message = save_feedback_to_csv(
             item_data=feedback.anomaly_data,
             label=feedback.label
@@ -300,3 +178,13 @@ def submit_feedback(feedback: schemas.FeedbackCreate):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi không xác định: {str(e)}")
+    
+# === API MỚI CHO LOG EXPLORER ===
+@app.get("/api/logs/", response_model=List[schemas.AllLogs], tags=["Log Explorer"])
+def read_all_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    """
+    Lấy ra TẤT CẢ các log đã được xử lý (bình thường + bất thường).
+    Hỗ trợ phân trang.
+    """
+    logs = db.query(models.AllLogs).order_by(models.AllLogs.timestamp.desc()).offset(skip).limit(limit).all()
+    return logs

@@ -2,7 +2,7 @@
 import os
 import sys
 from sqlalchemy import (create_engine, Column, Integer, String, DateTime, 
-                        Float, Boolean, Text)
+                        Float, Boolean, Text, Index)
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -40,3 +40,24 @@ class Anomaly(Base):
     
     # Trạng thái để quản lý (sẽ dùng trong tương lai)
     status = Column(String, default='new', index=True) 
+    
+# Bảng này sẽ lưu TẤT CẢ các log
+class AllLogs(Base):
+    __tablename__ = 'all_logs'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True) # Index theo thời gian
+    user = Column(String, index=True) # Index theo user
+    client_ip = Column(String)
+    database = Column(String, nullable=True)
+    query = Column(Text, nullable=False)
+    
+    # Thêm 2 cột quan trọng để biết kết quả phân tích
+    is_anomaly = Column(Boolean, default=False)
+    analysis_type = Column(String, nullable=True) # Ví dụ: "Global Fallback", "Per-User Profile"
+    
+    # Thêm các chỉ mục (index) để tăng tốc độ truy vấn khi lọc theo thời gian hoặc user
+    __table_args__ = (
+        Index('ix_all_logs_timestamp', 'timestamp'),
+        Index('ix_all_logs_user', 'user'),
+    )

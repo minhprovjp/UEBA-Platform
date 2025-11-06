@@ -8,27 +8,18 @@ import glob
 import shutil
 from datetime import datetime, timezone
 import json
+from engine.config_manager import load_config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config import *
     from data_processor import load_and_process_data
-    from engine.db_writer import save_anomalies_to_db
+    from engine.db_writer import save_results_to_db
 except ImportError:
     print("Lỗi: Không thể import 'config', 'data_processor' hoặc 'db_writer'.")
     sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [BatchProcessor] - %(message)s', force=True)
-
-def load_rules_config():
-    """Tải cấu hình quy tắc từ file JSON."""
-    try:
-        with open(RULES_CONFIG_FILE_PATH, 'r') as f:
-            logging.info(f"Đã tải cấu hình quy tắc từ {RULES_CONFIG_FILE_PATH}")
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"LỖI NGHIÊM TRỌNG: Không thể tải {RULES_CONFIG_FILE_PATH}. Sử dụng dict rỗng. Lỗi: {e}")
-        return {}
 
 def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if 'timestamp' not in df.columns:
@@ -77,7 +68,7 @@ def run_analysis_cycle(CFG: dict):
 
     # 3. Lưu bất thường vào CSDL
     try:
-        save_anomalies_to_db(results)
+        save_results_to_db(results)
     except Exception as e:
         logging.error(f"Failed to save batch anomalies to DB: {e}", exc_info=True)
 
@@ -96,7 +87,10 @@ def main_loop():
     logging.info("Batch Processor (Staging) started.")
     logging.info("Processor đang chạy... Nhấn Ctrl+C để dừng.")
     
-    CFG = load_rules_config()
+    full_config = load_config()
+    CFG = full_config.get("analysis_params", {})
+    if not CFG:
+        logging.error("KHÔNG TÌM THẤY 'analysis_params' trong engine_config.json. Sử dụng config rỗng.")
     
     while True:
         try:

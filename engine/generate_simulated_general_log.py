@@ -39,9 +39,9 @@ DB_HR = "hr_db"           # nhân sự, lương
 DB_ADMIN = "admin_db"     # nhật ký hệ thống, vận hành, quyền
 
 # Khoảng thời gian mô phỏng
-SIMULATION_START_TIME = datetime(2025, 11, 4, 7, 0, 0)
-SIMULATION_DURATION_DAYS = 1    # Mô phỏng bao nhiêu ngày
-SESSIONS_PER_HOUR_BASE = 50     # Mật độ session trong 1 giờ
+SIMULATION_START_TIME = datetime(2025, 11, 6, 7, 0, 0)
+SIMULATION_DURATION_DAYS = 30    # Mô phỏng bao nhiêu ngày
+SESSIONS_PER_HOUR_BASE = 150     # Mật độ session trong 1 giờ
 
 # Giờ làm việc chung công ty
 WORK_START = dt_time(7, 0)

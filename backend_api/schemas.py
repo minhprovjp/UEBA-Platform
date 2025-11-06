@@ -26,7 +26,6 @@ class Anomaly(AnomalyBase):
     class Config:
         from_attributes = True # Dành cho Pydantic v2. Nếu dùng Pydantic v1, hãy dùng `orm_mode = True`
 
-<<<<<<< Updated upstream
 # --- Schema cho Yêu cầu Phân tích của LLM ---
 # Định nghĩa cấu trúc dữ liệu mà frontend PHẢI gửi lên khi yêu cầu phân tích.
 class AnomalyAnalysisRequest(BaseModel):
@@ -41,14 +40,21 @@ class AnomalyAnalysisRequest(BaseModel):
 class FeedbackCreate(BaseModel):
     label: int # 0 cho bình thường, 1 cho bất thường
     anomaly_data: dict # Gửi toàn bộ dữ liệu của bất thường dưới dạng dictionary
-=======
-# --- Schema cho LLM Analysis Request ---
-# Sử dụng cùng cấu trúc với AnomalyBase để gửi dữ liệu đến LLM
-class AnomalyAnalysisRequest(AnomalyBase):
-    pass
+    
+# --- Schema cơ bản cho AllLogs ---
+class AllLogsBase(BaseModel):
+    timestamp: datetime
+    user: Optional[str] = None
+    client_ip: Optional[str] = None
+    database: Optional[str] = None
+    query: str
+    is_anomaly: bool
+    analysis_type: Optional[str] = None
 
-# --- Schema cho Feedback Creation ---
-class FeedbackCreate(BaseModel):
-    anomaly_data: dict  # Dữ liệu anomaly để gửi feedback
-    label: str  # Nhãn feedback từ người dùng
->>>>>>> Stashed changes
+# --- Schema để trả về cho người dùng (Thêm 'id') ---
+class AllLogs(AllLogsBase):
+    id: int
+
+    class Config:
+        from_attributes = True # Dùng Pydantic v2
+        # orm_mode = True # Dùng nếu bạn ở Pydantic v1

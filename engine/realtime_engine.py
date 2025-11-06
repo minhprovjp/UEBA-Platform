@@ -8,23 +8,14 @@ from email_alert import send_email_alert
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import *
+from engine.config_manager import load_config
 
 # Import hàm lưu CSDL từ file mới
-from engine.db_writer import save_anomalies_to_db 
+from engine.db_writer import save_results_to_db 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [RealtimeEngine] - %(message)s")
 
-# Xây dựng dict config một lần
-# --- TẢI CẤU HÌNH ĐỘNG TỪ JSON ---
-def load_rules_config():
-    """Tải cấu hình quy tắc từ file JSON."""
-    try:
-        with open(RULES_CONFIG_FILE_PATH, 'r') as f:
-            logging.info(f"Đã tải cấu hình quy tắc từ {RULES_CONFIG_FILE_PATH}")
-            return json.load(f)
-    except Exception as e:
-        logging.error(f"LỖI NGHIÊM TRỌNG: Không thể tải {RULES_CONFIG_FILE_PATH}. Sử dụng dict rỗng. Lỗi: {e}")
-        return {}
+
     
 # --- HÀM KẾT NỐI REDIS TIN CẬY ---
 def connect_redis():
@@ -97,7 +88,12 @@ def check_and_send_alert(results: dict):
 
 def start_engine():
     r = connect_redis()
-    CFG = load_rules_config()
+    full_config = load_config()
+    # Lấy ra mục "analysis_params" từ file config tổng
+    CFG = full_config.get("analysis_params", {})
+    
+    if not CFG:
+        logging.error("KHÔNG TÌM THẤY 'analysis_params' trong engine_config.json. Sử dụng config rỗng.")
 
     for s in STREAMS:
         ensure_group(r, s, REDIS_GROUP_ENGINE)
@@ -144,7 +140,7 @@ def start_engine():
             # 2. LƯU BẤT THƯỜNG
             db_save_success = False
             try:
-                save_anomalies_to_db(results)
+                save_results_to_db(results)
                 db_save_success = True
             except Exception as e:
                 # LỖI CSDL (ví dụ: CSDL sập, "database is locked")

@@ -41,11 +41,11 @@ def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
         return query_time >= start_time_rule or query_time < end_time_rule
 
 
-def is_potential_large_dump(row, large_tables_list):
-    """
-    CẬP NHẬT: Kiểm tra ý định (intent) trích xuất dữ liệu,
-    vì chúng ta không có 'rows_returned'.
-    """
+def is_potential_large_dump(row, large_tables_list, threshold=1000):
+    
+    if row['rows_returned'] > threshold:
+        return True
+    
     query = str(row['query']).lower()
     
     # Rule 1: SELECT *
@@ -66,7 +66,7 @@ def is_potential_large_dump(row, large_tables_list):
             
     # Bất thường NẾU:
     # 1. Nó truy cập một bảng lớn VÀ (không có WHERE HOẶC có Tautology)
-    if accesses_large_table and (has_no_where or has_tautology):
+    if accesses_large_table and (has_no_where or has_tautology) and has_select_star:
         return True
         
     # 2. Hoặc nó là một lệnh 'select into outfile'
@@ -95,6 +95,16 @@ def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     # Trả về một tuple: (True/False, danh_sách_bảng_nhạy_cảm_bị_truy_cập).
     return bool(accessed_sensitive), accessed_sensitive
 
+def is_sabotage(row, threshold=100):
+    if row['rows_affected'] > threshold and \
+       ('delete' in row['query'].lower() or 'update' in row['query'].lower()):
+        return True
+    return False
+
+def is_dos_attack(row, time_threshold_ms=15000): # 15 giây
+    if row['execution_time_ms'] > time_threshold_ms:
+        return True
+    return False
 
 def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
                              safe_start, safe_end, safe_days):
