@@ -104,6 +104,21 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs = input_df.copy()
 
     # --- BƯỚC 2: TIỀN XỬ LÝ DỮ LIỆU ---
+    stat_columns = {
+        'rows_returned': 0,
+        'rows_affected': 0,
+        'execution_time_ms': 0.0
+    }
+    
+    for col, default_val in stat_columns.items():
+        if col not in df_logs.columns:
+            # Nếu cột bị thiếu (ví dụ: log từ GQL File), tạo nó với giá trị mặc định
+            logging.warning(f"Cột '{col}' bị thiếu. (Log từ GQL File?). Sẽ gán giá trị mặc định = {default_val}.")
+            df_logs[col] = default_val
+        else:
+            # Nếu cột tồn tại (từ Perf Schema), chỉ cần điền các giá trị rỗng (nếu có)
+            df_logs[col] = df_logs[col].fillna(default_val)
+            
     # Chuẩn hoá timestamp: hỗ trợ sẵn datetime, epoch ms, epoch s
     def _normalize_ts(series):
         s = series.copy()
@@ -204,7 +219,8 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         'num_joins', 'num_where_conditions', 'num_group_by_cols',
         'num_order_by_cols', 'has_limit', 'has_subquery',
         'has_union', 'has_where', 'query_length',
-        'is_write_query', 'is_ddl_query'
+        'is_write_query', 'is_ddl_query',
+        'rows_returned', 'rows_affected', 'execution_time_ms'
     ]
     df_logs[feature_cols] = df_logs[feature_cols].fillna(0)
 

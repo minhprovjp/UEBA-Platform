@@ -8,13 +8,13 @@ import glob
 import shutil
 from datetime import datetime, timezone
 import json
-from engine.config_manager import load_config
+from config_manager import load_config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
     from config import *
     from data_processor import load_and_process_data
-    from engine.db_writer import save_results_to_db
+    from db_writer import save_results_to_db
 except ImportError:
     print("Lỗi: Không thể import 'config', 'data_processor' hoặc 'db_writer'.")
     sys.exit(1)

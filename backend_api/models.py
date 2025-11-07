@@ -2,7 +2,7 @@
 import os
 import sys
 from sqlalchemy import (create_engine, Column, Integer, String, DateTime, 
-                        Float, Boolean, Text, Index)
+                        Float, Boolean, Text, Index, BigInteger)
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -41,6 +41,10 @@ class Anomaly(Base):
     # Trạng thái để quản lý (sẽ dùng trong tương lai)
     status = Column(String, default='new', index=True) 
     
+    execution_time_ms = Column(Float, nullable=True, server_default='0')
+    rows_returned = Column(BigInteger, nullable=True, server_default='0')
+    rows_affected = Column(BigInteger, nullable=True, server_default='0')
+    
 # Bảng này sẽ lưu TẤT CẢ các log
 class AllLogs(Base):
     __tablename__ = 'all_logs'
@@ -55,4 +59,8 @@ class AllLogs(Base):
     # Thêm 2 cột quan trọng để biết kết quả phân tích
     is_anomaly = Column(Boolean, default=False)
     analysis_type = Column(String, nullable=True) # Ví dụ: "Global Fallback", "Per-User Profile"
+    
+    execution_time_ms = Column(Float, nullable=True, server_default='0')
+    rows_returned = Column(BigInteger, nullable=True, server_default='0')
+    rows_affected = Column(BigInteger, nullable=True, server_default='0')
     
