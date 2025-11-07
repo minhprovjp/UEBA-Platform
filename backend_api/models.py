@@ -56,8 +56,3 @@ class AllLogs(Base):
     is_anomaly = Column(Boolean, default=False)
     analysis_type = Column(String, nullable=True) # Ví dụ: "Global Fallback", "Per-User Profile"
     
-    # Thêm các chỉ mục (index) để tăng tốc độ truy vấn khi lọc theo thời gian hoặc user
-    __table_args__ = (
-        Index('ix_all_logs_timestamp', 'timestamp'),
-        Index('ix_all_logs_user', 'user'),
-    )

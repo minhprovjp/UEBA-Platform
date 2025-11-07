@@ -83,14 +83,26 @@ def save_results_to_db(results: dict):
         anomaly_records_to_insert = []
         if df_anomalies_list:
             # df_all_anomalies đã được tạo ở trên
+            # Đảm bảo các cột tồn tại trước khi cố gắng kết hợp
+            # Sử dụng pd.Series để tạo cột nếu nó thiếu, điền bằng pd.NA
+            reason_col_a = df_all_anomalies.get('unusual_activity_reason', pd.Series(pd.NA, index=df_all_anomalies.index))
+            reason_col_b = df_all_anomalies.get('deviation_reasons', pd.Series(pd.NA, index=df_all_anomalies.index))
             
-            # Chuẩn hóa các cột 'reason' và 'score'
-            df_all_anomalies['reason'] = df_all_anomalies.get('violation_reason', pd.NA) \
-                .fillna(df_all_anomalies.get('unusual_activity_reason', pd.NA)) \
-                .fillna(df_all_anomalies.get('reasons', pd.NA))
+            # Sử dụng combine_first để điền giá trị từ cột thứ hai vào NA của cột thứ nhất
+            df_all_anomalies['reason'] = reason_col_a.combine_first(reason_col_b)
+                    
+            score_col_a = df_all_anomalies.get('anomaly_score', pd.Series(pd.NA, index=df_all_anomalies.index))
+            score_col_b = df_all_anomalies.get('deviation_score', pd.Series(pd.NA, index=df_all_anomalies.index))
+
+            # df_all_anomalies['score'] = score_col_a.combine_first(score_col_b)
+            
+            # # Chuẩn hóa các cột 'reason' và 'score'
+            # df_all_anomalies['reason'] = df_all_anomalies.get('violation_reason', pd.NA) \
+            #     .fillna(df_all_anomalies.get('unusual_activity_reason', pd.NA)) \
+            #     .fillna(df_all_anomalies.get('reasons', pd.NA))
                 
-            df_all_anomalies['score'] = df_all_anomalies.get('anomaly_score', pd.NA) \
-                .fillna(df_all_anomalies.get('deviation_score', pd.NA))
+            # df_all_anomalies['score'] = df_all_anomalies.get('anomaly_score', pd.NA) \
+            #     .fillna(df_all_anomalies.get('deviation_score', pd.NA))
             
             df_all_anomalies['query'] = df_all_anomalies['query'].fillna(
                 "Session-based anomaly: " + df_all_anomalies['anomaly_type']

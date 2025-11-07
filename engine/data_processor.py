@@ -233,6 +233,13 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         lambda ts: is_late_night_query(ts, p_late_night_start_time, p_late_night_end_time)
     )
     anomalies_late_night = df_logs[df_logs['is_late_night']].copy().reset_index(drop=True)
+    
+    if 'rows_returned' not in df_logs.columns:
+        # Gán giá trị 0 cho các bản ghi không có cột này (chủ yếu là logs từ General Log)
+        df_logs['rows_returned'] = 0
+        logging.getLogger('DataProcessor').warning(
+            "Column 'rows_returned' missing in a batch. Set to 0 to avoid KeyError."
+    )
 
     # Rule 2: Potential large dump
     df_logs['is_potential_dump'] = df_logs.apply(

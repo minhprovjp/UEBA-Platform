@@ -43,10 +43,13 @@ def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
 
 def is_potential_large_dump(row, large_tables_list, threshold=1000):
     
-    if row['rows_returned'] > threshold:
+    if row.get('rows_returned', 0) > threshold:
         return True
     
     query = str(row['query']).lower()
+    
+    if "select into outfile" in query:
+        return True
     
     # Rule 1: SELECT *
     has_select_star = "select *" in query
@@ -95,16 +98,33 @@ def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     # Trả về một tuple: (True/False, danh_sách_bảng_nhạy_cảm_bị_truy_cập).
     return bool(accessed_sensitive), accessed_sensitive
 
-def is_sabotage(row, threshold=100):
-    if row['rows_affected'] > threshold and \
-       ('delete' in row['query'].lower() or 'update' in row['query'].lower()):
-        return True
-    return False
+# --- RULE MỚI (Giờ đã khả thi) ---
+def is_data_sabotage(row, threshold=100):
+    """
+    Phát hiện các lệnh DELETE/UPDATE ảnh hưởng đến nhiều hàng.
+    """
+    query_lower = str(row.get('query', '')).lower()
+    rows_affected = row.get('rows_affected', 0)
+    
+    if rows_affected > threshold and ('delete' in query_lower or 'update' in query_lower):
+        # Kiểm tra thêm để loại bỏ các lệnh an toàn (ví dụ: không có WHERE)
+        if 'where' not in query_lower:
+            return True, "No WHERE clause"
+        else:
+            return True, f"High row count ({rows_affected})"
+            
+    return False, None
 
+# --- RULE MỚI (Giờ đã khả thi) ---
 def is_dos_attack(row, time_threshold_ms=15000): # 15 giây
-    if row['execution_time_ms'] > time_threshold_ms:
-        return True
-    return False
+    """
+    Phát hiện các truy vấn chạy quá chậm (Tấn công DoS)
+    """
+    exec_time = row.get('execution_time_ms', 0)
+    
+    if exec_time > time_threshold_ms:
+        return True, f"Query took {exec_time:.0f} ms"
+    return False, None
 
 def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
                              safe_start, safe_end, safe_days):

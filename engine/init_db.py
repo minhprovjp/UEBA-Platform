@@ -33,9 +33,16 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("InitDB")
 
 log.info(f"Đang kết nối đến CSDL: {DATABASE_URL}")
-log.info("Bắt đầu khởi tạo bảng...")
 
 try:
+    # === THÊM BƯỚC DỌN DẸP ===
+    log.info("Đang dọn dẹp các bảng cũ (nếu có)...")
+    Base.metadata.drop_all(bind=engine)
+    log.info("Dọn dẹp hoàn tất.")
+    # ==========================
+    
+    log.info("Bắt đầu khởi tạo bảng...")
+    
     # Đây chính là lệnh quan trọng:
     # Nó sẽ đọc tất cả các class (như Anomaly) kế thừa từ 'Base'
     # và tạo bảng tương ứng trong CSDL PostgreSQL.
