@@ -48,12 +48,17 @@ def save_results_to_db(results: dict):
         if df_normal is not None and not df_normal.empty:
             df_normal['is_anomaly'] = False
             df_normal['analysis_type'] = df_normal['analysis_type'].fillna('Normal')
+            df_normal['rows_returned'] = df_normal.get('rows_returned', 0).fillna(0).astype(int)
+            df_normal['rows_affected'] = df_normal.get('rows_affected', 0).fillna(0).astype(int)
             log_records_to_insert.extend(df_normal.to_dict('records'))
             
         # Thêm các log BẤT THƯỜNG
         if df_anomalies_list:
             df_all_anomalies = pd.concat(df_anomalies_list, ignore_index=True)
             df_all_anomalies['is_anomaly'] = True
+            
+            df_all_anomalies['rows_returned'] = df_all_anomalies.get('rows_returned', 0).fillna(0).astype(int)
+            df_all_anomalies['rows_affected'] = df_all_anomalies.get('rows_affected', 0).fillna(0).astype(int)
             
             # Xử lý các cột không nhất quán (ví dụ: multi_table có 'start_time')
             if 'start_time' in df_all_anomalies.columns:

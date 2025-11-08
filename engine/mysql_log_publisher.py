@@ -3,12 +3,26 @@ import os, json, time, threading, logging, re, sys
 import pandas as pd
 from datetime import datetime, timezone
 from redis import Redis
+from sqlalchemy.engine.url import make_url 
+from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import *
-from engine.utils import save_logs_to_parquet # Giả sử bạn có file này
+try:
+    from config import *
+    from engine.utils import save_logs_to_parquet 
 
-from typing import Optional
+    try:
+        # Đọc URL của publisher kia để biết nó dùng user nào
+        db_url = make_url(MYSQL_LOG_DATABASE_URL)
+        FILTER_USER = db_url.username
+        logging.info(f"[MySQLPublisher] Sẽ lọc (ignore) tất cả hành vi của user: '{FILTER_USER}'")
+    except Exception as e:
+        logging.error(f"[MySQLPublisher] Không thể parse MYSQL_LOG_DATABASE_URL để tìm user. Sẽ không lọc. Lỗi: {e}")
+        FILTER_USER = None
+
+except ImportError:
+    print("Lỗi: Không thể import 'config' hoặc 'engine.utils'.")
+    sys.exit(1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +78,7 @@ def write_last_known_state(size, sessions, state_file_path=MYSQL_STATE_FILE_PATH
     except Exception as e:
         logging.error(f"Không thể ghi state file: {e}")
 
-def parse_and_append_log_data(new_lines, sessions):
+def parse_and_append_log_data(new_lines, sessions, filter_user=None):
     """
     Hàm parse lõi. Nhận dòng log mới và dict sessions hiện tại,
     trả về DataFrame các query đã parse và dict sessions đã cập nhật.
@@ -88,7 +102,7 @@ def parse_and_append_log_data(new_lines, sessions):
                 'client_ip': session_info.get('host'),
                 'database': session_info.get('db', 'N/A'),
                 'query': full_query,
-                'source_dbms': 'MySQL'
+                'source_dbms': 'MySQL_GQL_File'
             })
         current_multiline_query_parts.clear()
         last_query_timestamp, last_query_thread_id = None, None
@@ -106,9 +120,13 @@ def parse_and_append_log_data(new_lines, sessions):
 
         if connect_match:
             data = connect_match.groupdict()
+            connected_user = data['user']
+            if filter_user and connected_user == filter_user:
+                logging.debug(f"Bỏ qua session 'Connect' từ user bị lọc: {connected_user}")
+                continue # Bỏ qua, không thêm session này vào 'sessions'
             db_for_session = data.get('db') if data.get('db') else 'N/A'
             sessions[data['thread_id']] = {
-                'user': data['user'],
+                'user': connected_user,
                 'host': data['host'],
                 'db': db_for_session
             }
@@ -156,7 +174,8 @@ def monitor_log_file(
     stream_key: str,
     state_file_path: str = MYSQL_STATE_FILE_PATH,
     poll_interval_ms: int = 200,          # Tần suất "nhìn" file
-    stop_event: Optional[threading.Event] = None
+    stop_event: Optional[threading.Event] = None,
+    filter_user: Optional[str] = None
 ):
     """
     Theo dõi file log, parse và publish realtime vào Redis Streams.
@@ -171,6 +190,14 @@ def monitor_log_file(
     last_size, sessions = read_last_known_state(state_file_path)
     published_total = 0
     f = None
+    
+    if filter_user and sessions:
+        initial_count = len(sessions)
+        sessions = {tid: s for tid, s in sessions.items() if s.get('user') != filter_user}
+        filtered_count = initial_count - len(sessions)
+        if filtered_count > 0:
+            logging.info(f"Đã lọc {filtered_count} session đang hoạt động của user '{filter_user}' từ file state.")
+            
     logging.info(f"Start monitoring {source_log_path} → {stream_key} (poll={poll_interval_ms}ms)")
     logging.info("Publisher đang chạy... Nhấn Ctrl+C để dừng.")
 
@@ -240,10 +267,18 @@ def monitor_log_file(
                         last_size = current_size # Fallback
 
                     # Parse & publish
-                    df_new, sessions = parse_and_append_log_data(new_lines, sessions)
+                    df_new, sessions = parse_and_append_log_data(new_lines, sessions, filter_user)
                     if not df_new.empty:
                         pipe = r.pipeline()
                         recs = df_new.to_dict(orient="records")
+                        
+                        try:
+                            # Đặt tên nguồn log rõ ràng để phân biệt
+                            save_logs_to_parquet(recs, source_dbms="MySQL_GQL_File") 
+                            logging.info(f"Đã lưu {len(recs)} bản ghi GQL File vào Staging.")
+                        except Exception as e:
+                            logging.error(f"Lỗi khi lưu file Parquet (Staging): {e}", exc_info=True)
+                            
                         for rec in recs:
                             # 1. Gửi đến Redis Stream (Luồng nóng)
                             pipe.xadd(stream_key, {"data": _jsonify_record(rec)})
@@ -284,7 +319,8 @@ def start_mysql_publisher_blocking():
         stream_key=STREAM_KEY,
         state_file_path=MYSQL_STATE_FILE_PATH,
         poll_interval_ms=200,
-        stop_event=None
+        stop_event=None,
+        filter_user=FILTER_USER
     )
 
 if __name__ == "__main__":
