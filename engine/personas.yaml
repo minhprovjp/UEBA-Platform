@@ -1,0 +1,118 @@
+# engine/personas.yaml
+# Đây là file cấu hình trung tâm cho các vai trò và nhiệm vụ mô phỏng.
+
+Sales_Normal:
+  schema: |
+    CREATE TABLE customers (
+      id INT PRIMARY KEY,
+      name VARCHAR(255),
+      email VARCHAR(255),
+      created_at TIMESTAMP
+    );
+    CREATE TABLE products (
+      sku VARCHAR(50) PRIMARY KEY,
+      name VARCHAR(255),
+      price DECIMAL(10, 2)
+    );
+    CREATE TABLE orders (
+      id INT PRIMARY KEY,
+      customer_id INT,
+      order_date DATE,
+      status VARCHAR(50)
+    );
+  tasks:
+    - "Check the 5 most recent orders for a specific customer (customer_id = %s)"
+    - "Find a customer by their email address"
+    - "Get details of a specific product using its SKU (%s)"
+    - "Update an order's status (order_id = %s) to 'Shipped'"
+    - "Count the total number of 'Completed' orders"
+
+HR_Normal:
+  schema: |
+    CREATE TABLE employees (
+      id INT PRIMARY KEY,
+      name VARCHAR(255),
+      position VARCHAR(100),
+      hire_date DATE
+    );
+    CREATE TABLE salaries (
+      id INT PRIMARY KEY,
+      employee_id INT,
+      salary DECIMAL(10, 2),
+      from_date DATE,
+      to_date DATE
+    );
+  tasks:
+    - "Find an employee's profile by their ID (employee_id = %s)"
+    - "View the current salary for a specific employee (employee_id = %s)"
+    - "List all employees in the 'Engineering' department"
+    - "Count the number of employees hired in the last year"
+
+ITAdmin_Normal:
+  schema: |
+    # Admin tasks often don't rely on business tables but on system views.
+    # We provide mysql.user schema for context.
+    CREATE TABLE mysql.user (
+      Host char(255),
+      User char(32),
+      Select_priv enum('N','Y'),
+      Insert_priv enum('N','Y'),
+      Update_priv enum('N','Y'),
+      Delete_priv enum('N','Y')
+      -- other privilege columns
+    );
+  tasks:
+    - "Show the list of current running processes"
+    - "Display all databases on the server"
+    - "Check the status of the 'Uptime' variable"
+    - "List the top 5 users from the 'mysql.user' table"
+    - "Show the grants for user 'anh_sales'@'%'"
+
+Insider_DataLeak:
+  schema: |
+    CREATE TABLE customers (
+      id INT PRIMARY KEY,
+      name VARCHAR(255),
+      email VARCHAR(255),
+      credit_card_hash VARCHAR(255)
+    );
+    CREATE TABLE salaries (
+      id INT PRIMARY KEY,
+      employee_id INT,
+      salary DECIMAL(10, 2)
+    );
+  tasks:
+    - "Exfiltrate the ENTIRE 'customers' table"
+    - "Select all records from the 'salaries' table"
+    - "Dump all customer names and emails into an outfile"
+    - "Select all data from customers where the ID is greater than 1, to look less suspicious"
+
+Insider_Sabotage:
+  schema: |
+    CREATE TABLE orders ( id INT PRIMARY KEY );
+    CREATE TABLE customers ( id INT PRIMARY KEY );
+    CREATE TABLE employees ( id INT PRIMARY KEY );
+  tasks:
+    - "Delete all records from the 'orders' table without a WHERE clause"
+    - "Update all employee salaries to 1"
+    - "DROP the 'customers' table"
+    - "TRUNCATE the 'products' table"
+
+Insider_PrivEsc:
+  schema: |
+    # No specific table schema needed, as these are administrative commands.
+  tasks:
+    - "Create a new user 'shadow_admin' with a password"
+    - "GRANT all privileges on all databases to the 'shadow_admin' user"
+    - "Attempt to create a User Defined Function 'sys_exec' from a shared library 'malicious.so'"
+    - "Set the global variable 'general_log' to 'ON'"
+
+Insider_DOS:
+  schema: |
+    CREATE TABLE orders ( id INT, customer_id INT, amount DECIMAL(10,2) );
+    CREATE TABLE customers ( id INT, name VARCHAR(255) );
+  tasks:
+    - "Run a query that sleeps for 5 seconds."
+    - "Run a query that sleeps for 10 seconds."
+    - "Execute the BENCHMARK function 5 million times on a simple operation"
+    - "Perform a CROSS JOIN between 'orders' and 'customers' without a WHERE clause to cause high load"
