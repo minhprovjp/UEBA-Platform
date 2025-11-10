@@ -279,7 +279,6 @@ credentials.json
 service-account.json
 
 # Database dumps
-*.sql
 *.dump
 
 # ================================
