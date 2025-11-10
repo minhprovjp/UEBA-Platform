@@ -67,6 +67,17 @@ GRANT SELECT, INSERT, UPDATE ON mysql.* TO 'thanh_admin'@'localhost';
 -- ---
 -- BƯỚC 3: ÁP DỤNG THAY ĐỔI
 -- ---
+ALTER USER 'linh_sales'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'quang_sales'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'trang_sales'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'mai_mkt'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'vy_mkt'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'hoa_hr'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'khang_support'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'tam_dev'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'ly_data'@'localhost' IDENTIFIED BY 'password';
+ALTER USER 'quoc_app'@'localhost' IDENTIFIED BY 'password';
+
 FLUSH PRIVILEGES;
 
 SELECT user, host FROM mysql.user WHERE user LIKE '%uba%';
