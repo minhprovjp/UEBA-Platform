@@ -4,6 +4,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
+from datetime import datetime
 
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
@@ -181,10 +182,30 @@ def submit_feedback(feedback: schemas.FeedbackCreate, api_key: str = Security(ge
     
 # === API MỚI CHO LOG EXPLORER ===
 @app.get("/api/logs/", response_model=List[schemas.AllLogs], tags=["Log Explorer"])
-def read_all_logs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+def read_all_logs(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: Session = Depends(get_db), 
+    api_key: str = Security(get_api_key),
+    search: str = None, # Thêm bộ lọc
+    user: str = None,   # Thêm bộ lọc
+    date_from: datetime = None, # Thêm bộ lọc
+    date_to: datetime = None    # Thêm bộ lọc
+):
     """
     Lấy ra TẤT CẢ các log đã được xử lý (bình thường + bất thường).
     Hỗ trợ phân trang.
     """
-    logs = db.query(models.AllLogs).order_by(models.AllLogs.timestamp.desc()).offset(skip).limit(limit).all()
+    query = db.query(models.AllLogs)
+    
+    if search:
+        query = query.filter(models.AllLogs.query.ilike(f"%{search}%"))
+    if user:
+        query = query.filter(models.AllLogs.user == user)
+    if date_from:
+        query = query.filter(models.AllLogs.timestamp >= date_from)
+    if date_to:
+        query = query.filter(models.AllLogs.timestamp <= date_to)
+        
+    logs = query.order_by(models.AllLogs.timestamp.desc()).offset(skip).limit(limit).all()
     return logs
