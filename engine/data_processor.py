@@ -17,6 +17,11 @@ import sys
 import logging
 import joblib
 import pandas as pd
+import numpy as np
+import lightgbm as lgb
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
 from datetime import time as dt_time, datetime
 from tzlocal import get_localzone
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
@@ -39,210 +44,143 @@ from utils import (
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(USER_MODELS_DIR, exist_ok=True)
 
-# --------------------------- Helpers cấu hình ---------------------------
+# ==============================================================================
+# PHẦN 1 (MỚI): CÁC HÀM CHO PIPELINE SEMI-SUPERVISED
+# ==============================================================================
 
-def get_cfg(cfg: dict, *keys, default=None):
-    """
-    Trả về giá trị đầu tiên tìm thấy theo danh sách khóa (cho phép tương thích tên cũ/mới).
-    """
-    for k in keys:
-        if k in cfg and cfg[k] is not None:
-            return cfg[k]
-    return default
+def create_initial_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Thêm các cột đặc trưng cần thiết cho ML pipeline."""
+    if df.empty: return df
+    df_copy = df.copy()
+    df_copy['hour'] = df_copy['timestamp'].dt.hour
+    df_copy['day_of_week'] = df_copy['timestamp'].dt.dayofweek
+    df_copy['hour_sin'] = np.sin(2 * np.pi * df_copy['hour'] / 24)
+    df_copy['hour_cos'] = np.cos(2 * np.pi * df_copy['hour'] / 24)
+    return df_copy
 
-def coerce_time(val, fallback: dt_time) -> dt_time:
-    """
-    Ưu tiên nhận dt_time trực tiếp.
-    Cũng hỗ trợ:
-      - int/float = giờ (0..23)  -> dt_time(h, 0)
-      - "HH:MM[:SS]"            -> dt_time(...)
-    Nếu không phân giải được -> trả fallback.
-    """
-    if isinstance(val, dt_time):
-        return val
-    if isinstance(val, (int, float)):
-        try:
-            h = int(val)
-            return dt_time(max(0, min(23, h)), 0)
-        except Exception:
-            return fallback
-    if isinstance(val, str):
-        parts = val.strip().split(":")
-        try:
-            if len(parts) == 2:
-                return dt_time(int(parts[0]), int(parts[1]))
-            if len(parts) == 3:
-                return dt_time(int(parts[0]), int(parts[1]), int(parts[2]))
-        except Exception:
-            return fallback
-    return fallback
+def build_preprocessing_pipeline() -> Pipeline:
+    """Xây dựng pipeline của Scikit-learn để xử lý tất cả các loại đặc trưng."""
+    categorical_features = ['user', 'client_ip', 'database', 'source_dbms']
+    numerical_features = [
+        'query_length', 'num_joins', 'num_where_conditions', 'hour_sin', 'hour_cos',
+        'rows_returned', 'rows_affected', 'execution_time_ms'
+    ]
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numerical_features),
+            ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
+        ],
+        remainder='passthrough'
+    )
+    pipeline = Pipeline(steps=[('preprocessor', preprocessor)])
+    pipeline.set_output(transform="pandas")
+    return pipeline
+
+def get_pseudo_labels(X_transformed: pd.DataFrame, contamination: float) -> np.ndarray:
+    """Sử dụng Isolation Forest để tạo ra các nhãn giả."""
+    if X_transformed is None or X_transformed.empty: return np.array([])
+    logging.info(f"Bắt đầu giai đoạn Unsupervised với Isolation Forest (contamination={contamination})...")
+    iso_forest = IsolationForest(contamination=contamination, random_state=42, n_jobs=-1)
+    predictions = iso_forest.fit_predict(X_transformed)
+    return np.where(predictions == -1, 1, 0)
+
+def train_and_score_with_classifier(X_transformed: pd.DataFrame, pseudo_labels: np.ndarray):
+    """Huấn luyện mô hình LightGBM và trả về điểm số cuối cùng."""
+    num_anomalies = np.sum(pseudo_labels)
+    if num_anomalies == 0: return None
+    
+    num_normals = len(pseudo_labels) - num_anomalies
+    scale_pos_weight = num_normals / num_anomalies
+    
+    logging.info(f"Bắt đầu giai đoạn Supervised với LightGBM (scale_pos_weight={scale_pos_weight:.2f})...")
+    lgbm_classifier = lgb.LGBMClassifier(random_state=42, n_jobs=-1, scale_pos_weight=scale_pos_weight, verbose=-1)
+    lgbm_classifier.fit(X_transformed, pseudo_labels)
+    logging.info("Huấn luyện mô hình Supervised hoàn tất.")
+    
+    return lgbm_classifier.predict_proba(X_transformed)[:, 1]
 
 # --------------------------- Core Processor ---------------------------
 
 def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     """
-    Xử lý dữ liệu log từ DataFrame và tham số cấu hình (dict).
-    Trả về dict kết quả.
+    Hàm điều phối chính:
+    1. Chạy pipeline Semi-Supervised để lấy điểm số ML.
+    2. Chạy các luật cũ để làm giàu dữ liệu và phát hiện các vi phạm cụ thể.
     """
-    # 1) Validate input
+    # 1) Validate input và Tiền xử lý
     if input_df is None or input_df.empty:
-        logging.warning("DataFrame đầu vào rỗng hoặc None, không có dữ liệu để xử lý.")
+        logging.warning("DataFrame đầu vào rỗng, không có dữ liệu để xử lý.")
         empty = pd.DataFrame()
-        return {
-            "all_logs": empty, 
-            "anomalies_late_night": empty, 
-            "anomalies_dump": empty,
-            "anomalies_multi_table": empty, 
-            "anomalies_sensitive": empty,
-            "anomalies_user_time": empty, 
-            "anomalies_complexity": empty,
-            "anomalies_sqli": empty, 
-            "anomalies_privilege": empty,
-            "normal_activities": empty
-        }
-
-    df_logs = input_df.copy()
-
-    # --- BƯỚC 2: TIỀN XỬ LÝ DỮ LIỆU ---
-    stat_columns = {
-        'rows_returned': 0,
-        'rows_affected': 0,
-        'execution_time_ms': 0.0
-    }
+        return { "all_logs": empty, "anomalies_ml": empty, "anomalies_rules": empty }
     
+    df_logs = input_df.copy()
+    
+    stat_columns = {'rows_returned': 0, 'rows_affected': 0, 'execution_time_ms': 0.0}
     for col, default_val in stat_columns.items():
-        if col not in df_logs.columns:
-            # Nếu cột bị thiếu (ví dụ: log từ GQL File), tạo nó với giá trị mặc định
-            logging.warning(f"Cột '{col}' bị thiếu. (Log từ GQL File?). Sẽ gán giá trị mặc định = {default_val}.")
-            df_logs[col] = default_val
-        else:
-            # Nếu cột tồn tại (từ Perf Schema), chỉ cần điền các giá trị rỗng (nếu có)
-            df_logs[col] = df_logs[col].fillna(default_val)
-            
-    # Chuẩn hoá timestamp: hỗ trợ sẵn datetime, epoch ms, epoch s
-    def _normalize_ts(series):
-        s = series.copy()
-        # Nếu đã là datetime -> giữ nguyên
-        if pd.api.types.is_datetime64_any_dtype(s):
-            return s
-
-        # Nếu là số -> đoán đơn vị (ms nếu giá trị lớn)
-        if pd.api.types.is_numeric_dtype(s):
-            sample = s.dropna()
-            unit = 'ms' if (len(sample) and float(sample.median()) > 1e11) else 's'
-            return pd.to_datetime(s, unit=unit, utc=True)
-
-        # Còn lại: parse chuỗi
-        return pd.to_datetime(s, errors='coerce', utc=True)
-
-    df_logs['timestamp'] = _normalize_ts(df_logs['timestamp'])
+        if col not in df_logs.columns: df_logs[col] = default_val
+        else: df_logs[col] = df_logs[col].fillna(default_val)
+    
+    df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp'], errors='coerce', utc=True)
     df_logs.dropna(subset=['timestamp'], inplace=True)
-    if df_logs.empty:
-        logging.warning("Không còn dữ liệu sau khi loại bỏ timestamp không hợp lệ.")
-        return {"empty": True}
+    if df_logs.empty: return load_and_process_data(pd.DataFrame(), {})
 
-    # Đưa về local timezone nếu muốn hiển thị theo máy
     try:
-        from tzlocal import get_localzone
-        local_tz = get_localzone()
-        df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert(local_tz)
+        df_logs['timestamp'] = df_logs['timestamp'].dt.tz_convert(get_localzone())
     except Exception as e:
         logging.error(f"Lỗi khi chuẩn hóa múi giờ: {e}.")
 
     df_logs['query'] = df_logs['query'].astype(str)
 
-    # === BƯỚC 3: LẤY & CHUẨN HÓA CÁC THAM SỐ CẤU HÌNH ===
-
-    def _ensure_time(v, fallback):
-        # Cho phép truyền trực tiếp dt_time hoặc string ISO "HH:MM[:SS]"
-        if isinstance(v, dt_time):
-            return v
-        if isinstance(v, str):
-            try:
-                return dt_time.fromisoformat(v)
-            except ValueError:
-                pass
-        return fallback
-
-    p_late_night_start_time = _ensure_time(
-        config_params.get('p_late_night_start_time'),
-        dt_time(0, 0)
-    )
-    p_late_night_end_time   = _ensure_time(
-        config_params.get('p_late_night_end_time'),
-        dt_time(5, 0)
-    )
-
-    # Known large tables
-    p_known_large_tables = config_params.get('p_known_large_tables', [])
-
-    # Multi-table window & threshold
-    p_time_window_minutes = int(config_params.get('p_time_window_minutes', 5))
-    p_min_distinct_tables = int(config_params.get('p_min_distinct_tables', 3))
-
-    # Sensitive tables & allowlist
-    p_sensitive_tables = config_params.get('p_sensitive_tables', [])
-    p_allowed_users_sensitive = config_params.get('p_allowed_users_sensitive', [])
-
-    # Safe hours (giờ nguyên) & weekdays
-    p_safe_hours_start = int(config_params.get('p_safe_hours_start', 8))
-    p_safe_hours_end   = int(config_params.get('p_safe_hours_end',   18))
-    p_safe_weekdays    = config_params.get('p_safe_weekdays', [0, 1, 2, 3, 4])
-
-    # User profile quantiles & minimum samples
-    p_quantile_start = float(config_params.get('p_quantile_start', 0.15))
-    p_quantile_end   = float(config_params.get('p_quantile_end',   0.85))
-    p_min_queries_for_profile = int(config_params.get('p_min_queries_for_profile', 10))
-
-    logging.info(
-        f"LateNight={p_late_night_start_time}-{p_late_night_end_time} "
-        f"| SafeHours={p_safe_hours_start}-{p_safe_hours_end} "
-        f"| Window={p_time_window_minutes}min Distinct≥{p_min_distinct_tables}"
-    )
-
-    # 4) Feature engineering
-    df_logs['query_lower'] = df_logs['query'].str.lower()
-    df_logs['query_length'] = df_logs['query_lower'].str.len()
-
-    write_cmds = ('insert', 'update', 'delete', 'replace')
-    ddl_cmds = ('create', 'alter', 'drop', 'truncate', 'rename')
-
-    df_logs['is_write_query'] = df_logs['query_lower'].str.startswith(write_cmds, na=False)
-    df_logs['is_ddl_query']   = df_logs['query_lower'].str.startswith(ddl_cmds, na=False)
-    df_logs.drop(columns=['query_lower'], inplace=True)
-
+    # 2) Feature Engineering (cả cho ML và cho luật)
+    logging.info("Bắt đầu Feature Engineering...")
+    rules_config = config_params.get("analysis_params", {})
+    df_logs = create_initial_features(df_logs, rules_config) # Gọi hàm mới
     query_features_df = df_logs['query'].apply(extract_query_features).apply(pd.Series)
-    df_logs = pd.concat([df_logs, query_features_df], axis=1)
+    df_logs = pd.concat([df_logs, query_features_df], axis=1).fillna(0)
 
-    # 5) Phân tích AI (nếu có feedback đủ)
-    feature_cols = [
-        'num_joins', 'num_where_conditions', 'num_group_by_cols',
-        'num_order_by_cols', 'has_limit', 'has_subquery',
-        'has_union', 'has_where', 'query_length',
-        'is_write_query', 'is_ddl_query',
-        'rows_returned', 'rows_affected', 'execution_time_ms'
-    ]
-    df_logs[feature_cols] = df_logs[feature_cols].fillna(0)
-
-    supervised_model = train_supervised_model_from_feedback(feature_cols)
-    if supervised_model:
-        predictions_proba = supervised_model.predict_proba(df_logs[feature_cols])
-        df_logs['anomaly_score'] = predictions_proba[:, 1]
-        df_logs['is_complexity_anomaly'] = supervised_model.predict(df_logs[feature_cols])
-        df_logs['analysis_type'] = "Supervised Feedback"
+    # 3) CHẠY PIPELINE SEMI-SUPERVISED
+    logging.info("Bắt đầu pipeline Semi-Supervised ML...")
+    pipeline_path = os.path.join(MODELS_DIR, "preprocessing_pipeline.joblib")
+    
+    pipeline = build_preprocessing_pipeline()
+    X_transformed = pipeline.fit_transform(df_logs) # Chạy trên df_logs đã được enrich
+    
+    semi_supervised_config = config_params.get("semi_supervised_params", {})
+    contamination_rate = semi_supervised_config.get("contamination", 0.02)
+    
+    pseudo_labels = get_pseudo_labels(X_transformed, contamination=contamination_rate)
+    final_anomaly_scores = train_and_score_with_classifier(X_transformed, pseudo_labels)
+    
+    anomalies_ml = pd.DataFrame()
+    if final_anomaly_scores is not None:
+        df_logs['ml_anomaly_score'] = final_anomaly_scores
+        anomaly_threshold = semi_supervised_config.get("anomaly_threshold", 0.5)
+        anomalies_ml = df_logs[df_logs['ml_anomaly_score'] >= anomaly_threshold].copy()
     else:
-        scores, is_anomaly, types = analyze_contextual_complexity_anomalies(
-            df_logs, p_min_queries_for_profile
-        )
-        df_logs['anomaly_score'] = scores
-        df_logs['is_complexity_anomaly'] = is_anomaly
-        df_logs['analysis_type'] = types
+        df_logs['ml_anomaly_score'] = 0.0
 
-    df_logs['is_complexity_anomaly'] = df_logs['is_complexity_anomaly'].astype(bool).fillna(False)
-    df_logs['analysis_type'] = df_logs['analysis_type'].fillna("Not Analyzed")
-    anomalies_complexity = df_logs[df_logs['is_complexity_anomaly']].copy().reset_index(drop=True)
+    logging.info(f"Phát hiện {len(anomalies_ml)} bất thường bằng ML.")
 
     # 6) Áp dụng Rules
+
+    logging.info("Bắt đầu áp dụng các luật (Rules)...")
+    rules_config = config_params.get("analysis_params", {}) # <<< THÊM LẠI DÒNG NÀY
+
+    # <<< THÊM LẠI TOÀN BỘ KHỐI LẤY THAM SỐ NÀY >>>
+    p_late_night_start_time = dt_time.fromisoformat(rules_config.get('p_late_night_start_time', '00:00:00'))
+    p_late_night_end_time = dt_time.fromisoformat(rules_config.get('p_late_night_end_time', '05:00:00'))
+    p_known_large_tables = rules_config.get('p_known_large_tables', [])
+    p_time_window_minutes = int(rules_config.get('p_time_window_minutes', 5))
+    p_min_distinct_tables = int(rules_config.get('p_min_distinct_tables', 3))
+    p_sensitive_tables = rules_config.get('p_sensitive_tables', [])
+    p_allowed_users_sensitive = rules_config.get('p_allowed_users_sensitive', [])
+    p_safe_hours_start = int(rules_config.get('p_safe_hours_start', 8))
+    p_safe_hours_end = int(rules_config.get('p_safe_hours_end', 18))
+    p_safe_weekdays = rules_config.get('p_safe_weekdays', [0, 1, 2, 3, 4])
+    p_min_queries_for_profile = int(rules_config.get('p_min_queries_for_profile', 10))
+    p_quantile_start = float(rules_config.get('p_quantile_start', 0.15))
+    p_quantile_end = float(rules_config.get('p_quantile_end', 0.85))
+    
 
     # Rule 1: Late night
     df_logs['is_late_night'] = df_logs['timestamp'].apply(
@@ -387,7 +325,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         anomalies_large_dump.index,
         anomalies_sensitive_access.index if not anomalies_sensitive_access.empty else [],
         anomalies_unusual_user_time.index,
-        anomalies_complexity.index,
         anomalies_sqli.index,        
         anomalies_privilege.index
     ]:
@@ -410,7 +347,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         "anomalies_multi_table": anomalies_multiple_tables_df,
         "anomalies_sensitive": anomalies_sensitive_access,
         "anomalies_user_time": anomalies_unusual_user_time,
-        "anomalies_complexity": anomalies_complexity,
         "anomalies_sqli": anomalies_sqli,          
         "anomalies_privilege": anomalies_privilege,
         "normal_activities": normal_activities
@@ -439,81 +375,3 @@ def load_model_and_scaler(path):
         logging.error(f"Lỗi khi tải mô hình tại {path}: {e}")
         return None, None
 
-# --------------------------- AI Phân tích ---------------------------
-
-def train_supervised_model_from_feedback(feature_cols):
-    feedback_file = 'feedback.csv'
-    if not os.path.exists(feedback_file) or os.path.getsize(feedback_file) == 0:
-        return None
-    try:
-        df_feedback = pd.read_csv(feedback_file)
-    except Exception as e:
-        logging.error(f"Lỗi khi đọc file feedback.csv: {e}")
-        return None
-
-    if len(df_feedback) < 20 or df_feedback['is_anomaly_label'].nunique() < 2:
-        return None
-
-    logging.info(f"Đang sử dụng mô hình nâng cao được huấn luyện từ {len(df_feedback)} mẫu phản hồi.")
-    available_features = [col for col in feature_cols if col in df_feedback.columns]
-    X_train = df_feedback[available_features].fillna(0)
-    y_train = df_feedback['is_anomaly_label']
-    model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
-    model.fit(X_train, y_train)
-    return model
-
-def analyze_contextual_complexity_anomalies(df_with_features, min_queries_for_profile):
-    feature_cols = [
-        'num_joins', 'num_where_conditions', 'num_group_by_cols',
-        'num_order_by_cols', 'has_limit', 'has_subquery',
-        'has_union', 'has_where', 'query_length',
-        'is_write_query', 'is_ddl_query'
-    ]
-    df_analysis = df_with_features[feature_cols + ['user']].dropna()
-    if df_analysis.empty:
-        return pd.Series(name='anomaly_score'), pd.Series(name='is_complexity_anomaly'), pd.Series(name='analysis_type')
-
-    global_model_path = os.path.join(MODELS_DIR, "global_isolation_forest.joblib")
-    global_model, scaler_global = load_model_and_scaler(global_model_path)
-    if global_model is None or scaler_global is None:
-        logging.info("Không tìm thấy mô hình toàn cục, đang tiến hành huấn luyện lần đầu...")
-        scaler_global = StandardScaler()
-        X_global_scaled = scaler_global.fit_transform(df_analysis[feature_cols])
-        global_model = IsolationForest(contamination=0.05, random_state=42)
-        global_model.fit(X_global_scaled)
-        save_model_and_scaler(global_model, scaler_global, global_model_path)
-
-    all_results = []
-    for user, user_df in df_analysis.groupby('user'):
-        current_user_df = user_df.copy()
-        user_model_path = os.path.join(USER_MODELS_DIR, f"{user}.joblib")
-
-        if len(user_df) >= min_queries_for_profile:
-            user_model, scaler_user = load_model_and_scaler(user_model_path)
-            if user_model is None or scaler_user is None:
-                logging.info(f"Tạo hồ sơ AI mới cho user: {user}")
-                scaler_user = StandardScaler()
-                X_user_scaled_train = scaler_user.fit_transform(user_df[feature_cols])
-                user_model = IsolationForest(contamination=0.05, random_state=42)
-                user_model.fit(X_user_scaled_train)
-                save_model_and_scaler(user_model, scaler_user, user_model_path)
-
-            X_user_scaled_predict = scaler_user.transform(user_df[feature_cols])
-            scores = user_model.decision_function(X_user_scaled_predict)
-            predictions = user_model.predict(X_user_scaled_predict)
-            current_user_df['analysis_type'] = "Per-User Profile"
-        else:
-            X_fallback_scaled = scaler_global.transform(user_df[feature_cols])
-            scores = global_model.decision_function(X_fallback_scaled)
-            predictions = global_model.predict(X_fallback_scaled)
-            current_user_df['analysis_type'] = "Global Fallback"
-
-        current_user_df['anomaly_score'] = scores
-        current_user_df['is_complexity_anomaly'] = (predictions == -1)
-        all_results.append(current_user_df)
-
-    if not all_results:
-        return pd.Series(name='anomaly_score'), pd.Series(name='is_complexity_anomaly'), pd.Series(name='analysis_type')
-
-    final_df = pd.concat(all_results)
-    return final_df['anomaly_score'], final_df['is_complexity_anomaly'], final_df['analysis_type']
