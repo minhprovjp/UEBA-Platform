@@ -48,7 +48,7 @@ os.makedirs(USER_MODELS_DIR, exist_ok=True)
 # PHẦN 1 (MỚI): CÁC HÀM CHO PIPELINE SEMI-SUPERVISED
 # ==============================================================================
 
-def create_initial_features(df: pd.DataFrame) -> pd.DataFrame:
+def create_initial_features(df: pd.DataFrame, rules_config: dict | None = None) -> pd.DataFrame:
     """Thêm các cột đặc trưng cần thiết cho ML pipeline."""
     if df.empty: return df
     df_copy = df.copy()
@@ -70,7 +70,7 @@ def build_preprocessing_pipeline() -> Pipeline:
             ('num', StandardScaler(), numerical_features),
             ('cat', OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_features)
         ],
-        remainder='passthrough'
+        remainder='drop'
     )
     pipeline = Pipeline(steps=[('preprocessor', preprocessor)])
     pipeline.set_output(transform="pandas")
@@ -130,10 +130,11 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         logging.error(f"Lỗi khi chuẩn hóa múi giờ: {e}.")
 
     df_logs['query'] = df_logs['query'].astype(str)
+    df_logs['query_length'] = df_logs['query'].str.len().fillna(0).astype(int)
 
     # 2) Feature Engineering (cả cho ML và cho luật)
     logging.info("Bắt đầu Feature Engineering...")
-    rules_config = config_params.get("analysis_params", {})
+    rules_config = config_params or {}
     df_logs = create_initial_features(df_logs, rules_config) # Gọi hàm mới
     query_features_df = df_logs['query'].apply(extract_query_features).apply(pd.Series)
     df_logs = pd.concat([df_logs, query_features_df], axis=1).fillna(0)
@@ -143,6 +144,18 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     pipeline_path = os.path.join(MODELS_DIR, "preprocessing_pipeline.joblib")
     
     pipeline = build_preprocessing_pipeline()
+    missing_cols = [c for c in ['query_length','num_joins','num_where_conditions','hour_sin','hour_cos',
+                            'rows_returned','rows_affected','execution_time_ms'] if c not in df_logs.columns]
+    if missing_cols:
+        logging.warning(f"Thiếu cột trước khi pipeline: {missing_cols}")
+
+    # đảm bảo các cột numeric còn lại đúng kiểu số
+    for col in ['num_joins','num_where_conditions','hour_sin','hour_cos',
+                'rows_returned','rows_affected','execution_time_ms']:
+        if col in df_logs.columns:
+            df_logs[col] = pd.to_numeric(df_logs[col], errors='coerce').fillna(0)
+
+
     X_transformed = pipeline.fit_transform(df_logs) # Chạy trên df_logs đã được enrich
     
     semi_supervised_config = config_params.get("semi_supervised_params", {})
@@ -164,7 +177,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # 6) Áp dụng Rules
 
     logging.info("Bắt đầu áp dụng các luật (Rules)...")
-    rules_config = config_params.get("analysis_params", {}) # <<< THÊM LẠI DÒNG NÀY
+    rules_config = config_params or {}
 
     # <<< THÊM LẠI TOÀN BỘ KHỐI LẤY THAM SỐ NÀY >>>
     p_late_night_start_time = dt_time.fromisoformat(rules_config.get('p_late_night_start_time', '00:00:00'))
@@ -374,4 +387,3 @@ def load_model_and_scaler(path):
     except Exception as e:
         logging.error(f"Lỗi khi tải mô hình tại {path}: {e}")
         return None, None
-
