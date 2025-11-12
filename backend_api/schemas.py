@@ -1,13 +1,13 @@
 # backend_api/schemas.py
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Literal, Dict, Any
 
 # --- Schema cơ bản cho Anomaly ---
 # Chứa các trường chung mà cả khi tạo mới và khi đọc đều cần đến.
 class AnomalyBase(BaseModel):
     timestamp: datetime
-    user: str
+    user: Optional[str] = None
     client_ip: Optional[str] = None
     database: Optional[str] = None
     query: str
@@ -25,6 +25,22 @@ class Anomaly(AnomalyBase):
     # từ các thuộc tính của một đối tượng SQLAlchemy (chế độ ORM).
     class Config:
         from_attributes = True # Dành cho Pydantic v2. Nếu dùng Pydantic v1, hãy dùng `orm_mode = True`
+
+class UnifiedAnomaly(BaseModel):
+    id: str
+    source: Literal["event", "aggregate"]
+    anomaly_type: str
+    timestamp: Optional[datetime] = None
+    user: Optional[str] = None
+    database: Optional[str] = None
+    query: Optional[str] = None
+    reason: Optional[str] = None
+    score: Optional[float] = None
+    scope: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True  # Pydantic v2
 
 # --- Schema cho Yêu cầu Phân tích của LLM ---
 # Định nghĩa cấu trúc dữ liệu mà frontend PHẢI gửi lên khi yêu cầu phân tích.

@@ -3,6 +3,7 @@ import sys
 import os
 import logging
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
 
 # Thêm thư mục gốc vào path để import
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -17,16 +18,16 @@ PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
 # Thêm thư mục GỐC vào sys.path
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
-    
+
 try:
     # Import các thành phần CSDL từ 'backend_api'
-    # (Giả sử file models.py của bạn nằm ở backend_api/models.py)
-    from backend_api.models import Base, engine 
-    from config import DATABASE_URL # Import URL để xác nhận
+    from backend_api.models import Base, engine
+    from config import DATABASE_URL
 except ImportError as e:
-    print(f"Lỗi: Không thể import 'backend_api.models' hoặc 'config'.")
+    print("Lỗi: Không thể import 'backend_api.models' hoặc 'config'.")
     print(f"Lỗi chi tiết: {e}")
-    print("Hãy đảm bảo bạn chạy file này từ thư mục gốc (UBA-Platform) và file models.py của bạn đã định nghĩa 'Base' và 'engine' một cách chính xác.")
+    print("Hãy đảm bảo bạn chạy file này từ thư mục gốc (UBA-Platform) "
+          "và file models.py của bạn đã định nghĩa 'Base' và 'engine' chính xác.")
     sys.exit(1)
 
 logging.basicConfig(level=logging.INFO)
@@ -35,27 +36,52 @@ log = logging.getLogger("InitDB")
 log.info(f"Đang kết nối đến CSDL: {DATABASE_URL}")
 
 try:
-    # === THÊM BƯỚC DỌN DẸP ===
+    # ⚠️ CẢNH BÁO: Dòng này XÓA TOÀN BỘ CÁC BẢNG trong metadata.
+    # Chỉ dùng cho môi trường DEV/TEST.
     log.info("Đang dọn dẹp các bảng cũ (nếu có)...")
     Base.metadata.drop_all(bind=engine)
     log.info("Dọn dẹp hoàn tất.")
-    # ==========================
-    
-    log.info("Bắt đầu khởi tạo bảng...")
-    
-    # Đây chính là lệnh quan trọng:
-    # Nó sẽ đọc tất cả các class (như Anomaly) kế thừa từ 'Base'
-    # và tạo bảng tương ứng trong CSDL PostgreSQL.
+
+    log.info("Bắt đầu khởi tạo bảng từ SQLAlchemy models...")
     Base.metadata.create_all(bind=engine)
-    
+    log.info("Đã tạo xong các bảng từ models.")
+
+    # Tạo bảng aggregate_anomalies nếu chưa tồn tại
+    log.info("Đang đảm bảo bảng 'aggregate_anomalies' tồn tại...")
+
+    create_agg_table_sql = """
+    CREATE TABLE IF NOT EXISTS aggregate_anomalies (
+        id SERIAL PRIMARY KEY,
+        scope VARCHAR(50) NOT NULL,
+        "user" VARCHAR(255) NOT NULL,
+        start_time TIMESTAMP NOT NULL,
+        end_time TIMESTAMP NOT NULL,
+        anomaly_type VARCHAR(100) NOT NULL,
+        severity NUMERIC(5,2) NOT NULL,
+        reason TEXT NOT NULL,
+        details JSONB
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agg_anom_user_time
+        ON aggregate_anomalies ("user", start_time, end_time);
+
+    CREATE INDEX IF NOT EXISTS idx_agg_anom_type
+        ON aggregate_anomalies (anomaly_type);
+    """
+
+    with engine.begin() as conn:
+        conn.execute(text(create_agg_table_sql))
+
+    log.info("Bảng 'aggregate_anomalies' đã sẵn sàng trong CSDL.")
+
     log.info("-------------------------------------------------")
-    log.info("✅ Hoàn tất! Các bảng đã được tạo thành công trong CSDL PostgreSQL.")
-    log.info("Bạn bây giờ có thể chạy publisher và engine.")
+    log.info("✅ Hoàn tất! Schema CSDL đã được khởi tạo thành công.")
+    log.info("Bây giờ bạn có thể chạy publisher và engine.")
     log.info("-------------------------------------------------")
 
-except OperationalError as e:
-    log.error(f"LỖI KẾT NỐI: Không thể kết nối đến CSDL.")
-    log.error("Vui lòng kiểm tra lại chuỗi DATABASE_URL trong file .env hoặc config.py.")
-    log.error("Hãy đảm bảo CSDL PostgreSQL đang chạy và user/password là chính xác.")
+except OperationalError:
+    log.error("LỖI KẾT NỐI: Không thể kết nối đến CSDL.")
+    log.error("Vui lòng kiểm tra lại DATABASE_URL trong .env hoặc config.py,")
+    log.error("và đảm bảo PostgreSQL đang chạy, user/password chính xác.")
 except Exception as e:
     log.error(f"Lỗi nghiêm trọng khi khởi tạo CSDL: {e}")

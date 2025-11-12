@@ -86,13 +86,81 @@ def get_db():
 
 # === CÁC ENDPOINT LẤY DỮ LIỆU BẤT THƯỜNG (CHO FRONTEND) ===
 
-@app.get("/api/anomalies/", response_model=List[schemas.Anomaly], tags=["Anomalies"])
-def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+# @app.get("/api/anomalies/", response_model=List[schemas.Anomaly], tags=["Anomalies"])
+# def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+#     """
+#     Lấy ra một danh sách các bất thường, hỗ trợ phân trang (pagination).
+#     """
+#     anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
+#     return anomalies
+
+@app.get("/api/anomalies/",response_model=List[schemas.UnifiedAnomaly],tags=["Anomalies"])
+def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(get_db),api_key: str = Security(get_api_key)):
     """
-    Lấy ra một danh sách các bất thường, hỗ trợ phân trang (pagination).
+    Lấy danh sách tất cả bất thường (event-level + aggregate),
+    trả về ở dạng unified cho frontend.
     """
-    anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
-    return anomalies
+    # 1) Lấy event-level anomalies từ bảng anomalies
+    event_q = (
+        db.query(models.Anomaly)
+        .order_by(models.Anomaly.timestamp.desc())
+    )
+    event_rows = event_q.all()
+
+    unified: List[schemas.UnifiedAnomaly] = []
+
+    for a in event_rows:
+        unified.append(
+            schemas.UnifiedAnomaly(
+                id=f"event-{a.id}",
+                source="event",
+                anomaly_type=a.anomaly_type,
+                timestamp=a.timestamp,
+                user=a.user,
+                database=a.database,
+                query=a.query,
+                reason=a.reason,
+                score=a.score,
+                scope="log",
+                details=None,
+            )
+        )
+
+    # 2) Lấy aggregate anomalies (multi_table / session-level)
+    agg_q = (
+        db.query(models.AggregateAnomaly)
+        .order_by(
+            models.AggregateAnomaly.start_time.desc().nullslast(),
+            models.AggregateAnomaly.created_at.desc()
+        )
+    )
+    agg_rows = agg_q.all()
+
+    for a in agg_rows:
+        unified.append(
+            schemas.UnifiedAnomaly(
+                id=f"agg-{a.id}",
+                source="aggregate",
+                anomaly_type=a.anomaly_type,
+                timestamp=a.start_time or a.end_time or a.created_at,
+                user=a.user,
+                database=a.database,
+                query=None,
+                reason=a.reason,
+                score=a.severity,
+                scope=a.scope,
+                details=a.details,
+            )
+        )
+
+    # 3) Sort chung theo thời gian mới nhất
+    def sort_key(item: schemas.UnifiedAnomaly):
+        return item.timestamp or datetime.min
+
+    unified.sort(key=sort_key, reverse=True)
+
+    # 4) Áp dụng skip/limit ở unified list
+    return unified[skip : skip + limit]
 
 @app.get("/api/anomalies/{anomaly_id}", response_model=schemas.Anomaly, tags=["Anomalies"])
 def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
@@ -103,6 +171,34 @@ def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), api_key: 
     if anomaly is None:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return anomaly
+
+@app.get("/api/aggregate-anomalies/{agg_id}", response_model=schemas.UnifiedAnomaly, tags=["Anomalies"])
+def read_aggregate_anomaly_by_id(
+    agg_id: int,
+    db: Session = Depends(get_db),
+    api_key: str = Security(get_api_key)
+):
+    """
+    Lấy chi tiết một aggregate anomaly (ví dụ: multi_table session).
+    """
+    agg = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == agg_id).first()
+    if agg is None:
+        raise HTTPException(status_code=404, detail="Aggregate anomaly not found")
+
+    return schemas.UnifiedAnomaly(
+        id=f"agg-{agg.id}",
+        source="aggregate",
+        anomaly_type=agg.anomaly_type,
+        timestamp=agg.start_time or agg.end_time or agg.created_at,
+        user=agg.user,
+        database=agg.database,
+        query=None,
+        reason=agg.reason,
+        score=agg.severity,
+        scope=agg.scope,
+        details=agg.details,
+    )
+
 
 # === ENDPOINT PHÂN TÍCH LLM ===
 

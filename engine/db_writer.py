@@ -1,140 +1,534 @@
-# engine/db_writer.py
 import logging
-import pandas as pd
-from backend_api.models import Anomaly, SessionLocal
-import sys
 import os
+import sys
+from typing import Dict, Tuple, List, Any
+from datetime import datetime, date
+import pandas as pd
+from sqlalchemy.exc import SQLAlchemyError
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend_api.models import Anomaly, AllLogs, SessionLocal
+# Đảm bảo import backend_api khi chạy từ project root
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
 
-# Thiết lập logging riêng cho file này
-log = logging.getLogger("db_writer")
-log.setLevel(logging.INFO)
+from backend_api.models import SessionLocal, AllLogs, Anomaly, AggregateAnomaly  # type: ignore
+
+log = logging.getLogger("DBWriter")
 if not log.hasHandlers():
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [DBWriter] - %(message)s'))
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - [DBWriter] - %(message)s"
+    )
+    handler.setFormatter(formatter)
     log.addHandler(handler)
+log.setLevel(logging.INFO)
 
 
-def save_results_to_db(results: dict):
+# ========= HELPERS =========
+
+def _coerce_datetime(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, errors="coerce", utc=False)
+
+
+def _coerce_numeric(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce").fillna(0)
+
+
+def _normalize_all_logs(df_logs: pd.DataFrame) -> pd.DataFrame:
     """
-    NÂNG CẤP: Nhận dict kết quả từ data_processor và lưu vào CẢ HAI bảng:
-    1. 'all_logs' (mọi thứ)
-    2. 'anomalies' (chỉ các bất thường)
+    Chuẩn hóa cho bảng AllLogs:
+    - Mỗi record = 1 log event thật.
+    - Không tự tạo / nhân bản.
     """
+    df = df_logs.copy()
+
+    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
     
-    # Lấy các DataFrame từ kết quả
-    df_normal = results.get("normal_activities")
+    # Nếu là tz-aware -> convert về naive (giữ local time)
+    if hasattr(df['timestamp'].dtype, 'tz') and df['timestamp'].dt.tz is not None:
+        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
     
-    # Gom tất cả các DataFrame bất thường lại
-    df_anomalies_list = []
-    for key, df in results.items():
-        if "anomalies_" in key and isinstance(df, pd.DataFrame) and not df.empty:
-            # Gán 'anomaly_type' cho từng DataFrame
-            anomaly_type_name = key.replace("anomalies_", "")
-            df['anomaly_type'] = anomaly_type_name
-            df_anomalies_list.append(df)
+    df = df[df['timestamp'].notna()].copy()  # vì AllLogs.timestamp NOT NULL
+
+    for col in ['user', 'client_ip', 'database', 'query']:
+        if col not in df.columns:
+            df[col] = None
+
+    df['query'] = df['query'].astype(str)
+
+    for col, default in [
+        ('execution_time_ms', 0.0),
+        ('rows_returned', 0),
+        ('rows_affected', 0),
+    ]:
+        if col not in df.columns:
+            df[col] = default
+        else:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(default)
+
+    if 'is_anomaly' not in df.columns:
+        df['is_anomaly'] = False
+    if 'analysis_type' not in df.columns:
+        df['analysis_type'] = None
+
+    valid_cols = set(AllLogs.__table__.columns.keys())
+    df = df[[c for c in df.columns if c in valid_cols]]
+    return df
+
+
+# def _collect_anomaly_frames(results: Dict[str, Any]) -> List[pd.DataFrame]:
+#     frames: List[pd.DataFrame] = []
+#     for key, value in results.items():
+#         if key.startswith("anomalies_") and isinstance(value, pd.DataFrame) and not value.empty:
+#             anomaly_type = key.replace("anomalies_", "") or "unknown"
+#             df = value.copy()
+#             df["anomaly_type"] = anomaly_type
+#             frames.append(df)
+#     return frames
+
+
+# def _normalize_anomalies_only_from_all_logs(
+#     frames: List[pd.DataFrame],
+#     df_all_logs_norm: pd.DataFrame,
+# ) -> pd.DataFrame:
+#     """
+#     Chuẩn hóa anomalies_* thành bảng Anomaly theo ĐÚNG yêu cầu:
+
+#     - Chỉ giữ anomaly là LOG có thật trong all_logs.
+#     - Tức là: anomaly phải map được tới ít nhất 1 dòng trong df_all_logs_norm
+#       theo các cột join chung (timestamp/user/database/query).
+#     - Những dòng aggregate (multi_table, session profile...) không map được
+#       => không insert vào Anomaly (nếu muốn giữ, sau này làm bảng khác).
+#     """
+#     if not frames:
+#         return pd.DataFrame()
+
+#     raw = pd.concat(frames, ignore_index=True).copy()
+
+#     # Chuẩn core columns
+#     for col in ("timestamp", "user", "client_ip", "database", "query", "anomaly_type"):
+#         if col not in raw.columns:
+#             if col == "anomaly_type":
+#                 continue
+#             raw[col] = None
+
+#     # Chuẩn timestamp từ nhiều nguồn
+#     raw["timestamp"] = _coerce_datetime(raw["timestamp"])
+#     for alt in ("session_start", "start_time", "first_seen", "first_timestamp"):
+#         if alt in raw.columns:
+#             alt_ts = _coerce_datetime(raw[alt])
+#             mask = raw["timestamp"].isna() & alt_ts.notna()
+#             if mask.any():
+#                 raw.loc[mask, "timestamp"] = alt_ts[mask]
+
+#     # Chuẩn text NaN -> None
+#     for col in ("user", "client_ip", "database", "query", "anomaly_type"):
+#         if col in raw.columns:
+#             raw[col] = raw[col].where(raw[col].notna(), None)
+
+#     # ----- Reason -----
+#     reason_candidates = [
+#         "reason",
+#         "violation_reason",
+#         "unusual_activity_reason",
+#         "deviation_reasons",
+#         "rule_reason",
+#         "explanation",
+#         "detail",
+#     ]
+#     if "reason" not in raw.columns:
+#         raw["reason"] = pd.NA
+
+#     if raw["reason"].isna().all():
+#         for col in reason_candidates:
+#             if col in raw.columns:
+#                 mask = raw[col].notna()
+#                 if mask.any():
+#                     raw.loc[mask, "reason"] = raw.loc[mask, col].astype(str)
+#                     break
+#     raw["reason"] = raw["reason"].where(raw["reason"].notna(), None)
+
+#     # ----- Score -----
+#     score_candidates = ["score", "anomaly_score", "deviation_score", "risk_score", "confidence"]
+#     if "score" not in raw.columns:
+#         raw["score"] = pd.NA
+
+#     if raw["score"].isna().all():
+#         for col in score_candidates:
+#             if col in raw.columns and raw[col].notna().any():
+#                 raw["score"] = _coerce_numeric(raw[col])
+#                 break
+#     raw["score"] = raw["score"].where(pd.notna(raw["score"]), None)
+
+#     # ----- Status -----
+#     if "status" not in raw.columns:
+#         raw["status"] = "new"
+#     raw["status"] = raw["status"].where(raw["status"].notna(), "new")
+
+#     # Perf fields
+#     for col in ("execution_time_ms", "rows_returned", "rows_affected"):
+#         if col in raw.columns:
+#             raw[col] = _coerce_numeric(raw[col])
+#         else:
+#             raw[col] = 0
+
+#     # Map chỉ những record map được vào all_logs
+
+#     # Các cột dùng làm key join (tùy theo cái nào tồn tại)
+#     join_cols = [c for c in ["timestamp", "user", "database", "query"]
+#                  if c in df_all_logs_norm.columns and c in raw.columns]
+
+#     if not join_cols:
+#         # Không join được, fallback: bỏ những record không có timestamp hoặc query
+#         mask_valid = raw["timestamp"].notna() & raw["query"].notna()
+#         dropped = len(raw) - mask_valid.sum()
+#         if dropped > 0:
+#             log.info(f"[DBWriter] Bỏ {dropped} anomaly vì không map được với all_logs.")
+#         filtered = raw[mask_valid].copy()
+#     else:
+#         # Tạo key set cho all_logs
+#         keys_all = set(
+#             tuple(row[c] for c in join_cols)
+#             for _, row in df_all_logs_norm.iterrows()
+#         )
+
+#         def is_from_all_logs(row) -> bool:
+#             key = tuple(row[c] for c in join_cols)
+#             return key in keys_all
+
+#         mask = raw.apply(is_from_all_logs, axis=1)
+#         dropped = len(raw) - mask.sum()
+#         if dropped > 0:
+#             log.info(
+#                 f"[DBWriter] Bỏ {dropped} anomaly (aggregate/không khớp all_logs). "
+#                 f"Giữ {mask.sum()} anomaly là log thật."
+#             )
+#         filtered = raw[mask].copy()
+
+#     if filtered.empty:
+#         return filtered
+
+#     # Đảm bảo không còn NaT bị stringify
+#     filtered["timestamp"] = filtered["timestamp"].astype("object")
+#     filtered.loc[pd.isna(filtered["timestamp"]), "timestamp"] = None
+
+#     # Giữ đúng cột model
+#     valid_cols = set(Anomaly.__table__.columns.keys())
+#     keep = [c for c in filtered.columns if c in valid_cols]
+#     filtered = filtered[keep]
+
+#     # Dedup tránh spam do retry
+#     dedup_keys = [c for c in [
+#         "timestamp", "user", "client_ip", "database",
+#         "query", "anomaly_type", "reason", "score"
+#     ] if c in filtered.columns]
+#     if dedup_keys:
+#         before = len(filtered)
+#         filtered = filtered.drop_duplicates(subset=dedup_keys)
+#         if len(filtered) < before:
+#             log.info(f"[DBWriter] Bỏ {before - len(filtered)} anomaly trùng lặp hoàn toàn.")
+
+#     return filtered
+
+
+# def _mark_anomalies_in_all_logs(df_all: pd.DataFrame, df_anom: pd.DataFrame) -> pd.DataFrame:
+#     """
+#     Đánh dấu is_anomaly=True cho những log xuất hiện trong bảng anomalies.
+#     """
+#     if df_all.empty or df_anom.empty:
+#         return df_all
+
+#     df = df_all.copy()
+#     join_cols = [c for c in ["timestamp", "user", "database", "query"]
+#                  if c in df.columns and c in df_anom.columns]
+#     if not join_cols:
+#         return df
+
+#     anom_keys = set(
+#         tuple(row[c] for c in join_cols)
+#         for _, row in df_anom.iterrows()
+#     )
+
+#     def is_anom(row) -> bool:
+#         key = tuple(row[c] for c in join_cols)
+#         return key in anom_keys
+
+#     df["is_anomaly"] = df.apply(is_anom, axis=1) | df.get("is_anomaly", False)
+#     return df
+
+
+# ========= MAIN =========
+
+def save_results_to_db(results: Dict[str, Any]) -> Tuple[int, int, int]:
+    df_all = results.get("all_logs")
+    if not isinstance(df_all, pd.DataFrame) or df_all.empty:
+        log.error("Không có all_logs hợp lệ.")
+        return 0, 0, 0
+
+    df_all_norm = _normalize_all_logs(df_all)
+
+    # Event anomalies từ các rule log-level
+    df_event_anoms = _build_event_anomalies(results, df_all_norm)
+
+    # Multi-table: tách event + aggregate
+    df_mt_events, mt_agg_rows = _build_multi_table_anomalies(results, df_all_norm)
+
+    # Gộp tất cả event-level anomalies
+    df_all_anoms = pd.concat(
+        [df_event_anoms, df_mt_events],
+        ignore_index=True
+    ) if (not df_event_anoms.empty or not df_mt_events.empty) else pd.DataFrame()
+
+    # Đánh dấu is_anomaly trong all_logs
+    if not df_all_anoms.empty:
+        join_cols = ["timestamp", "user", "database", "query"]
+        join_cols = [c for c in join_cols if c in df_all_norm.columns and c in df_all_anoms.columns]
+
+        anom_keys = set(
+            tuple(row[c] for c in join_cols)
+            for _, row in df_all_anoms.iterrows()
+        )
+
+        def is_anom(row):
+            return tuple(row[c] for c in join_cols) in anom_keys
+
+        df_all_norm["is_anomaly"] = df_all_norm.apply(is_anom, axis=1)
 
     db = SessionLocal()
-    records_saved_logs = 0
-    records_saved_anomalies = 0
-    
+    logs_count = anoms_count = agg_count = 0
+
     try:
-        # === 1. Xử lý Bảng 'all_logs' ===
-        log_records_to_insert = []
-        
-        # Thêm các log BÌNH THƯỜNG
-        if df_normal is not None and not df_normal.empty:
-            df_normal['is_anomaly'] = False
-            df_normal['analysis_type'] = df_normal['analysis_type'].fillna('Normal')
-            df_normal['rows_returned'] = df_normal.get('rows_returned', 0).fillna(0).astype(int)
-            df_normal['rows_affected'] = df_normal.get('rows_affected', 0).fillna(0).astype(int)
-            log_records_to_insert.extend(df_normal.to_dict('records'))
-            
-        # Thêm các log BẤT THƯỜNG
-        if df_anomalies_list:
-            df_all_anomalies = pd.concat(df_anomalies_list, ignore_index=True)
-            df_all_anomalies['is_anomaly'] = True
-            
-            df_all_anomalies['rows_returned'] = df_all_anomalies.get('rows_returned', 0).fillna(0).astype(int)
-            df_all_anomalies['rows_affected'] = df_all_anomalies.get('rows_affected', 0).fillna(0).astype(int)
-            
-            # Xử lý các cột không nhất quán (ví dụ: multi_table có 'start_time')
-            if 'start_time' in df_all_anomalies.columns:
-                # 1. Nếu cột 'timestamp' KHÔNG TỒN TẠI...
-                if 'timestamp' not in df_all_anomalies.columns:
-                    # ...hãy TẠO NÓ từ cột 'start_time'.
-                    df_all_anomalies['timestamp'] = df_all_anomalies['start_time']
-                else:
-                    # 2. Nếu nó TỒN TẠI, thì mới fillna (điền giá trị thiếu)
-                    df_all_anomalies['timestamp'] = df_all_anomalies['timestamp'].fillna(df_all_anomalies['start_time'])
-            
-            log_records_to_insert.extend(df_all_anomalies.to_dict('records'))
+        # insert all_logs
+        all_log_records = df_all_norm.where(pd.notna(df_all_norm), None).to_dict("records")
+        db.bulk_insert_mappings(AllLogs, all_log_records)
+        logs_count = len(all_log_records)
 
-        # Sử dụng bulk_insert_mappings để chèn hiệu suất cao
-        if log_records_to_insert:
-            # Chỉ giữ lại các cột có trong model AllLogs để tránh lỗi
-            valid_cols = AllLogs.__table__.columns.keys()
-            clean_log_records = [
-                {k: v for k, v in rec.items() if k in valid_cols}
-                for rec in log_records_to_insert
-            ]
-            
-            db.bulk_insert_mappings(AllLogs, clean_log_records)
-            records_saved_logs = len(clean_log_records)
+        # insert anomalies (event-level)
+        if not df_all_anoms.empty:
+            anoms_records = df_all_anoms.where(pd.notna(df_all_anoms), None).to_dict("records")
+            db.bulk_insert_mappings(Anomaly, anoms_records)
+            anoms_count = len(anoms_records)
 
-        # === 2. Xử lý Bảng 'anomalies' (Như cũ, nhưng hiệu quả hơn) ===
-        anomaly_records_to_insert = []
-        if df_anomalies_list:
-            # df_all_anomalies đã được tạo ở trên
-            # Đảm bảo các cột tồn tại trước khi cố gắng kết hợp
-            # Sử dụng pd.Series để tạo cột nếu nó thiếu, điền bằng pd.NA
-            reason_col_a = df_all_anomalies.get('unusual_activity_reason', pd.Series(pd.NA, index=df_all_anomalies.index))
-            reason_col_b = df_all_anomalies.get('deviation_reasons', pd.Series(pd.NA, index=df_all_anomalies.index))
-            
-            # Sử dụng combine_first để điền giá trị từ cột thứ hai vào NA của cột thứ nhất
-            df_all_anomalies['reason'] = reason_col_a.combine_first(reason_col_b)
-                    
-            score_col_a = df_all_anomalies.get('anomaly_score', pd.Series(pd.NA, index=df_all_anomalies.index))
-            score_col_b = df_all_anomalies.get('deviation_score', pd.Series(pd.NA, index=df_all_anomalies.index))
+        # insert aggregate anomalies
+        if mt_agg_rows:
+            db.bulk_insert_mappings(AggregateAnomaly, mt_agg_rows)
+            agg_count = len(mt_agg_rows)
 
-            # df_all_anomalies['score'] = score_col_a.combine_first(score_col_b)
-            
-            # # Chuẩn hóa các cột 'reason' và 'score'
-            # df_all_anomalies['reason'] = df_all_anomalies.get('violation_reason', pd.NA) \
-            #     .fillna(df_all_anomalies.get('unusual_activity_reason', pd.NA)) \
-            #     .fillna(df_all_anomalies.get('reasons', pd.NA))
-                
-            # df_all_anomalies['score'] = df_all_anomalies.get('anomaly_score', pd.NA) \
-            #     .fillna(df_all_anomalies.get('deviation_score', pd.NA))
-            
-            df_all_anomalies['query'] = df_all_anomalies['query'].fillna(
-                "Session-based anomaly: " + df_all_anomalies['anomaly_type']
-            )
-            
-            anomaly_records_to_insert = df_all_anomalies.to_dict('records')
-
-        if anomaly_records_to_insert:
-            # Chỉ giữ lại các cột có trong model Anomaly
-            valid_cols = Anomaly.__table__.columns.keys()
-            clean_anomaly_records = [
-                {k: v for k, v in rec.items() if k in valid_cols}
-                for rec in anomaly_records_to_insert
-            ]
-            
-            db.bulk_insert_mappings(Anomaly, clean_anomaly_records)
-            records_saved_anomalies = len(clean_anomaly_records)
-
-        # Commit CẢ HAI bảng cùng lúc
-        if records_saved_logs > 0 or records_saved_anomalies > 0:
-            db.commit()
-            log.info(f"Lưu CSDL thành công: {records_saved_logs} bản ghi 'all_logs', "
-                     f"{records_saved_anomalies} bản ghi 'anomalies'.")
-            
+        db.commit()
+        log.info(
+            f"Lưu OK: {logs_count} all_logs, {anoms_count} anomalies, {agg_count} aggregate_anomalies."
+        )
     except Exception as e:
-        log.error(f"Lỗi khi lưu vào CSDL (bulk insert): {e}", exc_info=True)
         db.rollback()
-        raise # Ném lỗi ra ngoài để realtime_engine biết và KHÔNG ACK tin nhắn
+        log.error(f"Lỗi khi lưu: {e}", exc_info=True)
+        raise
     finally:
         db.close()
+
+    return logs_count, anoms_count, agg_count
+
+
+def _build_event_anomalies(results: Dict[str, Any],
+                           df_all_logs: pd.DataFrame) -> pd.DataFrame:
+    """Gom các anomalies_* log-level thành DataFrame cho bảng Anomaly."""
+    frames = []
+    for key, value in results.items():
+        if not key.startswith("anomalies_"):
+            continue
+        if key == "anomalies_multi_table":
+            continue  # xử lý riêng
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            df = value.copy()
+            df["anomaly_type"] = key.replace("anomalies_", "")
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
+
+    df = pd.concat(frames, ignore_index=True)
+
+    # Chuẩn hóa core fields
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df[df["timestamp"].notna()]  # vì Anomaly.timestamp NOT NULL
+
+    df["query"] = df["query"].astype(str)
+    df = df[df["query"].notna() & (df["query"] != "")]
+
+    for col in ["user", "client_ip", "database"]:
+        if col not in df.columns:
+            df[col] = None
+
+    # Reason / score nếu có
+    if "reason" not in df.columns:
+        df["reason"] = None
+    if "score" not in df.columns:
+        df["score"] = None
+
+    if "status" not in df.columns:
+        df["status"] = "new"
+
+    for col in ("execution_time_ms", "rows_returned", "rows_affected"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        else:
+            df[col] = 0
+
+    # Chỉ giữ anomaly là subset của all_logs
+    join_cols = [c for c in ["timestamp", "user", "database", "query"]
+                 if c in df_all_logs.columns and c in df.columns]
+
+    if join_cols:
+        keys_all = set(
+            tuple(row[c] for c in join_cols)
+            for _, row in df_all_logs.iterrows()
+        )
+
+        def is_in_all_logs(row):
+            return tuple(row[c] for c in join_cols) in keys_all
+
+        mask = df.apply(is_in_all_logs, axis=1)
+        dropped = len(df) - mask.sum()
+        if dropped > 0:
+            log.info(f"[DBWriter] Bỏ {dropped} anomaly không khớp all_logs.")
+        df = df[mask].copy()
+
+    valid_cols = set(Anomaly.__table__.columns.keys())
+    df = df[[c for c in df.columns if c in valid_cols]]
+
+    df = df.drop_duplicates(
+        subset=["timestamp", "user", "database", "query", "anomaly_type", "reason", "score"]
+    )
+    return df
+
+
+def _strip_tz(ts):
+    """Đưa pandas.Timestamp hoặc datetime về naive datetime (không timezone)."""
+    if isinstance(ts, pd.Timestamp):
+        # Nếu có tz thì bỏ, sau đó convert sang datetime thường
+        if ts.tzinfo is not None:
+            ts = ts.tz_localize(None)
+        return ts.to_pydatetime()
+    if isinstance(ts, datetime):
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        return ts
+    return ts
+
+def _to_serializable(obj):
+    """
+    Đảm bảo object đưa vào JSON (cột details) không chứa kiểu lạ như Timestamp.
+    - datetime / Timestamp -> isoformat string
+    - list / dict -> đệ quy
+    - cái khác giữ nguyên
+    """
+    if isinstance(obj, pd.Timestamp):
+        if obj.tzinfo is not None:
+            obj = obj.tz_localize(None)
+        return obj.isoformat()
+    if isinstance(obj, (datetime, date)):
+        if getattr(obj, "tzinfo", None) is not None:
+            obj = obj.replace(tzinfo=None)
+        return obj.isoformat()
+    if isinstance(obj, list):
+        return [_to_serializable(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _to_serializable(v) for k, v in obj.items()}
+    return obj
+
+
+def _build_multi_table_anomalies(results: Dict[str, Any],
+                                 df_all_logs: pd.DataFrame):
+    """
+    Từ anomalies_multi_table:
+    - Tạo event-level anomalies (Anomaly) cho từng query trong session.
+    - Tạo AggregateAnomaly cho toàn session (details là JSON-safe).
+    """
+    df = results.get("anomalies_multi_table")
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(), []
+
+    event_rows = []
+    agg_rows = []
+
+    for _, row in df.iterrows():
+        user = row.get("user")
+
+        start_time = pd.to_datetime(row.get("start_time"), errors="coerce")
+        end_time = pd.to_datetime(row.get("end_time"), errors="coerce")
+        start_time = _strip_tz(start_time) if start_time is not pd.NaT else None
+        end_time = _strip_tz(end_time) if end_time is not pd.NaT else None
+
+        distinct_count = int(row.get("distinct_tables_count", 0))
+
+        # Có thể là list hoặc NaN
+        tables = row.get("tables_accessed_in_session") or []
+        queries_details = row.get("queries_details") or []
+
+        # Đảm bảo details không còn Timestamp
+        details = {
+            "tables": _to_serializable(tables),
+            "queries": _to_serializable(queries_details),
+        }
+
+        # -------- Aggregate anomaly (session-level) --------
+        reason = (
+            f"User {user} truy cập {distinct_count} bảng khác nhau "
+            f"từ {start_time} đến {end_time}."
+        )
+
+        agg_rows.append({
+            "scope": "session",
+            "user": user,
+            "database": None,
+            "start_time": start_time,
+            "end_time": end_time,
+            "anomaly_type": "multi_table",
+            "severity": float(distinct_count),
+            "reason": reason,
+            "details": details,  # JSON-safe
+        })
+
+        # -------- Event-level anomalies cho từng query --------
+        for q in queries_details:
+            # mỗi q là dict: {timestamp, query, tables_touched, ...}
+            ts = pd.to_datetime(q.get("timestamp"), errors="coerce")
+            ts = _strip_tz(ts)
+            qtext = q.get("query")
+
+            if not ts or pd.isna(ts) or not qtext:
+                continue
+
+            # tìm thông tin chi tiết trong all_logs (đã normalize)
+            match = df_all_logs[
+                (df_all_logs["timestamp"] == ts) &
+                (df_all_logs["user"] == user) &
+                (df_all_logs["query"] == qtext)
+            ]
+
+            if not match.empty:
+                m = match.iloc[0]
+                event_rows.append({
+                    "timestamp": ts,
+                    "user": user,
+                    "client_ip": m.get("client_ip"),
+                    "database": m.get("database"),
+                    "query": qtext,
+                    "anomaly_type": "multi_table",
+                    "score": None,
+                    "reason": reason,
+                    "status": "new",
+                    "execution_time_ms": m.get("execution_time_ms", 0),
+                    "rows_returned": m.get("rows_returned", 0),
+                    "rows_affected": m.get("rows_affected", 0),
+                })
+
+    # DataFrame cho bảng Anomaly (event-level từ multi_table)
+    df_events = pd.DataFrame(event_rows) if event_rows else pd.DataFrame()
+    if not df_events.empty:
+        valid_cols = set(Anomaly.__table__.columns.keys())
+        df_events = df_events[[c for c in df_events.columns if c in valid_cols]]
+
+    # agg_rows là list[dict] JSON-safe dùng cho AggregateAnomaly
+    return df_events, agg_rows
+
+
