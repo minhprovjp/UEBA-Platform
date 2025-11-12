@@ -350,9 +350,11 @@ def _build_event_anomalies(results: Dict[str, Any],
     # Chuẩn hóa core fields
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df = df[df["timestamp"].notna()]  # vì Anomaly.timestamp NOT NULL
+    df["timestamp"] = df["timestamp"].apply(_strip_tz)
 
     df["query"] = df["query"].astype(str)
-    df = df[df["query"].notna() & (df["query"] != "")]
+    # df = df[df["query"].notna() & (df["query"] != "")]
+    df["query"] = df["query"].str.strip().str.replace(r"\s+", " ", regex=True)
 
     for col in ["user", "client_ip", "database"]:
         if col not in df.columns:

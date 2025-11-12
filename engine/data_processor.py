@@ -138,6 +138,14 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs = create_initial_features(df_logs, rules_config) # Gọi hàm mới
     query_features_df = df_logs['query'].apply(extract_query_features).apply(pd.Series)
     df_logs = pd.concat([df_logs, query_features_df], axis=1).fillna(0)
+    
+    # Đảm bảo cột categorical tồn tại và có kiểu chuỗi
+    for col in ['user', 'client_ip', 'database', 'source_dbms']:
+        if col not in df_logs.columns:
+            df_logs[col] = 'Unknown'
+        else:
+            df_logs[col] = df_logs[col].fillna('Unknown').astype(str)
+
 
     # 3) CHẠY PIPELINE SEMI-SUPERVISED
     logging.info("Bắt đầu pipeline Semi-Supervised ML...")
@@ -355,6 +363,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # 8) Kết quả
     results = {
         "all_logs": df_logs,
+        "anomalies_ml": anomalies_ml, 
         "anomalies_late_night": anomalies_late_night,
         "anomalies_dump": anomalies_large_dump,
         "anomalies_multi_table": anomalies_multiple_tables_df,

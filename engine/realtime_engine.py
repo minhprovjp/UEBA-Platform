@@ -3,15 +3,13 @@ import os, json, logging, sys
 import time
 import pandas as pd
 from redis import Redis, ResponseError
-from data_processor import load_and_process_data
-from email_alert import send_email_alert
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import *
-from engine.config_manager import load_config
 
-# Import hàm lưu CSDL từ file mới
-from engine.db_writer import save_results_to_db 
+from engine.config_manager import load_config
+from engine.data_processor import load_and_process_data
+from engine.db_writer import save_results_to_db
+from email_alert import send_email_alert
+from config import *
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [RealtimeEngine] - %(message)s")
 
