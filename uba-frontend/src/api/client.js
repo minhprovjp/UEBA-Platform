@@ -1,10 +1,16 @@
 // src/api/client.js
 import axios from 'axios';
 
-const API_URL = "http://localhost:8000"; // API backend của bạn
-const API_KEY = "default_secret_key_change_me"; // API Key của bạn
+const baseURL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 export const apiClient = axios.create({
-  baseURL: API_URL,
-  headers: { 'X-API-Key': API_KEY }
+  baseURL,
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': import.meta.env.VITE_API_KEY || '',
+  },
+  timeout: 30000,
 });
+
+export const cleanParams = (obj = {}) =>
+  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== ''));

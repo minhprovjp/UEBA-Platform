@@ -52,7 +52,7 @@ export default function App() {
       </nav>
 
       {/* 2. Vùng nội dung chính (sử dụng Routes) */}
-      <main className="flex-1 p-6 overflow-auto">
+      <main className="flex-1 p-6 overflow-hidden">
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/logs" element={<LogExplorer />} />
