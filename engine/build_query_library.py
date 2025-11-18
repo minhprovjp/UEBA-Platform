@@ -1,190 +1,216 @@
-# build_query_library.py (VERSION 3.0 - Self-Validating)
+# build_query_library.py
+#
+# PHIÊN BẢN NÂNG CẤP:
+#   - Thiết kế lại hoàn toàn để sử dụng LLM Text-to-SQL (duckdb-nsql/sqlcoder)
+#   - Sử dụng System Prompt chứa Schema (lược đồ) theo tài liệu [cite: 31-41]
+#   - Sử dụng User Prompt là các câu hỏi ngôn ngữ tự nhiên (thay vì "nhiệm vụ")
+#   - Lặp lại câu hỏi để tạo sự đa dạng
+#   - Vẫn giữ bộ lọc "rác" (garbage filter) và "biên dịch chéo" (transpiler) sqlglot
+
 import ollama
 import json
 import os
 import logging
 import sys
-import yaml
-import random
-import mysql.connector
-from typing import List, Dict
+import re
+from sqlglot import transpile, errors as sqlglot_errors
 
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [QueryBuilder] - %(message)s")
+# === CẤU HÌNH LOGGING (CHO PHÉP DEBUG) ===
+LOG_LEVEL_STR = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)
+logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(levelname)s - [QueryBuilder] - %(message)s")
 log = logging.getLogger("QueryBuilder")
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Thêm thư mục gốc để import
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
-    from config_manager import load_config
+    from engine.config_manager import load_config
+    from config import ENGINE_DIR 
 except ImportError:
-    log.error("Không thể import config_manager. Đảm bảo file tồn tại.")
-    sys.exit(1)
+    log.error("Không thể import config_manager hoặc ENGINE_DIR.")
+    ENGINE_DIR = os.path.dirname(os.path.abspath(__file__)) # Fallback
 
-engine_config = load_config()
-llm_config = engine_config.get("llm_config", {})
-OLLAMA_HOST = llm_config.get("ollama_host", "http://192.168.2.239:11434")
-OLLAMA_MODEL = llm_config.get("ollama_model", "sqlcoder")
+# === TẢI CẤU HÌNH OLLAMA TỪ engine_config.json ===
+engine_config = load_config() 
+llm_config = engine_config.get("llm_config", {}) 
+OLLAMA_HOST = "http://100.92.147.73:11434"
+OLLAMA_MODEL = "codellama:13b" # <-- Sử dụng model mới của bạn
+OLLAMA_TIMEOUT = 30
 
-PERSONAS_CONFIG_PATH = "engine/personas.yaml"
-OUTPUT_PATH = "engine/query_library.json"
-NUM_VARIATIONS = 7
+# === SỐ LƯỢNG BIẾN THỂ (VARIATIONS) MONG MUỐN CHO MỖI CÂU HỎI ===
+NUM_VARIATIONS_PER_QUESTION = 5
 
-SYSTEM_PROMPT = """You are a MySQL expert. Respond ONLY with raw, valid MySQL queries based on the provided schema and task.
-- NEVER add explanations, comments, or markdown formatting.
-- Each query must be on a single line and end with a semicolon ';'.
-- Use %s for variable values.
-"""
+log.info(f"Connecting to Ollama host: {OLLAMA_HOST} (model: {OLLAMA_MODEL}, timeout: {OLLAMA_TIMEOUT}s)")
 
-# ==============================================================================
-# OLLAMA CLIENT INITIALIZATION
-# ==============================================================================
 try:
-    log.info(f"Connecting to Ollama host: {OLLAMA_HOST} (model: {OLLAMA_MODEL})")
-    client = ollama.Client(host=OLLAMA_HOST)
+    client = ollama.Client(host=OLLAMA_HOST, timeout=OLLAMA_TIMEOUT)
     client.list() 
     log.info("Ollama connection successful.")
 except Exception as e:
-    log.critical(f"Fatal: Could not connect to Ollama at {OLLAMA_HOST}.")
-    log.critical(f"Please ensure Ollama is running and accessible.")
-    log.critical(f"Error details: {e}")
+    log.error(f"FATAL: Could not connect to Ollama at {OLLAMA_HOST}.")
+    log.error(f"Details: {e}")
     sys.exit(1)
 
-# ==============================================================================
-# SQL VALIDATOR CLASS
-# ==============================================================================
-class SQLValidator:
-    """Connects to the DB to validate generated SQL queries."""
-    def __init__(self):
-        self.conn = None
-        try:
-            self.conn = mysql.connector.connect(
-                host=os.getenv("SANDBOX_DB_HOST", "localhost"),
-                port=os.getenv("SANDBOX_DB_PORT", "3306"),
-                user="root",
-                password="root"
-            )
-            log.info("SQL Validator connected to MySQL successfully.")
-        except mysql.connector.Error as err:
-            log.critical(f"SQL Validator failed to connect: {err}")
-            log.critical("Please provide root credentials in your .env file (MYSQL_ROOT_PASSWORD).")
-            sys.exit(1)
+# === BƯỚC 1: ĐỊNH NGHĨA SCHEMA (LƯỢC ĐỒ) ===
+# (Đây là "bản đồ" mà LLM sẽ đọc, giống hệt tài liệu [cite: 31-38])
+SANDBOX_SCHEMA = """
+CREATE TABLE customers (
+    id INT PRIMARY KEY, 
+    name VARCHAR(100), 
+    email VARCHAR(100)
+);
+CREATE TABLE orders (
+    id INT PRIMARY KEY, 
+    customer_id INT, 
+    status VARCHAR(50)
+);
+CREATE TABLE products (
+    sku VARCHAR(50) PRIMARY KEY, 
+    name VARCHAR(100)
+);
+CREATE TABLE employees (
+    id INT PRIMARY KEY, 
+    name VARCHAR(100), 
+    position VARCHAR(100)
+);
+CREATE TABLE salaries (
+    id INT PRIMARY KEY, 
+    employee_id INT, 
+    salary FLOAT
+);
+CREATE TABLE mysql.user (
+    User VARCHAR(100),
+    Host VARCHAR(100),
+    Password_hash TEXT
+);
+"""
 
-    def is_valid(self, query: str, db_context: str) -> bool:
-        """Checks if a query is syntactically valid by running EXPLAIN or a transaction."""
-        if not self.conn:
-            return False
-        
-        cursor = self.conn.cursor()
-        is_valid = False
-        
-        # Replace python placeholders with dummy values for validation
-        test_query = query.replace("%s", "1")
-        
-        try:
-            cursor.execute(f"USE {db_context};")
-            
-            # Use EXPLAIN for SELECT/SHOW, Transaction for others
-            if test_query.strip().upper().startswith(('SELECT', 'SHOW')):
-                cursor.execute(f"EXPLAIN {test_query}")
-            else:
-                cursor.execute("START TRANSACTION;")
-                cursor.execute(test_query)
-                cursor.execute("ROLLBACK;")
-            is_valid = True
-        except mysql.connector.Error:
-            # Any error during this process means the query is invalid
-            is_valid = False
-        finally:
-            cursor.close()
-            
-        return is_valid
+# === BƯỚC 2: TẠO SYSTEM PROMPT (THEO TÀI LIỆU) ===
+SYSTEM_PROMPT = f"""
+Here is the database schema that the MYSQL query will run on:
+{SANDBOX_SCHEMA}
+Respond with ONLY the raw MYSQL query. Do not add any explanations or markdown.
+"""
 
-    def close(self):
-        if self.conn and self.conn.is_connected():
-            self.conn.close()
-            log.info("SQL Validator disconnected.")
+# === BƯỚC 3: ĐỊNH NGHĨA CÁC CÂU HỎI (QUESTIONS) ===
+# (Đây là các user prompt,)
+PERSONA_QUESTIONS = {
+    "Sales_Normal": [
+        "Get the 5 most recent orders for customer %s",
+        "Add a new order for customer %s with status 'Pending'",
+        "Update order %s to be 'Shipped'",
+        "Find the customer named 'John Smith'",
+        "List 10 products",
+        "Show me customer %s and all their orders"
+    ],
+    "HR_Normal": [
+        "Find employee profile for employee %s",
+        "Show the salary for employee %s",
+        "Insert a new employee named 'Jane Doe' in 'Sales'",
+        "Count all employees in the 'Engineering' department"
+    ],
+    "ITAdmin_Normal": [
+        "Run ANALYZE TABLE on 'orders'",
+        "Run OPTIMIZE TABLE on 'customers'",
+        "Show the top 5 users from the 'mysql.user' table",
+        "Show all active database processes"
+    ],
+    "Insider_DataLeak": [
+        "Get ALL data from the 'customers' table",
+        "Select everything from the 'salaries' table where 1=1",
+        "Dump all 'products' to an outfile '/tmp/products.csv'",
+        "Show me all employees and their salaries together in one table",
+        "Select all customer names and all their emails"
+    ],
+    "Insider_Sabotage": [
+        "Delete all records from the 'orders' table immediately",
+        "Update all employee 'salaries' to 0",
+        "DROP the 'customers' table now",
+        "Delete the employee with id %s"
+    ],
+    "Insider_PrivEsc": [
+        "Create a new user named 'shadow_admin' with password '123'",
+        "GRANT all privileges on all tables to 'shadow_admin'",
+        "Create a function 'sys_exec' from 'malicious.so'",
+        "Show all grants for my current user"
+    ],
+    "Insider_DOS": [
+        "Run a query that sleeps for 5 seconds",
+        "Run a query that sleeps for 10 seconds",
+        "Run BENCHMARK 5000000 times on MD5('test')",
+        "Show the cross join of 'orders' and 'customers'"
+    ]
+}
 
-# ==============================================================================
-# MAIN SCRIPT LOGIC
-# ==============================================================================
-def _clean_and_parse_sql(raw_text: str) -> List[str]:
-    cleaned_text = raw_text.replace('```sql', '').replace('```', '')
-    queries = [q.strip() for q in cleaned_text.split(';') if q.strip()]
-    return queries
+# === BƯỚC 4: BỘ LỌC "RÁC" (VẪN CẦN THIẾT) ===
+REGEX_TO_EXTRACT_SQL = re.compile(
+    r"(SELECT .*?;|INSERT .*?;|UPDATE .*?;|DELETE .*?;|CREATE .*?;|DROP .*?;|GRANT .*?;|ANALYZE .*?;|OPTIMIZE .*?;|SET .*?;|BENCHMARK\(.*?\);|SLEEP\(.*?\);|SHOW .*?;)",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE
+)
 
-def generate_and_validate_queries(validator: SQLValidator, persona_name: str, config: Dict) -> List[str]:
-    log.info(f"--- Generating queries for persona: {persona_name} ---")
-    schema = config.get("schema", "# No schema provided.")
-    db_context = config.get("database", "mysql")
-    tasks = config.get("tasks", [])
+def generate_queries(persona_key, questions):
+    log.info(f"Generating queries for: {persona_key}...")
+    all_queries = set() # Dùng SET để tự động loại bỏ các truy vấn trùng lặp
     
-    validated_queries = []
-    for task in tasks:
-        prompt = f"Schema:\n{schema}\n\nTask for a '{persona_name}': \"{task}\"\n\nWrite {NUM_VARIATIONS} MySQL query variations for this task."
+    # Lặp qua TỪNG CÂU HỎI
+    for question_prompt in questions:
+        log.info(f"  > Processing question: '{question_prompt[:40]}...'")
         
-        try:
-            response = client.chat(
-                model=OLLAMA_MODEL, 
-                messages=[{'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}]
-            )
-            raw_text = response['message']['content']
-            candidate_queries = _clean_and_parse_sql(raw_text)
-            
-            if not candidate_queries:
-                log.warning(f"  > Task '{task[:40]}...': LLM returned no queries.")
-                continue
+        # === NÂNG CẤP: LẶP LẠI CÂU HỎI ĐỂ TẠO BIẾN THỂ ===
+        for i in range(NUM_VARIATIONS_PER_QUESTION):
+            try:
+                response = client.chat(
+                    model=OLLAMA_MODEL, 
+                    messages=[
+                        {'role': 'system', 'content': SYSTEM_PROMPT},
+                        {'role': 'user', 'content': question_prompt} # Prompt chỉ là câu hỏi
+                    ],
+                    # Thêm 'options' để tăng tính ngẫu nhiên (diversity)
+                    options={
+                        "temperature": 0.5 + (i * 0.1) # Tăng nhiệt độ mỗi lần lặp
+                    }
+                )
+                raw_text = response['message']['content']
+                log.debug(f"Ollama raw response for task '{question_prompt[:30]}...':\n---\n{raw_text}\n---")
 
-            log.info(f"  > Task '{task[:40]}...': Generated {len(candidate_queries)} candidates. Now validating...")
-            for query in candidate_queries:
-                if validator.is_valid(query, db_context):
-                    validated_queries.append(query)
-                    log.info(f"    [ACCEPTED] {query}")
-                else:
-                    log.warning(f"    [REJECTED] {query}")
-        except Exception as e:
-            log.error(f"  > LLM call failed for task '{task[:40]}...': {e}")
+                # Sử dụng Regex để trích xuất SQL sạch từ "rác"
+                clean_queries = REGEX_TO_EXTRACT_SQL.findall(raw_text)
+                
+                if not clean_queries:
+                    log.warning(f"    > LLM returned no valid SQL for question: '{question_prompt[:30]}...' (Attempt {i+1})")
+                    log.debug(f"    > Raw response was: {raw_text}")
+                    continue
+
+                # Biên dịch chéo (Transpile) sang MySQL
+                for q in clean_queries:
+                    try:
+                        # Đọc (read) là "duckdb" (hoặc "postgres")
+                        # Viết (write) là "mysql" (cái chúng ta cần)
+                        transpiled_q = transpile(q, read="duckdb", write="mysql")[0]
+                        all_queries.add(transpiled_q) # Thêm vào SET
+                    except sqlglot_errors.ParseError as pe:
+                        log.warning(f"SQLglot parse error for query: '{q}'. Error: {pe}. DISCARDING.")
+                    except Exception as e:
+                        log.warning(f"Unexpected transpile error: {e}. DISCARDING query: '{q}'")
+
+            except Exception as e:
+                # (Bao gồm cả lỗi TimeoutError)
+                log.error(f"LLM call failed for question '{question_prompt[:30]}...': {e}. Skipping this attempt.")
             
-    return validated_queries
+    log.info(f"  > Generated and Transpiled {len(all_queries)} total unique queries for {persona_key}")
+    return list(all_queries) # Trả về 1 list
 
 def build_library():
-    try:
-        with open(PERSONAS_CONFIG_PATH, 'r', encoding='utf-8') as f:
-            personas_config = yaml.safe_load(f)
-        log.info(f"Successfully loaded persona definitions from {PERSONAS_CONFIG_PATH}")
-    except Exception as e:
-        log.critical(f"Fatal: Could not read or parse '{PERSONAS_CONFIG_PATH}': {e}")
-        sys.exit(1)
-
-    validator = SQLValidator()
-    if not validator.conn:
-        return # Stop if validator failed to connect
-
-    query_library: Dict[str, List[str]] = {}
+    query_library = {}
+    for key, tasks in PERSONA_QUESTIONS.items():
+        query_library[key] = generate_queries(key, tasks) 
     
-    for persona_name, config in personas_config.items():
-        query_library[persona_name] = generate_and_validate_queries(validator, persona_name, config)
-
-    validator.close()
-
-    # --- Save and Summarize ---
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+    output_path = os.path.join(ENGINE_DIR, "query_library.json")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(query_library, f, indent=2, ensure_ascii=False)
         
-    log.info("\n" + "="*50)
-    log.info("QUERY LIBRARY GENERATION SUMMARY")
-    log.info("="*50)
-    total_queries = 0
-    for persona, queries in query_library.items():
-        count = len(queries)
-        total_queries += count
-        log.info(f"{persona:<20} | {count:>5} queries validated")
-    log.info("-"*50)
-    log.info(f"{'TOTAL':<20} | {total_queries:>5} queries validated")
-    log.info("="*50)
-    log.info(f"\n✅ Success! High-quality query library saved to: {OUTPUT_PATH}")
+    log.info(f"\n✅ Success! MySQL-compatible query library saved to: {output_path}")
 
 if __name__ == "__main__":
     build_library()

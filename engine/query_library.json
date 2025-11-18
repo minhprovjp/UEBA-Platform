@@ -1,9 +1,75 @@
 {
-  "Sales_Normal": [],
-  "HR_Normal": [],
-  "ITAdmin_Normal": [],
-  "Insider_DataLeak": [],
-  "Insider_Sabotage": [],
-  "Insider_PrivEsc": [],
-  "Insider_DOS": []
+  "Sales_Normal": [
+    "SELECT * FROM orders WHERE customer_id = %s",
+    "SELECT * FROM customers JOIN orders ON customers.id = orders.customer_id WHERE customers.name = '%s'",
+    "SELECT * FROM customers WHERE id = %s",
+    "SELECT name FROM products LIMIT 10",
+    "SELECT * FROM products LIMIT 10",
+    "INSERT INTO orders (customer_id, status) VALUES ('%s', 'Pending')",
+    "UPDATE orders SET status = 'Shipped' WHERE id = '%s'",
+    "SELECT * FROM customers AS c JOIN orders AS o ON c.id = o.customer_id WHERE c.name LIKE `%s`",
+    "SELECT * FROM customers INNER JOIN orders ON customers.id = orders.customer_id WHERE name = '%s'",
+    "SELECT * FROM customers WHERE name = 'John Smith'",
+    "SELECT * FROM orders WHERE customer_id = %s AND status = 'Pending'"
+  ],
+  "HR_Normal": [
+    "INSERT INTO employees (id, name, position) VALUES ('Jane Doe', 'Sales')",
+    "SELECT COUNT(*) AS num_employees FROM employees WHERE position = 'Engineer'",
+    "SELECT * FROM employees WHERE name = '%s'",
+    "INSERT INTO employees (id, name, position) VALUES ('2', 'Jane Doe', 'Sales')",
+    "SELECT COUNT(*) FROM employees WHERE position = 'Engineering'",
+    "SELECT s.salary FROM employees AS e JOIN salaries AS s ON e.id = s.employee_id WHERE e.name = '%s'",
+    "SELECT e.*, p.salary AS salary FROM employees AS e JOIN salaries AS s ON s.employee_id = e.id JOIN products AS p ON p.sku = e.sku WHERE e.name LIKE '%s' OR e.position LIKE '%s'",
+    "SELECT salary FROM salaries WHERE employee_id = (SELECT id FROM employees WHERE name = '%s')",
+    "SELECT salaries.salary FROM salaries INNER JOIN employees ON employees.id = salaries.employee_id WHERE employees.name = '%s'",
+    "SELECT COUNT(*) FROM employees WHERE position LIKE '%Engineer%'",
+    "INSERT INTO employees (name, position) VALUES ('Jane Doe', 'Sales')",
+    "SELECT s.salary FROM salaries AS s INNER JOIN employees AS e ON s.employee_id = e.id WHERE e.name LIKE '%s'",
+    "SELECT COUNT(*) FROM employees WHERE position LIKE '%Engineering%'"
+  ],
+  "ITAdmin_Normal": [
+    "OPTIMIZE TABLE on the customers table:\n```sql\nOPTIMIZE TABLE customers",
+    "ANALYZE TABLE orders",
+    "OPTIMIZE TABLE `customers`",
+    "SELECT * FROM information_schema.processlist WHERE STATE = 'ACTIVE'",
+    "OPTIMIZE the \"customers\" table in your database:\n```\nOPTIMIZE TABLE customers",
+    "SELECT User, Host FROM mysql.user LIMIT 5",
+    "SELECT * FROM information_schema.processlist WHERE STATE = 'Active'",
+    "SELECT * FROM information_schema.processlist WHERE STATE = 'State'",
+    "OPTIMIZE TABLE customers",
+    "SELECT * FROM INFORMATION_SCHEMA.PROCESSLIST WHERE STATE = 'Active'"
+  ],
+  "Insider_DataLeak": [
+    "SELECT e.id, e.name, e.position, s.salary FROM employees AS e JOIN salaries AS s ON e.id = s.employee_id",
+    "SELECT e.name, e.position, s.salary FROM employees AS e JOIN salaries AS s ON e.id = s.employee_id",
+    "SELECT * FROM salaries WHERE 1 = 1",
+    "SELECT * FROM customers",
+    "SELECT name, email FROM customers",
+    "SELECT e.id, e.name, s.salary FROM employees AS e LEFT JOIN salaries AS s ON e.id = s.employee_id",
+    "SELECT e.name, s.salary FROM employees AS e JOIN salaries AS s ON e.id = s.employee_id"
+  ],
+  "Insider_Sabotage": [
+    "UPDATE salaries SET salary = 0",
+    "DROP TABLE customers",
+    "UPDATE salaries SET salary = 0 WHERE id IN (SELECT DISTINCT employee_id FROM employees)",
+    "UPDATE salaries SET salary = 0 WHERE id IN (SELECT id FROM employees)",
+    "drop the `customers` table:\n```sql\nDROP TABLE customers",
+    "DELETE FROM orders"
+  ],
+  "Insider_PrivEsc": [
+    "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE VIEW, DROP VIEW, ALTER VIEW, SHOW VIEW, CREATE ROUTINE, EXECUTE ROUTINE, ALTER ROUTINE, SHOW DATABASES, CREATE TEMPORARY TABLES, LOCK TABLES, EVENT, TRIGGER, REPLICATION CLIENT, REPLICATION SLAVE on *.* to current_user()",
+    "SELECT * FROM mysql.user WHERE User = CURRENT_USER()",
+    "GRANT ALL PRIVILEGES ON *.* TO 'shadow_admin'@'%' IDENTIFIED BY PASSWORD 'password'",
+    "GRANT ALL PRIVILEGES ON customers.* TO 'shadow_admin'",
+    "CREATE USER 'shadow_admin'@'localhost' IDENTIFIED BY '123'",
+    "GRANT ALL PRIVILEGES ON *.* TO 'shadow_admin'",
+    "CREATE USER 'shadow_admin'@'%' IDENTIFIED BY '123'"
+  ],
+  "Insider_DOS": [
+    "SELECT SLEEP(10)",
+    "SELECT MD5('test')",
+    "SELECT SLEEP(5) FROM customers",
+    "SELECT * FROM orders CROSS JOIN customers",
+    "SELECT MD5('test') FROM `dual`"
+  ]
 }

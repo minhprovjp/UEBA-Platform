@@ -123,6 +123,32 @@ GRANT SELECT ON mysql.general_log TO 'uba_user'@'localhost';
 -- 6. Áp dụng tất cả quyền
 FLUSH PRIVILEGES;
 
+-- Bảng employees
+ALTER TABLE employees
+  MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT,
+  ADD PRIMARY KEY (id);
+
+-- Bảng salaries
+ALTER TABLE salaries
+  MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT,
+  ADD PRIMARY KEY (id);
+
+-- Bảng customers
+ALTER TABLE customers
+  MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT,
+  ADD PRIMARY KEY (id);
+
+-- Bảng orders
+ALTER TABLE orders
+  MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT,
+  ADD PRIMARY KEY (id);
+
+-- Bảng products
+ALTER TABLE products
+  MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT,
+  ADD PRIMARY KEY (id);
+
+
 
 -- =====================================================================
 -- PHẦN C: CÁC LỆNH TIỆN ÍCH BẬT/TẮT VÀ XÓA LOG (MYSQL)

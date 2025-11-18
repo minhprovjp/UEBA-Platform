@@ -1,73 +1,77 @@
-# engine/personas.yaml (Version 2.0 - with 'database' field)
+# engine/personas.yaml (Version 2.1 - Optimized for SQLCoder2)
 
 Sales_Normal:
   database: sales_db
   schema: |
-    CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(255), email VARCHAR(255));
-    CREATE TABLE products (sku VARCHAR(50) PRIMARY KEY, name VARCHAR(255));
-    CREATE TABLE orders (id INT PRIMARY KEY, customer_id INT, status VARCHAR(50));
+    -- Table: customers
+    -- Columns: id (INT), name (VARCHAR), email (VARCHAR)
+    CREATE TABLE customers (id INT, name VARCHAR, email VARCHAR);
+    -- Table: products
+    -- Columns: sku (VARCHAR), name (VARCHAR)
+    CREATE TABLE products (sku VARCHAR, name VARCHAR);
+    -- Table: orders
+    -- Columns: id (INT), customer_id (INT), status (VARCHAR)
+    CREATE TABLE orders (id INT, customer_id INT, status VARCHAR);
   tasks:
     - "Check the 5 most recent orders for a specific customer (customer_id = %s)"
     - "Find a customer by their email address"
-    - "Get details of a specific product using its SKU (%s)"
     - "Update an order's status (order_id = %s) to 'Shipped'"
 
 HR_Normal:
   database: hr_db
   schema: |
-    CREATE TABLE employees (id INT PRIMARY KEY, name VARCHAR(255), position VARCHAR(100));
-    CREATE TABLE salaries (id INT PRIMARY KEY, employee_id INT, salary DECIMAL(10, 2));
+    -- Table: employees
+    -- Columns: id (INT), name (VARCHAR), position (VARCHAR)
+    CREATE TABLE employees (id INT, name VARCHAR, position VARCHAR);
+    -- Table: salaries
+    -- Columns: id (INT), employee_id (INT), salary (DECIMAL)
+    CREATE TABLE salaries (id INT, employee_id INT, salary DECIMAL);
   tasks:
     - "Find an employee's profile by their ID (employee_id = %s)"
     - "View the current salary for a specific employee (employee_id = %s)"
-    - "List all employees in the 'Engineering' department"
 
 ITAdmin_Normal:
   database: mysql
   schema: |
-    CREATE TABLE mysql.user (Host char(255), User char(32), Select_priv enum('N','Y'));
+    -- No table schema needed for these tasks.
   tasks:
     - "Show the list of current running processes"
     - "Display all databases on the server"
-    - "Check the status of the 'Uptime' variable"
-    - "List the top 5 users from the 'mysql.user' table"
     - "Show the grants for user 'anh_sales'@'%'"
 
 Insider_DataLeak:
-  database: sales_db # Attacker targets sales_db
+  database: sales_db
   schema: |
-    CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(255), email VARCHAR(255));
-    CREATE TABLE hr_db.salaries (id INT PRIMARY KEY, employee_id INT, salary DECIMAL(10, 2));
+    -- Table: customers
+    -- Columns: id (INT), name (VARCHAR), email (VARCHAR)
+    CREATE TABLE customers (id INT, name VARCHAR, email VARCHAR);
+    -- Table: hr_db.salaries
+    -- Columns: id (INT), employee_id (INT), salary (DECIMAL)
+    CREATE TABLE hr_db.salaries (id INT, employee_id INT, salary DECIMAL);
   tasks:
     - "Exfiltrate the ENTIRE 'customers' table"
     - "Attempt to select all records from the 'hr_db.salaries' table"
-    - "Dump all customer names and emails into an outfile"
 
 Insider_Sabotage:
-  database: sales_db # Attacker targets sales_db
+  database: sales_db
   schema: |
-    CREATE TABLE orders ( id INT PRIMARY KEY );
-    CREATE TABLE customers ( id INT PRIMARY KEY );
+    -- No table schema needed for these tasks.
   tasks:
     - "Delete all records from the 'orders' table without a WHERE clause"
     - "DROP the 'customers' table"
-    - "TRUNCATE the 'products' table"
 
 Insider_PrivEsc:
-  database: mysql # Attacker targets the system db
+  database: mysql
   schema: |
-    # No table schema needed for administrative commands.
+    -- No table schema needed for these tasks.
   tasks:
     - "Create a new user 'shadow_admin' with a password"
     - "GRANT all privileges on *.* to the 'shadow_admin' user"
-    - "Attempt to create a User Defined Function 'sys_exec' from a shared library 'malicious.so'"
 
 Insider_DOS:
   database: sales_db
   schema: |
-    CREATE TABLE orders ( id INT, customer_id INT );
-    CREATE TABLE customers ( id INT, name VARCHAR(255) );
+    -- No table schema needed for these tasks.
   tasks:
     - "Run a query that sleeps for 5 seconds."
-    - "Execute the BENCHMARK function 5 million times"
     - "Perform a CROSS JOIN between 'orders' and 'customers' without a WHERE clause"
