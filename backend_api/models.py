@@ -5,6 +5,7 @@ from sqlalchemy import (create_engine, Column, Integer, String, DateTime,
                         Float, Boolean, Text, Index, BigInteger, JSON, func)
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.dialects.postgresql import JSONB
 
 # Thêm thư mục gốc vào sys.path để có thể import config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,25 +55,19 @@ class AggregateAnomaly(Base):
     __tablename__ = 'aggregate_anomalies'
 
     id = Column(Integer, primary_key=True, index=True)
-
-    # loại: 'session', 'user', ...
-    scope = Column(String, nullable=False, default='session', index=True)
-
+    scope = Column(String, nullable=False)              # 'session' | 'user' | ...
     user = Column(String, index=True, nullable=True)
     database = Column(String, nullable=True)
 
-    start_time = Column(DateTime, nullable=True)
-    end_time = Column(DateTime, nullable=True)
+    start_time = Column(DateTime, index=True, nullable=True)
+    end_time   = Column(DateTime, index=True, nullable=True)
 
-    anomaly_type = Column(String, index=True, nullable=False)  # ví dụ: 'multi_table'
-    severity = Column(Float, nullable=True)                    # vd: distinct_tables_count
-    reason = Column(Text, nullable=True)
+    anomaly_type = Column(String, index=True, nullable=True)
+    severity     = Column(Float, nullable=True)         # dùng như 'score' cho aggregate
+    reason       = Column(Text, nullable=True)
+    details      = Column(JSONB, nullable=True)         # lưu JSON chi tiết
 
-    # JSON lưu details: tables_accessed, queries_details,...
-    details = Column(JSON, nullable=True)    
-    
-    
-    created_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
     
 # Bảng này sẽ lưu TẤT CẢ các log
 class AllLogs(Base):

@@ -100,3 +100,5 @@ export const AnomalyDetailModal = ({
     </Dialog>
   );
 };
+
+export default AnomalyDetailModal;

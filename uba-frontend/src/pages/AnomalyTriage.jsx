@@ -1,194 +1,186 @@
-// src/pages/AnomalyTriage.jsx
-import React, { useState, useMemo } from 'react';
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Filter, Bot, Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useAnomalies, useAnomalyStats, useAnalyzeMutation, useFeedbackMutation } from '@/api/queries';
-import { AnomalyDetailModal } from '@/components/AnomalyDetailModal';
-import { Toaster } from 'sonner';
-
-const PAGE_SIZE = 20;
+import React, { useState } from 'react'
+import { useAnomalyKpis, useAnomalyFacets, useAnomalySearch } from '@/api/queries'
+import { AnomalyDetailModal } from '@/components/AnomalyDetailModal'
 
 export default function AnomalyTriage() {
-  // --- State cho Bộ lọc và Phân trang ---
+  // giữ tất cả filter ở server-side để lọc "toàn bộ", không chỉ trang đang xem
   const [filters, setFilters] = useState({
-    search: '',
-    user: null,
-    anomaly_type: null,
-    date_from: null,
-    date_to: null,
-  });
-  const [pagination, setPagination] = useState({
     pageIndex: 0,
-    pageSize: PAGE_SIZE,
-  });
+    pageSize: 20,
+    search: '',
+    user: '',
+    anomaly_type: '',
+    date_from: '',
+    date_to: '',
+  })
 
-  // --- Lấy dữ liệu ---
-  // 1. Lấy dữ liệu cho Bảng (có phân trang)
-  const { data, isLoading, isError, error } = useAnomalies({
-    ...filters,
-    ...pagination,
-  });
-  // 2. Lấy dữ liệu cho Thống kê (tải tất cả)
-  const { data: stats, isLoading: isStatsLoading } = useAnomalyStats();
+  const { data: kpis } = useAnomalyKpis()
+  const { data: facets } = useAnomalyFacets()
+  const { data } = useAnomalySearch(filters)
 
-  // Lấy ra logs và trạng thái phân trang
-  const anomalies = data?.anomalies || [];
-  const hasMore = data?.hasMore || false;
-  
-  // --- State cho Modal ---
-  const [selectedLog, setSelectedLog] = useState(null); 
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const rows = data?.items ?? []
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / filters.pageSize))
+  const users = facets?.users ?? []
+  const types = facets?.types ?? []
 
-  // --- Lấy ra các Mutations ---
-  const analyzeMutation = useAnalyzeMutation();
-  const feedbackMutation = useFeedbackMutation();
+  const [selectedLog, setSelectedLog] = useState(null)
 
-  // --- Lấy danh sách filter động ---
-  const uniqueUsers = useMemo(() => {
-    return [...new Set(stats?.rawAnomalies.map(log => log.user).filter(Boolean))];
-  }, [stats]);
-  const uniqueTypes = useMemo(() => {
-    return Object.keys(stats?.countsPerType || {});
-  }, [stats]);
+  const toggleType = (t) =>
+    setFilters(p => ({ ...p, anomaly_type: p.anomaly_type === t ? '' : t, pageIndex: 0 }))
 
-
-  // --- Handlers (Giống hệt LogExplorer) ---
-  const handleRowClick = (log) => {
-    setSelectedLog(log);
-    setIsModalOpen(true);
-  };
-
-  const handleAnalyze = () => {
-    analyzeMutation.mutate(selectedLog, {
-      onSuccess: (data) => {
-        setSelectedLog(prev => ({ ...prev, aiAnalysis: data.data.final_analysis }));
+  const scoreOf = (r) => {
+    // score có thể từ r.score, r.severity (aggregate), r.details.{score,probability,...}
+    const tryPick = (...ks) => {
+      for (const k of ks) {
+        const v = k.split('.').reduce((acc, key) => (acc && acc[key] != null ? acc[key] : undefined), r)
+        if (v != null && !isNaN(Number(v))) return Number(v)
       }
-    });
-  };
-
-  const handleFeedback = (label) => {
-    feedbackMutation.mutate(
-      { label, anomaly_data: selectedLog },
-      { onSuccess: () => setIsModalOpen(false) }
-    );
-  };
+      return null
+    }
+    let s = tryPick('score', 'severity', 'details.score', 'details.anomaly_score', 'details.probability', 'details.confidence', 'details.risk_score')
+    if (s != null && s > 1 && s <= 100) s = s / 100 // chuẩn hóa % -> 0..1 nếu cần
+    return s != null ? s.toFixed(2) : '—'
+  }
 
   return (
-    <>
-      <Toaster position="top-right" theme="dark" />
-      <div className="h-full flex flex-col">
-        <header>
-          <h2 className="text-2xl font-semibold">Anomaly Triage</h2>
-          <p className="text-muted-foreground">Xem xét và xử lý các bất thường đã được phát hiện.</p>
-        </header>
+    // min-h-0 để con có thể cuộn trong layout flex (không kéo cả trang)
+    <div className="h-full min-h-0 flex flex-col gap-4 overflow-hidden">
+      {/* KPI: bấm để lọc theo rule (bấm lần 2 để bỏ lọc) */}
+      <div className="grid grid-cols-6 gap-4 shrink-0">
+        <KpiCard title="Late-night"        value={kpis?.late_night ?? '—'}       active={filters.anomaly_type==='late_night'} onClick={()=>toggleType('late_night')} />
+        <KpiCard title="Large dump"        value={kpis?.large_dump ?? '—'}       active={filters.anomaly_type==='dump'}       onClick={()=>toggleType('dump')} />
+        <KpiCard title="Multi-table"       value={kpis?.multi_table ?? '—'}      active={filters.anomaly_type==='multi_table'}onClick={()=>toggleType('multi_table')} />
+        <KpiCard title="Sensitive access"  value={kpis?.sensitive_access ?? '—'} active={filters.anomaly_type==='sensitive'}  onClick={()=>toggleType('sensitive')} />
+        <KpiCard title="Profile deviation" value={kpis?.profile_deviation ?? '—'}active={filters.anomaly_type==='user_time'}  onClick={()=>toggleType('user_time')} />
+        <KpiCard title="TOTAL"             value={kpis?.total ?? '—'}            active={!filters.anomaly_type}                onClick={()=>toggleType('')} />
+      </div>
 
-        {/* Thẻ Thống kê (Dữ liệu thật) */}
-        <div className="grid grid-cols-4 gap-4 my-4">
-          <StatCard title="Total Anomalies" value={isStatsLoading ? "..." : stats.totalAnomalies} />
-          {/* Hiển thị 3 loại bất thường hàng đầu */}
-          {Object.entries(stats?.countsPerType || {})
-            .sort(([,a], [,b]) => b - a) // Sắp xếp
-            .slice(0, 3) // Lấy 3 cái đầu
-            .map(([type, count]) => (
-              <StatCard key={type} title={type} value={count} />
-            ))
-          }
-        </div>
+      {/* Filters */}
+      <div className="flex gap-2 items-center shrink-0">
+        <input
+          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 w-80"
+          placeholder="Search query / reason…"
+          value={filters.search}
+          onChange={(e) => setFilters(p => ({ ...p, search: e.target.value, pageIndex: 0 }))}
+        />
 
-        {/* Thanh tìm kiếm và bộ lọc (ĐÃ HOẠT ĐỘNG) */}
-        <div className="flex items-center space-x-2 py-4">
-          <Input 
-            placeholder="Tìm kiếm query, reason..." 
-            className="max-w-sm bg-zinc-900"
-            value={filters.search}
-            onChange={(e) => setFilters(prev => ({...prev, search: e.target.value, pageIndex: 0}))}
-          />
-          {/* TODO: Thêm Dropdown cho uniqueUsers và uniqueTypes */}
-          <Button variant="outline" className="bg-zinc-900">
-            <Filter className="h-4 w-4 mr-2" />
-            Filter
-          </Button>
-        </div>
+        <select
+          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2"
+          value={filters.user}
+          onChange={(e) => setFilters(p => ({ ...p, user: e.target.value.trim(), pageIndex: 0 }))}
+        >
+          <option value="">All users</option>
+          {users.map((u) => <option key={u} value={u}>{u}</option>)}
+        </select>
 
-        {/* Bảng dữ liệu */}
-        <div className="flex-1 overflow-auto rounded-md border border-border">
-          <Table>
-            <TableHeader className="bg-zinc-900">
-              <TableRow>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Anomaly Type</TableHead>
-                <TableHead>Query</TableHead>
-                <TableHead>Reason</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading && <TableRow><TableCell colSpan={5} className="text-center">Đang tải bất thường...</TableCell></TableRow>}
-              {isError && <TableRow><TableCell colSpan={5} className="text-center text-red-500">{error.message}</TableCell></TableRow>}
-              {!isLoading && anomalies.map((log) => (
-                <TableRow key={log.id} onClick={() => handleRowClick(log)} className="cursor-pointer hover:bg-zinc-900">
-                  <TableCell>{new Date(log.timestamp).toLocaleString()}</TableCell>
-                  <TableCell>{log.user}</TableCell>
-                  <TableCell>
-                    <span className="bg-red-900 text-red-300 px-2 py-1 rounded-full text-xs font-semibold">
-                      {log.anomaly_type}
-                    </span>
-                  </TableCell>
-                  <TableCell><code className="text-sm">{log.query.substring(0, 50)}...</code></TableCell>
-                  <TableCell className="text-muted-foreground">{log.reason || 'N/A'}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <select
+          className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2"
+          value={filters.anomaly_type}
+          onChange={(e) => setFilters(p => ({ ...p, anomaly_type: e.target.value.trim(), pageIndex: 0 }))}
+        >
+          <option value="">All types</option>
+          {types.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
 
-        {/* Phân trang (Pagination) */}
-        <div className="flex items-center justify-end space-x-2 py-4">
-           {/* (Code phân trang giống hệt LogExplorer) */}
-           <span className="text-sm text-muted-foreground">
-            Trang {pagination.pageIndex + 1}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPagination(prev => ({...prev, pageIndex: prev.pageIndex - 1}))}
-            disabled={pagination.pageIndex === 0}
+        {(filters.anomaly_type || filters.user || filters.search) && (
+          <button
+            className="px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900"
+            onClick={() => setFilters({ ...filters, search:'', user:'', anomaly_type:'', pageIndex:0 })}
           >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPagination(prev => ({...prev, pageIndex: prev.pageIndex + 1}))}
-            disabled={!hasMore}
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Bảng: header sticky, body cuộn bên trong – không kéo trang */}
+      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border">
+        {/* Header */}
+        <div
+          className="
+            bg-zinc-900 px-4 py-2 sticky top-0 z-10
+            grid grid-cols-[14rem,9rem,8rem,1fr,1fr,6rem]
+            text-sm text-muted-foreground
+          ">
+          <div>Time</div><div>User</div><div>Type</div><div>Query</div><div>Reason</div><div>Score</div>
+        </div>
+
+        {/* Body (scroll) */}
+        <div className="h-full min-h-0 overflow-auto">
+          {rows.map((r) => (
+            <div
+              key={`${r.id}-${r.timestamp}`}
+              className="
+                px-4 py-3 grid grid-cols-[14rem,9rem,8rem,1fr,1fr,6rem] gap-3
+                border-t border-zinc-800 hover:bg-zinc-900 cursor-pointer
+              "
+              onClick={() => setSelectedLog(r)}
+            >
+              <div className="truncate">{new Date(r.timestamp).toLocaleString()}</div>
+              <div className="truncate">{r.user ?? '—'}</div>
+
+              <div>
+                <span className="px-2 py-0.5 text-xs rounded-full bg-zinc-800 border border-zinc-700">
+                  {r.anomaly_type}
+                </span>
+              </div>
+
+              {/* Query & Reason: có chiều cao cố định và cuộn NỘI BỘ */}
+              <div className="bg-zinc-950/40 rounded-md px-2 py-1 text-sm whitespace-pre-wrap h-16 overflow-y-auto">
+                {r.query || '—'}
+              </div>
+              <div className="text-sm text-zinc-300 whitespace-pre-wrap h-16 overflow-y-auto">
+                {r.reason || '—'}
+              </div>
+
+              <div className="text-center">{scoreOf(r)}</div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Modal chi tiết */}
+      {/* Pagination cố định dưới */}
+      <div className="flex items-center gap-2 shrink-0">
+        <button
+          className="px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900"
+          disabled={filters.pageIndex === 0}
+          onClick={() => setFilters(p => ({ ...p, pageIndex: Math.max(0, p.pageIndex - 1) }))}
+        >
+          Prev
+        </button>
+        <span>Page {filters.pageIndex + 1} / {totalPages}</span>
+        <button
+          className="px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900"
+          disabled={(filters.pageIndex + 1) >= totalPages}
+          onClick={() => setFilters(p => ({ ...p, pageIndex: p.pageIndex + 1 }))}
+        >
+          Next
+        </button>
+      </div>
+
       <AnomalyDetailModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        isOpen={!!selectedLog}
+        onClose={() => setSelectedLog(null)}
         log={selectedLog}
-        onAnalyze={handleAnalyze}
-        onFeedback={handleFeedback}
-        isAiLoading={analyzeMutation.isPending}
-        isFeedbackLoading={feedbackMutation.isPending}
+        onAnalyze={() => {}}
+        onFeedback={() => {}}
+        isAiLoading={false}
+        isFeedbackLoading={false}
       />
-    </>
-  );
+    </div>
+  )
 }
 
-// Component phụ cho thẻ KPI
-const StatCard = ({ title, value }) => (
-  <div className="bg-zinc-900 border border-border p-4 rounded-lg">
-      <p className="text-sm text-muted-foreground uppercase">{title}</p>
-      <p className="text-3xl font-bold text-primary-500">{value}</p>
-  </div>
-);
+function KpiCard({ title, value, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`text-left p-4 rounded-xl border transition
+        ${active ? 'border-primary-500 bg-zinc-900/60' : 'border-neutral-800 bg-neutral-900 hover:bg-zinc-900/40'}
+      `}
+    >
+      <div className="text-xs tracking-widest text-neutral-400">{title}</div>
+      <div className="text-3xl font-bold mt-2">{value}</div>
+    </button>
+  )
+}

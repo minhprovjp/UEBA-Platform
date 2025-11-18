@@ -1,7 +1,7 @@
 # backend_api/schemas.py
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 
 # --- Schema cơ bản cho Anomaly ---
 # Chứa các trường chung mà cả khi tạo mới và khi đọc đều cần đến.
@@ -29,18 +29,23 @@ class Anomaly(AnomalyBase):
 class UnifiedAnomaly(BaseModel):
     id: str
     source: Literal["event", "aggregate"]
-    anomaly_type: str
+    anomaly_type: Optional[str] = None
     timestamp: Optional[datetime] = None
     user: Optional[str] = None
     database: Optional[str] = None
-    query: Optional[str] = None
+    query: Optional[str] = None          # chỉ event mới có
     reason: Optional[str] = None
-    score: Optional[float] = None
-    scope: Optional[str] = None
+    score: Optional[float] = None        # event: score | aggregate: severity
+    scope: Optional[str] = None          # aggregate: 'session' | 'user' | ...
     details: Optional[Dict[str, Any]] = None
 
     class Config:
-        from_attributes = True  # Pydantic v2
+        orm_mode = True
+
+class AnomalyStats(BaseModel):
+    event_count: int
+    aggregate_count: int
+    total_count: int
 
 # --- Schema cho Yêu cầu Phân tích của LLM ---
 # Định nghĩa cấu trúc dữ liệu mà frontend PHẢI gửi lên khi yêu cầu phân tích.
@@ -74,3 +79,28 @@ class AllLogs(AllLogsBase):
     class Config:
         from_attributes = True # Dùng Pydantic v2
         # orm_mode = True # Dùng nếu bạn ở Pydantic v1
+
+class AnomalyKpis(BaseModel):
+    late_night: int
+    large_dump: int
+    multi_table: int
+    sensitive_access: int
+    profile_deviation: int
+    total: int
+
+class AnomalyFacetResponse(BaseModel):
+    users: List[str]
+    types: List[str]
+
+class AnomalySearchItem(BaseModel):
+    id: int
+    timestamp: datetime
+    user: Optional[str] = None
+    anomaly_type: Optional[str] = None
+    reason: Optional[str] = None
+    query: Optional[str] = None
+    score: Optional[float] = None
+
+class AnomalySearchResponse(BaseModel):
+    total: int
+    items: List[AnomalySearchItem]

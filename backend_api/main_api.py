@@ -3,8 +3,9 @@ from fastapi import FastAPI, Depends, HTTPException, status, Security
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import Optional, List, Dict, Any
 from datetime import datetime
+from sqlalchemy import func, or_, text, cast, Text
 
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
@@ -93,6 +94,241 @@ def get_db():
 #     """
 #     anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
 #     return anomalies
+
+# --- Helper filter áp dụng chung ---
+def _apply_common_filters(q, user: Optional[str], anomaly_type: Optional[str],
+                          date_from: Optional[str], date_to: Optional[str],
+                          is_aggregate: bool):
+    if user:
+        q = q.filter((models.AggregateAnomaly.user if is_aggregate else models.Anomaly.user) == user)
+    if anomaly_type:
+        col = models.AggregateAnomaly.anomaly_type if is_aggregate else models.Anomaly.anomaly_type
+        q = q.filter(col == anomaly_type)
+    if date_from:
+        # ISO-like string -> datetime.fromisoformat (YYYY-MM-DD[THH:MM:SS[.fff]])
+        from datetime import datetime
+        dtf = datetime.fromisoformat(date_from)
+        if is_aggregate:
+            q = q.filter(or_(models.AggregateAnomaly.start_time >= dtf,
+                             models.AggregateAnomaly.created_at >= dtf))
+        else:
+            q = q.filter(models.Anomaly.timestamp >= dtf)
+    if date_to:
+        from datetime import datetime
+        dtt = datetime.fromisoformat(date_to)
+        if is_aggregate:
+            q = q.filter(or_(models.AggregateAnomaly.end_time <= dtt,
+                             models.AggregateAnomaly.created_at <= dtt))
+        else:
+            q = q.filter(models.Anomaly.timestamp <= dtt)
+    return q
+
+# --- Stats: đếm đúng 3 con số ---
+@app.get("/api/anomalies/stats", response_model=schemas.AnomalyStats, tags=["Anomalies"])
+def anomaly_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    event_count = db.query(func.count(models.Anomaly.id)).scalar() or 0
+    agg_count   = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
+    return {
+        "event_count": int(event_count),
+        "aggregate_count": int(agg_count),
+        "total_count": int(event_count + agg_count),
+    }
+
+# NEW: /api/anomalies/type-stats
+@app.get("/api/anomalies/type-stats", tags=["Anomalies"])
+def anomaly_type_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    # Đếm event theo type
+    ev = db.query(models.Anomaly.anomaly_type, func.count(models.Anomaly.id))\
+           .group_by(models.Anomaly.anomaly_type).all()
+    # Đếm aggregate theo type
+    ag = db.query(models.AggregateAnomaly.anomaly_type, func.count(models.AggregateAnomaly.id))\
+           .group_by(models.AggregateAnomaly.anomaly_type).all()
+
+    from collections import defaultdict
+    counts = defaultdict(int)
+    for t, c in ev: counts[(t or '').strip()] += int(c or 0)
+    for t, c in ag: counts[(t or '').strip()] += int(c or 0)
+
+    # Chuẩn hoá 5 rule + ml
+    keys = ["late_night", "dump", "multi_table", "sensitive", "user_time", "ml"]
+    by_type = {k: int(counts.get(k, 0)) for k in keys}
+    total = sum(counts.values())
+    return {"by_type": by_type, "total": int(total)}
+
+
+# ===== NEW: KPI theo từng rule =====
+@app.get("/api/anomalies/kpis", tags=["Anomalies"])
+def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    # Đếm event theo type
+    def ev_count(types):
+        if isinstance(types, (list, tuple, set)):
+            return db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.anomaly_type.in_(types)).scalar() or 0
+        return db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.anomaly_type == types).scalar() or 0
+
+    # Đếm aggregate theo type
+    def agg_count(types):
+        if isinstance(types, (list, tuple, set)):
+            return db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.anomaly_type.in_(types)).scalar() or 0
+        return db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.anomaly_type == types).scalar() or 0
+
+    k_late   = ev_count("late_night") + agg_count("late_night")
+    k_dump   = ev_count(["dump", "large_dump"]) + agg_count(["dump", "large_dump"])
+    k_multi  = ev_count("multi_table") + agg_count("multi_table")
+    k_sens   = ev_count(["sensitive","sensitive_access"]) + agg_count(["sensitive","sensitive_access"])
+    k_prof   = ev_count(["user_time","profile_deviation"]) + agg_count(["user_time","profile_deviation"])
+
+    total = (db.query(func.count(models.Anomaly.id)).scalar() or 0) + \
+            (db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0)
+
+    return {
+        "late_night": int(k_late),
+        "large_dump": int(k_dump),
+        "multi_table": int(k_multi),
+        "sensitive_access": int(k_sens),
+        "profile_deviation": int(k_prof),
+        "total": int(total),
+    }
+
+
+# ===== NEW: Facets (users/types) tính trên TOÀN BỘ dataset =====
+@app.get("/api/anomalies/facets", tags=["Anomalies"])
+def anomaly_facets(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    users = set(u for (u,) in db.query(models.Anomaly.user).distinct() if u) | \
+            set(u for (u,) in db.query(models.AggregateAnomaly.user).distinct() if u)
+
+    types = set(t for (t,) in db.query(models.Anomaly.anomaly_type).distinct() if t) | \
+            set(t for (t,) in db.query(models.AggregateAnomaly.anomaly_type).distinct() if t)
+
+    return {
+        "users": sorted(users),
+        "types": sorted(types),
+    }
+
+
+# ===== NEW: Search gộp (event + aggregate) + phân trang server-side =====
+@app.get("/api/anomalies/search", tags=["Anomalies"])
+def anomaly_search(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    user: Optional[str] = None,
+    anomaly_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    api_key: str = Security(get_api_key),
+):
+    # Event
+    q_ev = db.query(models.Anomaly)
+    if search:
+        q_ev = q_ev.filter(or_(models.Anomaly.query.ilike(f"%{search}%"),
+                               models.Anomaly.reason.ilike(f"%{search}%")))
+    q_ev = _apply_common_filters(q_ev, user, anomaly_type, date_from, date_to, is_aggregate=False)
+    ev_total = q_ev.count()
+    ev_rows = (q_ev.order_by(models.Anomaly.timestamp.desc())
+                  .offset(skip).limit(limit).all())
+
+    # Aggregate
+    q_ag = db.query(models.AggregateAnomaly)
+    if search:
+        q_ag = q_ag.filter(or_(
+            models.AggregateAnomaly.reason.ilike(f"%{search}%"),
+            models.AggregateAnomaly.details.cast(Text).ilike(f"%{search}%")
+        ))
+    q_ag = _apply_common_filters(q_ag, user, anomaly_type, date_from, date_to, is_aggregate=True)
+    ag_total = q_ag.count()
+    ag_rows = (q_ag.order_by(models.AggregateAnomaly.start_time.desc().nullslast(),
+                             models.AggregateAnomaly.created_at.desc())
+                  .offset(skip).limit(limit).all())
+
+    # Hợp nhất + sort thời gian
+    items = []
+    for r in ev_rows:
+        items.append(schemas.UnifiedAnomaly(
+            id=f"event-{r.id}", source="event",
+            anomaly_type=r.anomaly_type, timestamp=r.timestamp,
+            user=r.user, database=r.database, query=r.query,
+            reason=r.reason, score=r.score, scope="log", details=None
+        ))
+    for r in ag_rows:
+        items.append(schemas.UnifiedAnomaly(
+            id=f"agg-{r.id}", source="aggregate",
+            anomaly_type=r.anomaly_type,
+            timestamp=r.start_time or r.end_time or r.created_at,
+            user=r.user, database=r.database, query=None,
+            reason=r.reason, score=r.severity, scope=r.scope, details=r.details
+        ))
+
+    items.sort(key=lambda x: x.timestamp or datetime.min, reverse=True)
+    return {"items": items, "total": int(ev_total + ag_total)}
+
+
+
+# --- Danh sách Event-level anomalies (chuẩn paging) ---
+@app.get("/api/anomalies/events", response_model=List[schemas.UnifiedAnomaly], tags=["Anomalies"])
+def list_event_anomalies(skip: int = 0, limit: int = 100,
+                         search: Optional[str] = None,
+                         user: Optional[str] = None,
+                         anomaly_type: Optional[str] = None,
+                         date_from: Optional[str] = None,
+                         date_to: Optional[str] = None,
+                         db: Session = Depends(get_db),
+                         api_key: str = Security(get_api_key)):
+    q = db.query(models.Anomaly)
+    if search:
+        q = q.filter(or_(models.Anomaly.query.ilike(f"%{search}%"),
+                         models.Anomaly.reason.ilike(f"%{search}%")))
+    q = _apply_common_filters(q, user, anomaly_type, date_from, date_to, is_aggregate=False)
+    rows = (q.order_by(models.Anomaly.timestamp.desc())
+              .offset(skip).limit(limit).all())
+    return [schemas.UnifiedAnomaly(
+        id=f"event-{r.id}",
+        source="event",
+        anomaly_type=r.anomaly_type,
+        timestamp=r.timestamp,
+        user=r.user,
+        database=r.database,
+        query=r.query,
+        reason=r.reason,
+        score=r.score,
+        scope="log",
+        details=None
+    ) for r in rows]
+
+# --- Danh sách Aggregate-level anomalies (chuẩn paging) ---
+@app.get("/api/aggregate-anomalies", response_model=List[schemas.UnifiedAnomaly], tags=["Anomalies"])
+def list_aggregate_anomalies(skip: int = 0, limit: int = 100,
+                             search: Optional[str] = None,
+                             user: Optional[str] = None,
+                             anomaly_type: Optional[str] = None,
+                             date_from: Optional[str] = None,
+                             date_to: Optional[str] = None,
+                             db: Session = Depends(get_db),
+                             api_key: str = Security(get_api_key)):
+    q = db.query(models.AggregateAnomaly)
+    if search:
+        # tìm trong reason hoặc details (cast text)
+        q = q.filter(or_(
+            models.AggregateAnomaly.reason.ilike(f"%{search}%"),
+            cast(models.AggregateAnomaly.details, Text).ilike(f"%{search}%")
+        ))
+    q = _apply_common_filters(q, user, anomaly_type, date_from, date_to, is_aggregate=True)
+    rows = (q.order_by(models.AggregateAnomaly.start_time.desc().nullslast(),
+                       models.AggregateAnomaly.created_at.desc())
+              .offset(skip).limit(limit).all())
+    return [schemas.UnifiedAnomaly(
+        id=f"agg-{r.id}",
+        source="aggregate",
+        anomaly_type=r.anomaly_type,
+        timestamp=r.start_time or r.end_time or r.created_at,
+        user=r.user,
+        database=r.database,
+        query=None,
+        reason=r.reason,
+        score=r.severity,
+        scope=r.scope,
+        details=r.details
+    ) for r in rows]
 
 @app.get("/api/anomalies/",response_model=List[schemas.UnifiedAnomaly],tags=["Anomalies"])
 def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(get_db),api_key: str = Security(get_api_key)):
