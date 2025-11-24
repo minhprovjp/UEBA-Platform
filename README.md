@@ -111,4 +111,13 @@ npm install axios
 npm install chart.js react-chartjs-2
 
 
+
+npm install axios recharts lucide-react
+npm install @tanstack/react-query react-day-picker date-fns
+npm install react-router-dom recharts sonner
+npx shadcn@latest add table
+npx shadcn@latest add button
+npx shadcn@latest add dialog
+npx shadcn@latest add input
+
 Nếu bạn đang dùng Docker Redis: docker run -p 6379:6379 redis:7
