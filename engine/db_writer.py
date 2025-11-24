@@ -1,8 +1,8 @@
 import logging
 import os
 import sys
-from typing import Dict, Tuple, List, Any
-from datetime import datetime, date
+from typing import Dict, List, Any
+from datetime import datetime
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -259,73 +259,73 @@ def _normalize_all_logs(df_logs: pd.DataFrame) -> pd.DataFrame:
 
 # ========= MAIN =========
 
-def save_results_to_db(results: Dict[str, Any]) -> Tuple[int, int, int]:
-    df_all = results.get("all_logs")
-    if not isinstance(df_all, pd.DataFrame) or df_all.empty:
-        log.error("Không có all_logs hợp lệ.")
-        return 0, 0, 0
+# def save_results_to_db(results: Dict[str, Any]) -> Tuple[int, int, int]:
+#     df_all = results.get("all_logs")
+#     if not isinstance(df_all, pd.DataFrame) or df_all.empty:
+#         log.error("Không có all_logs hợp lệ.")
+#         return 0, 0, 0
 
-    df_all_norm = _normalize_all_logs(df_all)
+#     df_all_norm = _normalize_all_logs(df_all)
 
-    # Event anomalies từ các rule log-level
-    df_event_anoms = _build_event_anomalies(results, df_all_norm)
+#     # Event anomalies từ các rule log-level
+#     df_event_anoms = _build_event_anomalies(results, df_all_norm)
 
-    # Multi-table: tách event + aggregate
-    df_mt_events, mt_agg_rows = _build_multi_table_anomalies(results, df_all_norm)
+#     # Multi-table: tách event + aggregate
+#     df_mt_events, mt_agg_rows = _build_multi_table_anomalies(results, df_all_norm)
 
-    # Gộp tất cả event-level anomalies
-    df_all_anoms = pd.concat(
-        [df_event_anoms, df_mt_events],
-        ignore_index=True
-    ) if (not df_event_anoms.empty or not df_mt_events.empty) else pd.DataFrame()
+#     # Gộp tất cả event-level anomalies
+#     df_all_anoms = pd.concat(
+#         [df_event_anoms, df_mt_events],
+#         ignore_index=True
+#     ) if (not df_event_anoms.empty or not df_mt_events.empty) else pd.DataFrame()
 
-    # Đánh dấu is_anomaly trong all_logs
-    if not df_all_anoms.empty:
-        join_cols = ["timestamp", "user", "database", "query"]
-        join_cols = [c for c in join_cols if c in df_all_norm.columns and c in df_all_anoms.columns]
+#     # Đánh dấu is_anomaly trong all_logs
+#     if not df_all_anoms.empty:
+#         join_cols = ["timestamp", "user", "database", "query"]
+#         join_cols = [c for c in join_cols if c in df_all_norm.columns and c in df_all_anoms.columns]
 
-        anom_keys = set(
-            tuple(row[c] for c in join_cols)
-            for _, row in df_all_anoms.iterrows()
-        )
+#         anom_keys = set(
+#             tuple(row[c] for c in join_cols)
+#             for _, row in df_all_anoms.iterrows()
+#         )
 
-        def is_anom(row):
-            return tuple(row[c] for c in join_cols) in anom_keys
+#         def is_anom(row):
+#             return tuple(row[c] for c in join_cols) in anom_keys
 
-        df_all_norm["is_anomaly"] = df_all_norm.apply(is_anom, axis=1)
+#         df_all_norm["is_anomaly"] = df_all_norm.apply(is_anom, axis=1)
 
-    db = SessionLocal()
-    logs_count = anoms_count = agg_count = 0
+#     db = SessionLocal()
+#     logs_count = anoms_count = agg_count = 0
 
-    try:
-        # insert all_logs
-        all_log_records = df_all_norm.where(pd.notna(df_all_norm), None).to_dict("records")
-        db.bulk_insert_mappings(AllLogs, all_log_records)
-        logs_count = len(all_log_records)
+#     try:
+#         # insert all_logs
+#         all_log_records = df_all_norm.where(pd.notna(df_all_norm), None).to_dict("records")
+#         db.bulk_insert_mappings(AllLogs, all_log_records)
+#         logs_count = len(all_log_records)
 
-        # insert anomalies (event-level)
-        if not df_all_anoms.empty:
-            anoms_records = df_all_anoms.where(pd.notna(df_all_anoms), None).to_dict("records")
-            db.bulk_insert_mappings(Anomaly, anoms_records)
-            anoms_count = len(anoms_records)
+#         # insert anomalies (event-level)
+#         if not df_all_anoms.empty:
+#             anoms_records = df_all_anoms.where(pd.notna(df_all_anoms), None).to_dict("records")
+#             db.bulk_insert_mappings(Anomaly, anoms_records)
+#             anoms_count = len(anoms_records)
 
-        # insert aggregate anomalies
-        if mt_agg_rows:
-            db.bulk_insert_mappings(AggregateAnomaly, mt_agg_rows)
-            agg_count = len(mt_agg_rows)
+#         # insert aggregate anomalies
+#         if mt_agg_rows:
+#             db.bulk_insert_mappings(AggregateAnomaly, mt_agg_rows)
+#             agg_count = len(mt_agg_rows)
 
-        db.commit()
-        log.info(
-            f"Lưu OK: {logs_count} all_logs, {anoms_count} anomalies, {agg_count} aggregate_anomalies."
-        )
-    except Exception as e:
-        db.rollback()
-        log.error(f"Lỗi khi lưu: {e}", exc_info=True)
-        raise
-    finally:
-        db.close()
+#         db.commit()
+#         log.info(
+#             f"Lưu OK: {logs_count} all_logs, {anoms_count} anomalies, {agg_count} aggregate_anomalies."
+#         )
+#     except Exception as e:
+#         db.rollback()
+#         log.error(f"Lỗi khi lưu: {e}", exc_info=True)
+#         raise
+#     finally:
+#         db.close()
 
-    return logs_count, anoms_count, agg_count
+#     return logs_count, anoms_count, agg_count
 
 
 def _build_event_anomalies(results: Dict[str, Any],
@@ -417,25 +417,167 @@ def _strip_tz(ts):
     return ts
 
 def _to_serializable(obj):
-    """
-    Đảm bảo object đưa vào JSON (cột details) không chứa kiểu lạ như Timestamp.
-    - datetime / Timestamp -> isoformat string
-    - list / dict -> đệ quy
-    - cái khác giữ nguyên
-    """
-    if isinstance(obj, pd.Timestamp):
-        if obj.tzinfo is not None:
-            obj = obj.tz_localize(None)
+    if isinstance(obj, (datetime, pd.Timestamp)):
         return obj.isoformat()
-    if isinstance(obj, (datetime, date)):
-        if getattr(obj, "tzinfo", None) is not None:
-            obj = obj.replace(tzinfo=None)
-        return obj.isoformat()
-    if isinstance(obj, list):
-        return [_to_serializable(x) for x in obj]
-    if isinstance(obj, dict):
-        return {k: _to_serializable(v) for k, v in obj.items()}
-    return obj
+    if pd.isna(obj):
+        return None
+    if isinstance(obj, (list, dict)):
+        import json
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    return str(obj)
+
+
+def save_results_to_db(results: Dict[str, Any]):
+    """Save all logs + all anomaly types to PostgreSQL"""
+    if not results or "all_logs" not in results:
+        log.warning("No results to save.")
+        return
+
+    df_all = results.get("all_logs")
+    if df_all is None or df_all.empty:
+        log.info("No logs to save.")
+        return
+
+    # Ensure timestamp is naive datetime
+    if 'timestamp' in df_all.columns:
+        df_all['timestamp'] = pd.to_datetime(df_all['timestamp'], utc=True)
+        df_all['timestamp'] = df_all['timestamp'].dt.tz_localize(None)
+
+    # === 1. Save to AllLogs (rich schema) ===
+    all_logs_to_save = df_all.copy()
+
+    # Map to AllLogs model columns
+    log_mapping = {
+        'timestamp': 'timestamp',
+        'user': 'user',
+        'client_ip': 'client_ip',
+        'database': 'database',
+        'query': 'query',
+        'execution_time_ms': 'execution_time_ms',
+        'rows_returned': 'rows_returned',
+        'rows_affected': 'rows_affected',
+        'source_dbms': 'source_dbms',
+        'ml_anomaly_score': 'ml_anomaly_score',
+        'is_late_night': 'is_late_night',
+        'is_potential_dump': 'is_potential_dump',
+        'accessed_sensitive_tables': 'accessed_sensitive_tables',
+        'is_risky_command': 'is_risky_command',
+        'is_admin_command': 'is_admin_command',
+        'query_entropy': 'query_entropy',
+        'num_tables': 'num_tables',
+        'accessed_tables': 'accessed_tables',
+        'is_select_star': 'is_select_star',
+        'has_into_outfile': 'has_into_outfile',
+        'is_suspicious_func': 'is_suspicious_func',
+        'is_privilege_change': 'is_privilege_change',
+        'unusual_activity_reason': 'unusual_activity_reason',
+    }
+
+    # Prepare records
+    records = []
+    for _, row in all_logs_to_save.iterrows():
+        rec = {}
+        for src_col, dest_col in log_mapping.items():
+            val = row.get(src_col)
+            if pd.isna(val):
+                val = None
+            elif isinstance(val, (list, dict, set)):
+                val = _to_serializable(val)
+            elif isinstance(val, float) and src_col in ['ml_anomaly_score']:
+                val = float(val) if not pd.isna(val) else None
+            rec[dest_col] = val
+        rec['is_anomaly'] = bool(
+            row.get('ml_anomaly_score', 0) > 0.7 or
+            row.get('is_late_night') or
+            row.get('is_potential_dump') or
+            row.get('is_risky_command') or
+            row.get('is_suspicious_func') or
+            row.get('is_privilege_change')
+        )
+        records.append(rec)
+
+    if records:
+        try:
+            with SessionLocal() as db:
+                db.bulk_insert_mappings(AllLogs, records)
+                db.commit()
+            log.info(f"Saved {len(records)} logs to AllLogs")
+        except Exception as e:
+            log.error(f"Failed to save AllLogs: {e}", exc_info=True)
+
+    # === 2. Save Event-Level Anomalies ===
+    anomaly_frames = []
+    for key, df in results.items():
+        if not key.startswith("anomalies_") or df is None or df.empty:
+            continue
+        df_anom = df.copy()
+        df_anom['anomaly_type'] = key.replace("anomalies_", "")
+        df_anom['score'] = df_anom.get('ml_anomaly_score', 1.0)
+        df_anom['reason'] = df_anom.get('unusual_activity_reason', f"Rule: {key}")
+        anomaly_frames.append(df_anom)
+
+    if anomaly_frames:
+        df_anomalies = pd.concat(anomaly_frames, ignore_index=True)
+        df_anomalies['timestamp'] = pd.to_datetime(df_anomalies['timestamp'], utc=True).dt.tz_localize(None)
+
+        anomaly_records = []
+        for _, row in df_anomalies.iterrows():
+            rec = {
+                'timestamp': row['timestamp'],
+                'user': row.get('user'),
+                'client_ip': row.get('client_ip'),
+                'database': row.get('database'),
+                'query': str(row.get('query', '')),
+                'anomaly_type': row.get('anomaly_type', 'unknown'),
+                'score': float(row.get('score', 1.0)) if pd.notna(row.get('score')) else None,
+                'reason': str(row.get('reason', ''))[:500],
+                'status': 'new',
+                'execution_time_ms': float(row.get('execution_time_ms', 0)) if pd.notna(row.get('execution_time_ms')) else 0,
+                'rows_returned': int(row.get('rows_returned', 0)),
+                'rows_affected': int(row.get('rows_affected', 0)),
+            }
+            anomaly_records.append(rec)
+
+        if anomaly_records:
+            try:
+                with SessionLocal() as db:
+                    db.bulk_insert_mappings(Anomaly, anomaly_records)
+                    db.commit()
+                log.info(f"Saved {len(anomaly_records)} event-level anomalies")
+            except Exception as e:
+                log.error(f"Failed to save Anomalies: {e}", exc_info=True)
+
+    # === 3. Save Session-Level (Aggregate) Anomalies ===
+    if "anomalies_multi_table" in results:
+        df_agg = results["anomalies_multi_table"]
+        if not df_agg.empty:
+            agg_records = []
+            for _, row in df_agg.iterrows():
+                details = {
+                    "tables": row.get("tables_accessed_in_session", []),
+                    "query_count": len(row.get("queries_details", [])),
+                    "duration_sec": (row['end_time'] - row['start_time']).total_seconds() if pd.notna(row['start_time']) and pd.notna(row['end_time']) else 0
+                }
+                agg_records.append({
+                    'scope': 'session',
+                    'user': row.get('user'),
+                    'database': None,
+                    'start_time': pd.to_datetime(row['start_time']).tz_localize(None) if pd.notna(row['start_time']) else None,
+                    'end_time': pd.to_datetime(row['end_time']).tz_localize(None) if pd.notna(row['end_time']) else None,
+                    'anomaly_type': 'multi_table_access',
+                    'severity': float(row.get('distinct_tables_count', 0)),
+                    'reason': f"Accessed {row.get('distinct_tables_count', 0)} tables in short window",
+                    'details': _to_serializable(details)
+                })
+
+            if agg_records:
+                try:
+                    with SessionLocal() as db:
+                        db.bulk_insert_mappings(AggregateAnomaly, agg_records)
+                        db.commit()
+                    log.info(f"Saved {len(agg_records)} session-level anomalies")
+                except Exception as e:
+                    log.error(f"Failed to save AggregateAnomaly: {e}", exc_info=True)
 
 
 def _build_multi_table_anomalies(results: Dict[str, Any],

@@ -10,6 +10,7 @@ from datetime import time as dt_time
 import logging
 import uuid
 from datetime import datetime
+from typing import Set
 
 # Thêm cấu hình logging ở đầu file
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [Utils] - %(message)s')
@@ -449,3 +450,24 @@ def save_logs_to_parquet(records: list, source_dbms: str) -> int:
     except Exception as e:
         logging.error(f"Lỗi khi lưu file Parquet: {e}")
         return 0
+
+def get_normalized_query(query: str) -> str:
+    """Extract DIGEST_TEXT-like normalized query"""
+    if not query:
+        return ""
+    # Simple normalization (you can use sqlglot for better)
+    query = re.sub(r'"\w+"', '"?"', query)
+    query = re.sub(r"'\w+'", "'?'", query)
+    query = re.sub(r'\d+', '?', query)
+    return query.strip()
+
+def count_sensitive_tables(tables: list) -> int:
+    if not tables:
+        return 0
+    return len([t for t in tables if any(st in t.lower() for st in SENSITIVE_TABLES)])
+
+def is_late_night(ts):
+    from datetime import datetime
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    return ts.hour <= 5 or ts.hour >= 23
