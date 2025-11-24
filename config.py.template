@@ -14,24 +14,31 @@ import os
 from dotenv import load_dotenv
 
 # ==============================================================================
-# I. CẤU HÌNH BIẾN MÔI TRƯỜNG (ENVIRONMENT VARIABLES)
+# I. KHỞI TẠO BIẾN MÔI TRƯỜNG VÀ CÁC ĐƯỜNG DẪN CỐT LÕI
 # ==============================================================================
+
 # Lệnh này sẽ tìm và tải các biến từ một file có tên là `.env` trong thư mục gốc.
 # `override=True` đảm bảo rằng giá trị trong file `.env` sẽ được ưu tiên.
 load_dotenv(override=True)
 
-# ==============================================================================
-# II. CẤU HÌNH ĐƯỜNG DẪN VÀ FILE
-# ==============================================================================
-# Mục này định nghĩa tất cả các đường dẫn file mà ứng dụng sử dụng.
+# --- Đường dẫn cho quá trình Phân tích Log (Parsing) ---
 
 # Lấy đường dẫn đến thư mục gốc của project một cách tự động.
+# Điều này giúp project có thể chạy trên bất kỳ máy nào mà không cần sửa đường dẫn.
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # --- CÁC ĐƯỜNG DẪN ĐƯỢC TÍNH TOÁN DỰA TRÊN THƯ MỤC GỐC ---
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+STAGING_DATA_DIR = os.path.join(DATA_DIR, "staging")                    # Nơi chứa các file Parquet chờ xử lý
+ARCHIVE_DATA_DIR = os.path.join(DATA_DIR, "archive")                    # (Tùy chọn) Nơi lưu trữ file đã xử lý
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 ENGINE_DIR = os.path.join(PROJECT_ROOT, "engine")
+MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch_mysql")   # Thư mục để lưu trữ các file log đã phân tích bị không đồng bộ
+    
+# ==============================================================================
+# II. CẤU HÌNH ĐƯỜNG DẪN FILE CHI TIẾT
+# ==============================================================================
+# Các đường dẫn này giờ đây được xây dựng một cách an toàn.
 
 # Thêm URL PostgreSQL:
 # Thay 'user:password' và 'db_name' cho đúng
@@ -50,54 +57,36 @@ RULES_CONFIG_FILE_PATH = os.path.join(ENGINE_DIR, "rules_config.json")
 # Đây là file ĐẦU VÀO cho script `log_parser.py`.
 # !! BẠN CẦN SỬA ĐƯỜNG DẪN NÀY CHO ĐÚNG VỚI MÁY CỦA BẠN TRONG SCRIPT PARSER !!
 # `r""` (raw string) được dùng để tránh các lỗi liên quan đến dấu `\` trên Windows.
-SOURCE_MYSQL_LOG_PATH = r"C:/mysql_logs/query.log"
-
-SOURCE_POSTGRES_LOG_PATH = r'C:/psql_logs'
 
 # ------ Posstgresql log config ----------
+SOURCE_POSTGRES_LOG_PATH = r'C:/psql_logs'
 PARSED_POSTGRES_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_postgres_logs.parquet")
-
 POSTGRES_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "postgres_log_parser.py")
-
 POSTGRES_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".postgres_parser_state.json")
 
-# ------ MongoDB log config --------
-SOURCE_MONGO_LOG_PATH = r"C:/mongo_logs"
-PARSED_MONGO_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_mongodb_logs.parquet")
-MONGO_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "mongodb_log_parser.py")
-
 # ------ MySQL log config ---------
+#SOURCE_MYSQL_LOG_PATH = r"C:/Users/IEUser/Downloads/tao_log/general_log.log"
+SOURCE_MYSQL_LOG_PATH = r"C:/mysql_logs/query.log"
+PARSED_MYSQL_LOG_PARQUET_PATH = os.path.join(LOGS_DIR, "parsed_mysql_logs.parquet")        # Tên file CSV sẽ được tạo ra sau khi `log_parser.py` chạy.
+MYSQL_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "mysql_log_parser.py")          # Tên file script thực hiện việc phân tích log.
+META_FILE_PATH = MYSQL_PARSER_SCRIPT_PATH + ".meta"                                 # Tên file chứa thông tin metadata về lần parse cuối cùng (ví dụ: thời gian cập nhật).
+MYSQL_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".mysql_parser_state")               # Tên file chứa trạng thái của parser (ví dụ: vị trí cuối cùng đã đọc trong file log).
 
-# Tên file CSV sẽ được tạo ra sau khi `log_parser.py` chạy.
-PARSED_MYSQL_LOG_PARQUET_PATH = os.path.join(LOGS_DIR, "parsed_mysql_logs.parquet")
-STAGING_DATA_DIR = os.path.join(DATA_DIR, "staging")   # Nơi chứa các file Parquet chờ xử lý
-ARCHIVE_DATA_DIR = os.path.join(DATA_DIR, "archive")   # (Tùy chọn) Nơi lưu trữ file đã xử lý
+# --- Đường dẫn cho các mô hình Feedback và Module ---
+MODELS_DIR = os.path.join(PROJECT_ROOT, "trained_models")                           # Thư mục chính để chứa tất cả các mô hình AI đã được huấn luyện.
+USER_MODELS_DIR = os.path.join(MODELS_DIR, "user_models")                           # Thư mục con để chứa các mô hình AI được huấn luyện riêng cho từng người dùng.
+FEEDBACK_FILE_PATH = os.path.join(PROJECT_ROOT, 'feedback.csv')                     # Tên file CSV để lưu trữ các phản hồi (feedback) từ người dùng.
+VALID_MODELS_FILE_PATH = os.path.join(PROJECT_ROOT, 'valid_models.json')            # Tên file JSON để lưu danh sách các model AI đã được xác thực thành công.
 
-# Thư mục để lưu trữ các file log đã phân tích bị không đồng bộ
-MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch")
-
-# Tên file script thực hiện việc phân tích log.
-MYSQL_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "mysql_log_parser.py")
-
-# Tên file chứa thông tin metadata về lần parse cuối cùng (ví dụ: thời gian cập nhật).
-META_FILE_PATH = MYSQL_PARSER_SCRIPT_PATH + ".meta"
-
-# Tên file chứa trạng thái của parser (ví dụ: vị trí cuối cùng đã đọc trong file log).
-MYSQL_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".mysql_parser_state")
-
-# --- Đường dẫn cho các mô hình AI và Feedback ---
-
-# Thư mục chính để chứa tất cả các mô hình AI đã được huấn luyện.
-MODELS_DIR = "trained_models"
-
-# Thư mục con để chứa các mô hình AI được huấn luyện riêng cho từng người dùng.
-USER_MODELS_DIR = os.path.join(MODELS_DIR, "user_models")
-
-# Tên file CSV để lưu trữ các phản hồi (feedback) từ người dùng.
-FEEDBACK_FILE_PATH = 'feedback.csv'
-
-# Tên file JSON để lưu danh sách các model AI đã được xác thực thành công.
-VALID_MODELS_FILE_PATH = 'valid_models.json'
+# Tạo một danh sách tất cả các thư mục cần tồn tại và lặp qua để tạo chúng.
+# Điều này đảm bảo rằng trước khi bất kỳ code nào khác chạy, môi trường đã sẵn sàng.
+DIRECTORIES_TO_CREATE = [
+    DATA_DIR, LOGS_DIR, ENGINE_DIR, MODELS_DIR, 
+    USER_MODELS_DIR, MYSQL_MISMATCH_ARCHIVE_DIR,
+    STAGING_DATA_DIR, ARCHIVE_DATA_DIR
+]
+for dir_path in DIRECTORIES_TO_CREATE:
+    os.makedirs(dir_path, exist_ok=True)
 
 # ==============================================================================
 # III. CẤU HÌNH CÁC LUẬT PHÁT HIỆN BẤT THƯỜNG
@@ -136,13 +125,12 @@ PRIVILEGE_COMMANDS = ['grant', 'revoke', 'create user', 'drop user', 'alter user
 # IV. CẤU HÌNH CÁC DỊCH VỤ NGOÀI VÀ HỆ THỐNG
 # ==============================================================================
 
-# --- 1. Cấu hình Theo dõi File ---
+# --- 1. Cấu hình Theo dõi File (File Watcher) ---
 # Thời gian (giây) mà ứng dụng sẽ chờ giữa mỗi lần kiểm tra file log.
-
 ENGINE_SLEEP_INTERVAL_SECONDS = 60
 
 # --- 2. Cấu hình Server Ollama ---
-DEFAULT_OLLAMA_HOST = 'http://192.168.2.239:11434'  # Địa chỉ mặc định của server Ollama.
+DEFAULT_OLLAMA_HOST = 'http://localhost:11434'  # Địa chỉ mặc định của server Ollama.
 DEFAULT_OLLAMA_MODEL = 'seneca'                 # Tên model mặc định sẽ được sử dụng.
 OLLAMA_TIMEOUT_SECONDS = 3600                   # Thời gian chờ tối đa (giây) khi gọi AI (1 giờ).
 
