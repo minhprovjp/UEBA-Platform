@@ -75,8 +75,12 @@ Bạn cần mở **hai terminal riêng biệt** (đã kích hoạt môi trườn
 ### Terminal 1: Chạy Analysis Engine
 
 Tiến trình này sẽ chạy liên tục trong nền để phân tích log.
+
+Chạy 2 cái terminal.
 ```bash
-python engine/engine_runner.py
+python engine/perf_log_publisher.py
+
+python engine/realtime_engine.py
 ```
 Hãy theo dõi output để đảm bảo nó khởi động thành công và bắt đầu các chu kỳ phân tích.
 
