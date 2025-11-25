@@ -225,7 +225,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # Rule 3: Multi-table in short window (dùng accessed_tables từ feature mới)
     anomalies_multiple_tables_list = []
     window = pd.Timedelta(minutes=p_time_window_minutes)
-    for user, group in df_logs.groupby('user'):
+    for user, group in df_logs.groupby('user', observed=False):
         if len(group) < 2: continue
         group = group.sort_values('timestamp').reset_index(drop=True)
         session_tables = set()
@@ -274,7 +274,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
 
     # Rule 5: Unusual user time
     user_profiles = {}
-    for user, g in df_logs.groupby('user'):
+    for user, g in df_logs.groupby('user', observed=False):
         if len(g) >= p_min_queries_for_profile:
             hours = g['timestamp'].dt.hour
             user_profiles[user] = {

@@ -5,6 +5,8 @@ from typing import Dict, List, Any
 from datetime import datetime
 import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
+import json
+import numpy as np
 
 # Đảm bảo import backend_api khi chạy từ project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -475,27 +477,55 @@ def save_results_to_db(results: Dict[str, Any]):
 
     # Prepare records
     records = []
-    for _, row in all_logs_to_save.iterrows():
+    for idx in all_logs_to_save.index:
+        row = all_logs_to_save.loc[idx]
         rec = {}
+        
         for src_col, dest_col in log_mapping.items():
-            val = row.get(src_col)
-            if pd.isna(val):
+            if src_col not in row.index:
                 val = None
-            elif isinstance(val, (list, dict, set)):
-                val = _to_serializable(val)
-            elif isinstance(val, float) and src_col in ['ml_anomaly_score']:
-                val = float(val) if not pd.isna(val) else None
+            else:
+                val = row[src_col]
+                
+                if isinstance(val, (list, dict, set, np.ndarray)) and len(val) == 0:
+                    val = None
+                elif isinstance(val, (pd.Series, pd.DataFrame)):
+                    val = val.iloc[0] if len(val) > 0 else None
+                    
+                # BOOLEAN COLUMNS — ÉP VỀ True/False
+                if src_col in ['is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
+                            'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
+                            'is_risky_command', 'is_admin_command', 'is_potential_dump', 
+                            'is_suspicious_func', 'is_privilege_change']:
+                    if val in (1, '1', 'True', True, 'true', 'T'):
+                        val = True
+                    elif val in (0, '0', 'False', False, 'false', 'F', None):
+                        val = False
+                    else:
+                        val = bool(val)
+                elif pd.isna(val):
+                    val = None
+                elif isinstance(val, (list, dict, set)):
+                    val = json.dumps(val, ensure_ascii=False, default=str)
+                elif isinstance(val, (pd.Timestamp, datetime)):
+                    val = val.isoformat()
+                elif isinstance(val, float) and src_col in ['ml_anomaly_score']:
+                    val = float(val) if not pd.isna(val) else None
+                else:
+                    val = str(val) if pd.notna(val) else None
+            
             rec[dest_col] = val
+
+        score = float(rec.get('ml_anomaly_score', 0) or 0)
         rec['is_anomaly'] = bool(
-            row.get('ml_anomaly_score', 0) > 0.7 or
-            row.get('is_late_night') or
-            row.get('is_potential_dump') or
-            row.get('is_risky_command') or
-            row.get('is_suspicious_func') or
-            row.get('is_privilege_change')
+            score > 0.7 or
+            rec.get('is_late_night') or
+            rec.get('is_potential_dump') or
+            rec.get('is_risky_command') or
+            rec.get('is_suspicious_func') or
+            rec.get('is_privilege_change')
         )
         records.append(rec)
-
     if records:
         try:
             with SessionLocal() as db:

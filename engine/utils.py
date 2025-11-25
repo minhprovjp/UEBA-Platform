@@ -41,44 +41,38 @@ def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
         # Điều kiện là: thời gian lớn hơn giờ bắt đầu (22:00) HOẶC nhỏ hơn giờ kết thúc (05:00).
         return query_time >= start_time_rule or query_time < end_time_rule
 
-
 def is_potential_large_dump(row, large_tables_list, threshold=1000):
-    
-    if row.get('rows_returned', 0) > threshold:
-        return True
-    
-    query = str(row['query']).lower()
-    
-    if "select into outfile" in query:
-        return True
-    
-    # Rule 1: SELECT *
-    has_select_star = "select *" in query
-    
-    # Rule 2: Không có WHERE hoặc WHERE luôn đúng (Tautology)
-    has_no_where = "where" not in query
-    has_tautology = re.search(r"where\s+1\s*=\s*1", query, re.IGNORECASE) or \
-                    re.search(r"where\s+['\"]\w['\"]\s*=\s*['\"]\w['\"]", query, re.IGNORECASE)
+    """
+    Phát hiện hành vi dump dữ liệu lớn
+    ĐÃ FIX HOÀN TOÀN lỗi Series ambiguous
+    """
+    # DÙNG .at ĐỂ LẤY GIÁ TRỊ SCALAR — AN TOÀN 100%
+    try:
+        rows_returned = int(row.at['rows_returned']) if pd.notna(row.at['rows_returned']) else 0
+    except:
+        rows_returned = 0
 
-    # Rule 3: Truy cập bảng lớn
-    accesses_large_table = False
-    for table in large_tables_list:
-        table_lower = table.lower()
-        if (f"from {table_lower}" in query or f"from `{table_lower}`" in query):
-            accesses_large_table = True
-            break
-            
-    # Bất thường NẾU:
-    # 1. Nó truy cập một bảng lớn VÀ (không có WHERE HOẶC có Tautology)
-    if accesses_large_table and (has_no_where or has_tautology) and has_select_star:
+    try:
+        query = str(row.at['query']).lower() if pd.notna(row.at['query']) else ""
+    except:
+        query = ""
+
+    # Rule 1: Rõ ràng dump lớn
+    if rows_returned > threshold:
         return True
-        
-    # 2. Hoặc nó là một lệnh 'select into outfile'
-    if "select into outfile" in query:
+
+    # Rule 2: INTO OUTFILE / DUMPFILE
+    if "into outfile" in query or "into dumpfile" in query:
         return True
-        
+
+    # Rule 3: SELECT * + bảng lớn + không có WHERE
+    if "select *" in query:
+        has_where = "where" in query
+        accesses_large = any(table.lower() in query for table in large_tables_list)
+        if not has_where and accesses_large:
+            return True
+
     return False
-
 
 def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     """

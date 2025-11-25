@@ -4,7 +4,7 @@ from redis import Redis, ConnectionError as RedisConnectionError
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Thêm thư mục gốc
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,7 +35,7 @@ def read_last_known_event_id(state_file_path=PERF_SCHEMA_STATE_FILE) -> int:
         return 0
         
 def write_last_known_event_id(last_id: int, state_file_path=PERF_SCHEMA_STATE_FILE):
-    state = {"last_event_id": last_id, "last_updated": datetime.utcnow().isoformat() + "Z"}
+    state = {"last_event_id": last_id, "last_updated": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     os.makedirs(os.path.dirname(state_file_path) or ".", exist_ok=True)
     try:
         with open(state_file_path, 'w', encoding='utf-8') as f:
@@ -78,22 +78,27 @@ def monitor_performance_schema(poll_interval_sec: int = 3):
     # PRODUCTION-GRADE QUERY — FULLY COMPATIBLE WITH NEW SCHEMA
     sql_query = text("""
         SELECT 
+        	e.THREAD_ID,
             e.EVENT_ID,
             e.TIMER_WAIT,
             e.SQL_TEXT,
-            e.DIGEST,
+    		e.DIGEST,
             e.DIGEST_TEXT,
             e.CURRENT_SCHEMA,
+            TRUNCATE(e.TIMER_WAIT / 1000000000, 4) AS execution_time_ms,
             e.ROWS_SENT,
+            e.ROWS_EXAMINED,
             e.ROWS_AFFECTED,
-            e.MYSQL_ERRNO,
-            e.MESSAGE_TEXT,
-            e.ERRORS,
-            e.WARNINGS,
+		    e.MYSQL_ERRNO,
+		    e.MESSAGE_TEXT,
+		    e.ERRORS,
+		    e.WARNINGS,
             e.CREATED_TMP_DISK_TABLES,
             e.NO_INDEX_USED,
-            t.PROCESSLIST_USER AS user,
-            COALESCE(t.PROCESSLIST_HOST, 'unknown') AS host
+            e.NO_GOOD_INDEX_USED,
+            e.SELECT_FULL_JOIN,
+            t.PROCESSLIST_USER,
+            COALESCE(t.PROCESSLIST_HOST, 'unknown') AS PROCESSLIST_HOST
         FROM performance_schema.events_statements_history e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.EVENT_ID > :last_id
@@ -118,22 +123,33 @@ def monitor_performance_schema(poll_interval_sec: int = 3):
                     exec_time_ms = float(row_dict['TIMER_WAIT']) / 1_000_000_000 if row_dict['TIMER_WAIT'] else 0.0
 
                     record = {
-                        "timestamp": datetime.utcnow().isoformat() + "Z",
-                        "user": str(row_dict['user'] or 'unknown'),
-                        "client_ip": str(row_dict['host']).split(':')[0],
+                        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                                # Identity
+                        "user": str(row_dict['PROCESSLIST_USER'] or 'unknown'),
+                        "client_ip": str(row_dict['PROCESSLIST_HOST']).split(':')[0],
                         "database": str(row_dict['CURRENT_SCHEMA'] or 'unknown'),
+                        
+                        # Content
                         "query": str(row_dict['SQL_TEXT'] or ''),
                         "normalized_query": str(row_dict['DIGEST_TEXT'] or ''),
                         "query_digest": str(row_dict['DIGEST'] or ''),
-                        "execution_time_ms": round(float(row_dict['TIMER_WAIT'] or 0) / 1_000_000_000, 6),
+                        
+                        # Metrics
+                        "execution_time_ms": float(row_dict['execution_time_ms'] or 0),
                         "rows_returned": int(row_dict['ROWS_SENT'] or 0),
+                        "rows_examined": int(row_dict['ROWS_EXAMINED'] or 0),
                         "rows_affected": int(row_dict['ROWS_AFFECTED'] or 0),
+                        
+                        # Errors & Warnings
                         "error_code": int(row_dict['MYSQL_ERRNO']) if row_dict['MYSQL_ERRNO'] else None,
                         "error_message": str(row_dict['MESSAGE_TEXT']) if row_dict['MESSAGE_TEXT'] else None,
                         "error_count": int(row_dict['ERRORS'] or 0),
                         "warning_count": int(row_dict['WARNINGS'] or 0),
+                        
+                        # Optimizer Metrics
                         "created_tmp_disk_tables": int(row_dict['CREATED_TMP_DISK_TABLES'] or 0),
                         "no_index_used": int(row_dict['NO_INDEX_USED'] or 0),
+                        
                         "source_dbms": "MySQL"
                     }
 

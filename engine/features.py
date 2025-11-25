@@ -3,220 +3,275 @@
 # Based on: Ronao & Cho (2024), Zhang et al. (KDD 2023), Liu et al. (TNNLS 2024)
 
 import re
-import sqlglot
-import sqlglot.expressions as exp
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 import logging
+import math
+from collections import Counter
+
+# Thử import sqlglot, nếu chưa cài thì fallback sang regex đơn giản
+try:
+    import sqlglot
+    import sqlglot.expressions as exp
+    SQLGLOT_AVAILABLE = True
+except ImportError:
+    SQLGLOT_AVAILABLE = False
+    logging.warning("Thư viện 'sqlglot' chưa được cài đặt. Đang dùng chế độ Regex cơ bản (kém chính xác hơn). Hãy chạy: pip install sqlglot")
 
 logging.basicConfig(level=logging.INFO)
 
 # Sensitive tables from your schema
 SENSITIVE_TABLES = {
     "hr_db.salaries", "hr_db.employees", "hr_db.salary", "mysql.user",
-    "information_schema.user_privileges", "performance_schema.accounts"
+    "information_schema.user_privileges", "performance_schema.accounts",
+    "salaries", "employees", "users"
 }
 
 # High-risk commands
 RISKY_COMMANDS = {"DELETE", "DROP", "TRUNCATE", "UPDATE", "INSERT", "GRANT", "REVOKE", "CREATE USER", "ALTER USER"}
 
-def safe_parse_sql(query: str) -> exp.Expression:
+def _shannon_entropy(text: str) -> float:
+    """Tính độ hỗn loạn của chuỗi (cao -> mã hóa/random string)"""
+    if not text: return 0.0
+    freq = Counter(text)
+    length = len(text)
+    return -sum((count / length) * math.log2(count / length) for count in freq.values())
+
+def safe_parse_sql(query: str):
     """Safely parse SQL with fallback"""
+    if not SQLGLOT_AVAILABLE:
+        return None
     if not query or not isinstance(query, str):
         return None
     query = query.strip()
     if len(query) > 10000:  # Truncate ultra-long queries
         query = query[:10000]
     try:
-        return sqlglot.parse_one(query, dialect="mysql")
+        # read=None tự động detect dialect, hoặc ép 'mysql'
+        return sqlglot.parse_one(query, read="mysql")
     except Exception as e:
-        logging.debug(f"SQL parse failed: {e}")
+        # logging.debug(f"SQL parse failed: {e}")
         return None
-
-def extract_query_features(row: pd.Series) -> Dict[str, Any]:
-    """Main feature extractor - called on each log row"""
-    query = str(row.get("query", "")).strip()
-    user = str(row.get("user", "unknown"))
-    database = str(row.get("database", "unknown"))
-    timestamp = row.get("timestamp")
-    if isinstance(timestamp, str):
-        timestamp = pd.to_datetime(timestamp, utc=True, errors='coerce')
-    hour = timestamp.hour if timestamp and pd.notna(timestamp) else 12
-
-    features = {
-        # === 1. Temporal Features ===
-        "hour": hour,
-        "hour_sin": np.sin(2 * np.pi * hour / 24.0),
-        "hour_cos": np.cos(2 * np.pi * hour / 24.0),
-        "is_weekend": 1 if timestamp and timestamp.weekday() >= 5 else 0,
-        "is_late_night": 1 if hour in (0,1,2,3,4,5) else 0,
-        "is_work_hours": 1 if 7 <= hour <= 18 else 0,
-
-        # === 2. Query Syntax & Structure ===
-        "query_length": len(query),
-        "query_entropy": _shannon_entropy(query),
-        "num_tokens": len(query.split()),
-        "has_semicolon": 1 if query.endswith(";") else 0,
-        "is_commented": 1 if query.strip().startswith(("/*", "--", "#")) else 0,
-
-        # === 3. SQL Parsing Features (using sqlglot) ===
-        "num_tables": 0,
-        "num_joins": 0,
-        "num_where_conditions": 0,
-        "num_subqueries": 0,
-        "has_limit": 0,
-        "has_order_by": 0,
-        "has_group_by": 0,
-        "has_having": 0,
-        "has_union": 0,
-        "command_type": "UNKNOWN",
-        "accessed_tables": [],
-        "accessed_sensitive_tables": 0,
-        "is_risky_command": 0,
-        "is_admin_command": 0,
-        "is_select_star": 0,
-        "has_into_outfile": 0,
-        "has_load_data": 0,
-        "has_sleep_benchmark": 0,
-    }
-
-    parsed = safe_parse_sql(query.upper())
-    if parsed:
-        cmd = parsed.key.upper() if hasattr(parsed, "key") else ""
-        features["command_type"] = cmd
-
-        if cmd in RISKY_COMMANDS:
-            features["is_risky_command"] = 1
-        if cmd in {"GRANT", "REVOKE", "CREATE USER", "ALTER USER", "SET PASSWORD"}:
-            features["is_admin_command"] = 1
-
-        # Extract tables
-        tables = _extract_tables(parsed)
-        features["accessed_tables"] = list(tables)
-        features["num_tables"] = len(tables)
-        sensitive_hits = len(tables.intersection(SENSITIVE_TABLES))
-        features["accessed_sensitive_tables"] = sensitive_hits
-
-        # Structural analysis
-        features["num_joins"] = len(parsed.find_all(exp.Join))
-        features["num_where_conditions"] = len(list(parsed.find_all(exp.Where)))
-        features["num_subqueries"] = len(list(parsed.find_all(exp.Subquery)))
-        features["has_limit"] = 1 if parsed.find(exp.Limit) else 0
-        features["has_order_by"] = 1 if parsed.find(exp.Order) else 0
-        features["has_group_by"] = 1 if parsed.find(exp.Group) else 0
-        features["has_having"] = 1 if parsed.find(exp.Having) else 0
-        features["has_union"] = 1 if parsed.find(exp.Union) else 0
-
-        # Dangerous patterns
-        if "SELECT *" in query.upper():
-            features["is_select_star"] = 1
-        if "INTO OUTFILE" in query.upper() or "INTO DUMPFILE" in query.upper():
-            features["has_into_outfile"] = 1
-        if "LOAD DATA" in query.upper():
-            features["has_load_data"] = 1
-        if re.search(r"SLEEP\s*\(", query, re.I) or re.search(r"BENCHMARK\s*\(", query, re.I):
-            features["has_sleep_benchmark"] = 1
-
-    # === 4. Performance & Result Features (from performance_schema) ===
-    features["execution_time_ms"] = float(row.get("execution_time_ms", row.get("execution_time_sec", 0)) * 1000)
-    features["rows_returned"] = int(row.get("rows_returned", 0))
-    features["rows_affected"] = int(row.get("rows_affected", 0))
-    features["has_error"] = 1 if row.get("error_code", 0) != 0 else 0
-    features["is_access_denied"] = 1 if "access denied" in str(row.get("error_message", "")).lower() else 0
-
-    # === 5. Behavioral Deviation (per-user baselines) ===
-    # These will be filled later in data_processor.py using groupby
-    features["exec_time_zscore"] = 0.0
-    features["rows_returned_zscore"] = 0.0
-
-    return features
-
 
 def _extract_tables(expression) -> set:
     """Extract fully qualified table names from parsed SQL"""
     tables = set()
-    for table in expression.find_all(exp.Table):
-        db = table.db or ""
-        name = table.name or table.this if hasattr(table, "this") else ""
-        full_name = f"{db}.{name}".lower() if db else name.lower()
-        if full_name:
-            tables.add(full_name)
+    if not expression: 
+        return tables
+    try:
+        for table in expression.find_all(exp.Table):
+            db = table.db or ""
+            name = table.name or table.this if hasattr(table, "this") else ""
+            full_name = f"{db}.{name}".lower() if db else name.lower()
+            if full_name:
+                tables.add(full_name)
+    except Exception:
+        pass
     return tables
 
+def extract_query_features(row: pd.Series) -> Dict[str, Any]:
+    """Trích xuất Static Features từ 1 dòng log"""
+    query = str(row.get("query", "")).strip()
+    
+    # Timestamp handling
+    ts = row.get("timestamp")
+    if isinstance(ts, str):
+        try: ts = pd.to_datetime(ts).tz_localize(None)
+        except: ts = None
+    elif isinstance(ts, pd.Timestamp) and ts.tzinfo:
+        ts = ts.tz_localize(None)
 
-def _shannon_entropy(text: str) -> float:
-    """Calculate Shannon entropy - high for obfuscated/SQLi strings"""
-    if not text:
-        return 0.0
-    import math
-    from collections import Counter
-    freq = Counter(text)
-    length = len(text)
-    return -sum((count / length) * math.log2(count / length) for count in freq.values())
+    hour = ts.hour if ts else 12
+    
+    # 1. Base Features
+    f = {
+        "query_length": len(query),
+        "query_entropy": _shannon_entropy(query),
+        "hour_sin": np.sin(2 * np.pi * hour / 24.0),
+        "hour_cos": np.cos(2 * np.pi * hour / 24.0),
+        "is_weekend": 1 if ts and ts.weekday() >= 5 else 0,
+        "is_late_night": 1 if 0 <= hour <= 5 else 0,
+    }
+
+    # 2. Performance Metrics
+    exec_time = float(row.get("execution_time_ms", 0))
+    rows_ret = int(row.get("rows_returned", 0))
+    f["execution_time_ms"] = exec_time
+    f["rows_returned"] = rows_ret
+    f["rows_affected"] = int(row.get("rows_affected", 0))
+    f["no_index_used"] = int(row.get("no_index_used", 0))
+    
+    # Ratio: Rows per Time (Data Retrieval Speed)
+    # Tránh chia cho 0
+    f["data_retrieval_speed"] = rows_ret / (exec_time + 0.001)
+
+    # 3. SQL Structure (Parser)
+    parsed = safe_parse_sql(query)
+    
+    # Default values
+    for k in ["num_tables", "num_joins", "num_where", "subquery_depth", 
+              "is_sensitive_access", "is_system_access", "is_dcl", "is_ddl", 
+              "has_comment", "has_hex"]:
+        f[k] = 0
+    f["accessed_tables"] = []
+
+    if parsed:
+        cmd = parsed.key.upper() if hasattr(parsed, "key") else "UNKNOWN"
+        f["command_type"] = cmd
+        f["is_dcl"] = 1 if cmd in {"GRANT", "REVOKE", "CREATE USER"} else 0
+        f["is_ddl"] = 1 if cmd in {"CREATE", "DROP", "ALTER", "TRUNCATE"} else 0
+
+        # Elements
+        f["num_tables"] = len(list(parsed.find_all(exp.Table)))
+        f["num_joins"] = len(list(parsed.find_all(exp.Join)))
+        f["num_where"] = len(list(parsed.find_all(exp.Where)))
+        
+        # Subquery Depth
+        depth = 0
+        node = parsed
+        while node:
+            if isinstance(node, exp.Subquery): depth += 1
+            try: node = list(node.children.values())[0][0]
+            except: break
+        f["subquery_depth"] = min(depth, 10)
+
+        # Tables check
+        tables_found = set()
+        for t in parsed.find_all(exp.Table):
+            t_name = t.name.lower()
+            db_name = t.db.lower() if t.db else ""
+            full = f"{db_name}.{t_name}" if db_name else t_name
+            tables_found.add(full)
+            
+            if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES:
+                f["is_sensitive_access"] = 1
+            if db_name in SYSTEM_SCHEMAS:
+                f["is_system_access"] = 1
+        f["accessed_tables"] = list(tables_found)
+
+    # 4. Regex Heuristics (Fallback & Injection patterns)
+    q_upper = query.upper()
+    if "--" in query or "/*" in query or "#" in query: f["has_comment"] = 1
+    if "0X" in q_upper: f["has_hex"] = 1
+    if "SELECT *" in q_upper: f["is_select_star"] = 1
+    if "INTO OUTFILE" in q_upper: f["has_into_outfile"] = 1
+    
+    # Error Flag
+    f["has_error"] = 1 if row.get("error_code") else 0
+
+    return f
 
 
 # ==============================================================================
-# BATCH FEATURE ENHANCEMENT (Call this in data_processor.py)
+# BATCH FEATURE ENHANCEMENT
 # ==============================================================================
-def enhance_features_batch(df: pd.DataFrame) -> pd.DataFrame:
+def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     """
     Apply extract_query_features to entire DataFrame + add per-user behavioral baselines
     """
     if df.empty:
-        return df
+        return df, []
 
-    # 1. Extract raw features
-    logging.info("Extracting query syntax features...")
-    feature_dfs = df.apply(extract_query_features, axis=1)
-    features_df = pd.json_normalize(feature_dfs)
-    df = pd.concat([df.reset_index(drop=True), features_df], axis=1)
+    # 1. Reset Index
+    df = df.reset_index(drop=True)
 
-    # 2. Per-user behavioral baselines (z-score deviation)
+    # 2. Extract Static Features
+    logging.info("Generating Static Features...")
+    feature_dicts = df.apply(extract_query_features, axis=1).tolist()
+    features_df = pd.DataFrame(feature_dicts)
+    
+    # Xử lý duplicate columns
+    cols_to_drop = [c for c in features_df.columns if c in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+        
+    df_final = pd.concat([df, features_df], axis=1)
+
+    # 3. Contextual Features (Rolling Windows) - [ĐOẠN SỬA LỖI]
+    logging.info("Generating Contextual Features (Rolling Windows)...")
+    
+    if 'timestamp' in df_final.columns:
+        # Chuyển về naive datetime
+        df_final['timestamp'] = pd.to_datetime(df_final['timestamp']).dt.tz_localize(None)
+        
+        # Sort bắt buộc
+        df_final.sort_values(by=['user', 'timestamp'], inplace=True)
+        
+        def calc_rolling(g):
+            # g sẽ không có cột 'user' (do include_groups=False)
+            g = g.set_index('timestamp').sort_index()
+            win = '5min'
+            
+            g['query_count_5m'] = g['query_length'].rolling(win).count()
+            g['error_count_5m'] = g['has_error'].rolling(win).sum()
+            g['total_rows_5m'] = g['rows_returned'].rolling(win).sum()
+            # Thêm std để đo độ biến thiên hành vi
+            g['query_len_std_5m'] = g['query_length'].rolling(win).std().fillna(0)
+            
+            return g.reset_index()
+
+        try:
+            # [FIX QUAN TRỌNG]: group_keys=True để giữ 'user' trong index kết quả
+            # include_groups=False để tránh warning Deprecated
+            df_rolled = df_final.groupby('user', group_keys=True).apply(calc_rolling, include_groups=False)
+            
+            # Kết quả df_rolled có MultiIndex (user, index_cũ). 
+            # Ta reset_index để đưa 'user' quay lại thành cột.
+            df_final = df_rolled.reset_index(level=0)
+            
+            # Reset index lần nữa để index trở lại dạng 0,1,2... và xóa index thừa nếu có
+            df_final = df_final.reset_index(drop=True)
+            
+        except TypeError:
+            # Fallback cho pandas bản cũ
+            df_final = df_final.groupby('user', group_keys=False).apply(calc_rolling)
+
+        # [FIX Warning Downcasting]
+        pd.set_option('future.no_silent_downcasting', True)
+        df_final = df_final.fillna(0).infer_objects(copy=False)
+
+    # 4. Behavioral Deviation (Z-Score)
     logging.info("Computing per-user behavioral deviations...")
-    for metric in ["execution_time_ms", "rows_returned"]:
-        df[f"{metric}_zscore"] = 0.0
-        df[f"{metric}_pct"] = 0.0
+    
+    # Đảm bảo cột user tồn tại trước khi groupby
+    if 'user' not in df_final.columns:
+         # Fallback cực đoan nếu mất user (hiếm khi xảy ra với fix trên)
+         df_final['user'] = 'unknown'
 
-        def zscore_group(g):
-            if len(g) < 3:
-                return pd.Series([0.0] * len(g), index=g.index)
-            mean, std = g[metric].mean(), g[metric].std()
-            if std == 0:
-                return pd.Series([0.0] * len(g), index=g.index)
-            return (g[metric] - mean) / std
+    metrics = ["execution_time_ms", "rows_returned", "data_retrieval_speed"]
+    for metric in metrics:
+        if metric not in df_final.columns: 
+            df_final[metric] = 0.0
+            
+        col_name = f"{metric}_zscore"
+        
+        def compute_zscore(x):
+            if len(x) < 3: return pd.Series(0.0, index=x.index)
+            std = x.std(ddof=0)
+            if std == 0: return pd.Series(0.0, index=x.index)
+            return (x - x.mean()) / std
 
-        df[f"{metric}_zscore"] = df.groupby("user")[metric].transform(zscore_group)
+        zscores = df_final.groupby('user', group_keys=False)[metric].apply(compute_zscore)
+        df_final[col_name] = zscores.fillna(0.0)
 
-    # 3. Final categorical encoding prep
-    categorical_cols = ["user", "client_ip", "database", "command_type"]
-    for col in categorical_cols:
-        if col not in df.columns:
-            df[col] = "unknown"
-        df[col] = df[col].astype("category")
+    # 5. Feature Selection & Clean up
+    cat_cols = ["user", "client_ip", "database", "command_type"]
+    for col in cat_cols:
+        if col in df_final.columns:
+            df_final[col] = df_final[col].astype("str").astype("category")
 
-    # 4. Final feature list for ML
     final_features = [
-        # Temporal
         "hour_sin", "hour_cos", "is_weekend", "is_late_night", "is_work_hours",
-        # Syntax
         "query_length", "query_entropy", "num_tables", "num_joins", "num_where_conditions",
         "num_subqueries", "has_limit", "has_order_by", "has_group_by", "has_union",
         "is_select_star", "has_into_outfile", "has_load_data", "has_sleep_benchmark",
-        # Risk
         "is_risky_command", "is_admin_command", "accessed_sensitive_tables",
         "has_error", "is_access_denied",
-        # Performance
         "execution_time_ms", "rows_returned", "rows_affected",
         "execution_time_ms_zscore", "rows_returned_zscore",
+        "query_count_5m", "error_count_5m", "total_rows_5m", "data_retrieval_speed"
     ]
 
-    # Add categorical columns for LightGBM
-    df = df.copy()
-    for col in categorical_cols:
-        if col in df.columns and col not in final_features:
-            final_features.append(col)
-
-    logging.info(f"Feature engineering complete. Final {len(final_features)} features.")
-    return df, final_features
+    return df_final, final_features
