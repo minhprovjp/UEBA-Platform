@@ -6,8 +6,8 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CẤU HÌNH ---
-SCENARIO_FILE = "simulation/scenario_script_10day.csv"
-FINAL_DATASET = "final_dataset_10day.csv"
+SCENARIO_FILE = "simulation/scenario_script_10.csv"
+FINAL_DATASET = "final_dataset_10.csv"
 DB_CONFIG = {"user": "root",
              "password": "root", # <- thay pass
              "host": "localhost",
