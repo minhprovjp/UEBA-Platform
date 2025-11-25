@@ -85,96 +85,63 @@ def check_and_send_alert(results: dict):
             logging.error(f"Lỗi nghiêm trọng khi gọi send_email_alert: {e}")
 
 def start_engine():
-    r = connect_redis()
-    full_config = load_config()
-    # Lấy ra mục "analysis_params" từ file config tổng
-    CFG = full_config.get("analysis_params", {})
-    
-    if not CFG:
-        logging.error("KHÔNG TÌM THẤY 'analysis_params' trong engine_config.json. Sử dụng config rỗng.")
+    r = Redis.from_url(REDIS_URL, decode_responses=True)
+    for stream in STREAMS.values():
+        try:
+            r.xgroup_create(stream, REDIS_GROUP_ENGINE, id="0", mkstream=True)
+        except:
+            pass
 
-    for s in STREAMS:
-        ensure_group(r, s, REDIS_GROUP_ENGINE)
+    logging.info("Realtime UBA Engine STARTED — Monitoring MySQL Performance Schema")
 
-    logging.info(f"Realtime engine started. Waiting for messages from {list(STREAMS.keys())}...")
-    logging.info("Engine đang chạy... Nhấn Ctrl+C để dừng.")
-    
     while True:
         try:
-            resp = r.xreadgroup(
+            msgs = r.xreadgroup(
                 groupname=REDIS_GROUP_ENGINE,
                 consumername=REDIS_CONSUMER_NAME,
                 streams=STREAMS,
-                count=ENGINE_BATCH_MAX_MESSAGES,
-                block=ENGINE_BATCH_MAX_BLOCK_MS,
+                count=100,
+                block=5000
             )
-            if not resp:
+
+            if not msgs:
                 continue
 
-            rows = []
-            ack_ids_map = {stream: [] for stream in STREAMS}
+            records = []
+            ack_ids = []
 
-            for (stream, entries) in resp:
-                for (msg_id, fields) in entries:
-                    ack_ids_map[stream].append(msg_id)
-                    raw = fields.get("data")
-                    if not raw: continue
-                    try:
-                        item = json.loads(raw)
-                        rows.append(item)
-                    except Exception as e:
-                        logging.error(f"Bad message data: {e}")
+            for stream, entries in msgs:
+                for msg_id, fields in entries:
+                    data = fields.get("data")
+                    if data:
+                        records.append(json.loads(data))
+                        ack_ids.append((stream, msg_id))
 
-            if not rows:
-                for stream, ids in ack_ids_map.items():
-                    if ids: r.xack(stream, REDIS_GROUP_ENGINE, *ids)
-                continue
+            if records:
+                df = pd.DataFrame(records)
+                results = load_and_process_data(df, {})
 
-            # 1. XỬ LÝ DỮ LIỆU
-            logging.info(f"Processing batch of {len(rows)} records...")
-            df = pd.DataFrame(rows)
-            results = load_and_process_data(df, CFG)
-
-            # 2. LƯU BẤT THƯỜNG
-            db_save_success = False
-            try:
+                # Save to DB
                 save_results_to_db(results)
-                db_save_success = True
-            except Exception as e:
-                # LỖI CSDL (ví dụ: CSDL sập, "database is locked")
-                logging.error(f"Lỗi khi lưu vào CSDL: {e}. Tin nhắn SẼ KHÔNG được ACK và sẽ được xử lý lại.")
-                # KHÔNG `continue` hay `break`, để db_save_success = False
 
-            # 3. GỬI CẢNH BÁO KHI LƯU CSDL THÀNH CÔNG
-            if db_save_success:
-                check_and_send_alert(results)
+                # Send alert if high-risk
+                anomalies = results.get("anomalies_ml", pd.DataFrame())
+                if not anomalies.empty and anomalies['ml_anomaly_score'].max() > 0.85:
+                    send_email_alert(
+                        subject=f"UBA ALERT: {len(anomalies)} High-Risk Queries (Score > 0.85)",
+                        results_df=anomalies,
+                        top_n=8
+                    )
 
-                # 4. ACK MESSAGE
-                for stream, ids in ack_ids_map.items():
-                    if ids:
-                        r.xack(stream, REDIS_GROUP_ENGINE, *ids)
-            else:
-                # Nếu lưu CSDL lỗi, chúng ta KHÔNG ACK
-                logging.warning("Do lỗi CSDL, các tin nhắn trong batch này sẽ được xử lý lại sau.")
-                # Tạm dừng 1 chút để tránh vòng lặp nóng nếu CSDL lỗi liên tục
-                time.sleep(5)
-        
+                # ACK messages
+                for stream, msg_id in ack_ids:
+                    r.xack(stream, REDIS_GROUP_ENGINE, msg_id)
+
         except KeyboardInterrupt:
-            logging.info("Đã nhận tín hiệu (Ctrl+C). Engine đang dừng...")
+            logging.info("Engine stopped by user")
             break
-        except ConnectionError as e:
-            logging.error(f"Mất kết nối Redis (Engine): {e}. Đang kết nối lại...")
-            r = connect_redis() # Thử kết nối lại
-        except ResponseError as e:
-            logging.error(f"Redis Response Error: {e}. Re-checking group...")
-            time.sleep(1)
-            for s in STREAMS:
-                ensure_group(r, s, REDIS_GROUP_ENGINE)
         except Exception as e:
-            logging.error(f"Unhandled error in engine loop: {e}", exc_info=True)
-            time.sleep(5)
-            
-    logging.info("Engine đã dừng.")
+            logging.error(f"Engine error: {e}", exc_info=True)
 
 if __name__ == "__main__":
     start_engine()

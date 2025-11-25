@@ -1,0 +1,277 @@
+# engine/features.py
+# FINAL CORRECTED & ENHANCED FEATURE ENGINEERING FOR MYSQL LOG ANOMALY DETECTION
+# Based on: Ronao & Cho (2024), Zhang et al. (KDD 2023), Liu et al. (TNNLS 2024)
+
+import re
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from typing import Dict, List, Tuple, Any
+import logging
+import math
+from collections import Counter
+
+# Thử import sqlglot, nếu chưa cài thì fallback sang regex đơn giản
+try:
+    import sqlglot
+    import sqlglot.expressions as exp
+    SQLGLOT_AVAILABLE = True
+except ImportError:
+    SQLGLOT_AVAILABLE = False
+    logging.warning("Thư viện 'sqlglot' chưa được cài đặt. Đang dùng chế độ Regex cơ bản (kém chính xác hơn). Hãy chạy: pip install sqlglot")
+
+logging.basicConfig(level=logging.INFO)
+
+# Sensitive tables from your schema
+SENSITIVE_TABLES = {
+    "hr_db.salaries", "hr_db.employees", "hr_db.salary", "mysql.user",
+    "information_schema.user_privileges", "performance_schema.accounts",
+    "salaries", "employees", "users"
+}
+
+# High-risk commands
+RISKY_COMMANDS = {"DELETE", "DROP", "TRUNCATE", "UPDATE", "INSERT", "GRANT", "REVOKE", "CREATE USER", "ALTER USER"}
+
+def _shannon_entropy(text: str) -> float:
+    """Tính độ hỗn loạn của chuỗi (cao -> mã hóa/random string)"""
+    if not text: return 0.0
+    freq = Counter(text)
+    length = len(text)
+    return -sum((count / length) * math.log2(count / length) for count in freq.values())
+
+def safe_parse_sql(query: str):
+    """Safely parse SQL with fallback"""
+    if not SQLGLOT_AVAILABLE:
+        return None
+    if not query or not isinstance(query, str):
+        return None
+    query = query.strip()
+    if len(query) > 10000:  # Truncate ultra-long queries
+        query = query[:10000]
+    try:
+        # read=None tự động detect dialect, hoặc ép 'mysql'
+        return sqlglot.parse_one(query, read="mysql")
+    except Exception as e:
+        # logging.debug(f"SQL parse failed: {e}")
+        return None
+
+def _extract_tables(expression) -> set:
+    """Extract fully qualified table names from parsed SQL"""
+    tables = set()
+    if not expression: 
+        return tables
+    try:
+        for table in expression.find_all(exp.Table):
+            db = table.db or ""
+            name = table.name or table.this if hasattr(table, "this") else ""
+            full_name = f"{db}.{name}".lower() if db else name.lower()
+            if full_name:
+                tables.add(full_name)
+    except Exception:
+        pass
+    return tables
+
+def extract_query_features(row: pd.Series) -> Dict[str, Any]:
+    """Trích xuất Static Features từ 1 dòng log"""
+    query = str(row.get("query", "")).strip()
+    
+    # Timestamp handling
+    ts = row.get("timestamp")
+    if isinstance(ts, str):
+        try: ts = pd.to_datetime(ts).tz_localize(None)
+        except: ts = None
+    elif isinstance(ts, pd.Timestamp) and ts.tzinfo:
+        ts = ts.tz_localize(None)
+
+    hour = ts.hour if ts else 12
+    
+    # 1. Base Features
+    f = {
+        "query_length": len(query),
+        "query_entropy": _shannon_entropy(query),
+        "hour_sin": np.sin(2 * np.pi * hour / 24.0),
+        "hour_cos": np.cos(2 * np.pi * hour / 24.0),
+        "is_weekend": 1 if ts and ts.weekday() >= 5 else 0,
+        "is_late_night": 1 if 0 <= hour <= 5 else 0,
+    }
+
+    # 2. Performance Metrics
+    exec_time = float(row.get("execution_time_ms", 0))
+    rows_ret = int(row.get("rows_returned", 0))
+    f["execution_time_ms"] = exec_time
+    f["rows_returned"] = rows_ret
+    f["rows_affected"] = int(row.get("rows_affected", 0))
+    f["no_index_used"] = int(row.get("no_index_used", 0))
+    
+    # Ratio: Rows per Time (Data Retrieval Speed)
+    # Tránh chia cho 0
+    f["data_retrieval_speed"] = rows_ret / (exec_time + 0.001)
+
+    # 3. SQL Structure (Parser)
+    parsed = safe_parse_sql(query)
+    
+    # Default values
+    for k in ["num_tables", "num_joins", "num_where", "subquery_depth", 
+              "is_sensitive_access", "is_system_access", "is_dcl", "is_ddl", 
+              "has_comment", "has_hex"]:
+        f[k] = 0
+    f["accessed_tables"] = []
+
+    if parsed:
+        cmd = parsed.key.upper() if hasattr(parsed, "key") else "UNKNOWN"
+        f["command_type"] = cmd
+        f["is_dcl"] = 1 if cmd in {"GRANT", "REVOKE", "CREATE USER"} else 0
+        f["is_ddl"] = 1 if cmd in {"CREATE", "DROP", "ALTER", "TRUNCATE"} else 0
+
+        # Elements
+        f["num_tables"] = len(list(parsed.find_all(exp.Table)))
+        f["num_joins"] = len(list(parsed.find_all(exp.Join)))
+        f["num_where"] = len(list(parsed.find_all(exp.Where)))
+        
+        # Subquery Depth
+        depth = 0
+        node = parsed
+        while node:
+            if isinstance(node, exp.Subquery): depth += 1
+            try: node = list(node.children.values())[0][0]
+            except: break
+        f["subquery_depth"] = min(depth, 10)
+
+        # Tables check
+        tables_found = set()
+        for t in parsed.find_all(exp.Table):
+            t_name = t.name.lower()
+            db_name = t.db.lower() if t.db else ""
+            full = f"{db_name}.{t_name}" if db_name else t_name
+            tables_found.add(full)
+            
+            if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES:
+                f["is_sensitive_access"] = 1
+            if db_name in SYSTEM_SCHEMAS:
+                f["is_system_access"] = 1
+        f["accessed_tables"] = list(tables_found)
+
+    # 4. Regex Heuristics (Fallback & Injection patterns)
+    q_upper = query.upper()
+    if "--" in query or "/*" in query or "#" in query: f["has_comment"] = 1
+    if "0X" in q_upper: f["has_hex"] = 1
+    if "SELECT *" in q_upper: f["is_select_star"] = 1
+    if "INTO OUTFILE" in q_upper: f["has_into_outfile"] = 1
+    
+    # Error Flag
+    f["has_error"] = 1 if row.get("error_code") else 0
+
+    return f
+
+
+# ==============================================================================
+# BATCH FEATURE ENHANCEMENT
+# ==============================================================================
+def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    """
+    Apply extract_query_features to entire DataFrame + add per-user behavioral baselines
+    """
+    if df.empty:
+        return df, []
+
+    # 1. Reset Index
+    df = df.reset_index(drop=True)
+
+    # 2. Extract Static Features
+    logging.info("Generating Static Features...")
+    feature_dicts = df.apply(extract_query_features, axis=1).tolist()
+    features_df = pd.DataFrame(feature_dicts)
+    
+    # Xử lý duplicate columns
+    cols_to_drop = [c for c in features_df.columns if c in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+        
+    df_final = pd.concat([df, features_df], axis=1)
+
+    # 3. Contextual Features (Rolling Windows) - [ĐOẠN SỬA LỖI]
+    logging.info("Generating Contextual Features (Rolling Windows)...")
+    
+    if 'timestamp' in df_final.columns:
+        # Chuyển về naive datetime
+        df_final['timestamp'] = pd.to_datetime(df_final['timestamp']).dt.tz_localize(None)
+        
+        # Sort bắt buộc
+        df_final.sort_values(by=['user', 'timestamp'], inplace=True)
+        
+        def calc_rolling(g):
+            # g sẽ không có cột 'user' (do include_groups=False)
+            g = g.set_index('timestamp').sort_index()
+            win = '5min'
+            
+            g['query_count_5m'] = g['query_length'].rolling(win).count()
+            g['error_count_5m'] = g['has_error'].rolling(win).sum()
+            g['total_rows_5m'] = g['rows_returned'].rolling(win).sum()
+            # Thêm std để đo độ biến thiên hành vi
+            g['query_len_std_5m'] = g['query_length'].rolling(win).std().fillna(0)
+            
+            return g.reset_index()
+
+        try:
+            # [FIX QUAN TRỌNG]: group_keys=True để giữ 'user' trong index kết quả
+            # include_groups=False để tránh warning Deprecated
+            df_rolled = df_final.groupby('user', group_keys=True).apply(calc_rolling, include_groups=False)
+            
+            # Kết quả df_rolled có MultiIndex (user, index_cũ). 
+            # Ta reset_index để đưa 'user' quay lại thành cột.
+            df_final = df_rolled.reset_index(level=0)
+            
+            # Reset index lần nữa để index trở lại dạng 0,1,2... và xóa index thừa nếu có
+            df_final = df_final.reset_index(drop=True)
+            
+        except TypeError:
+            # Fallback cho pandas bản cũ
+            df_final = df_final.groupby('user', group_keys=False).apply(calc_rolling)
+
+        # [FIX Warning Downcasting]
+        pd.set_option('future.no_silent_downcasting', True)
+        df_final = df_final.fillna(0).infer_objects(copy=False)
+
+    # 4. Behavioral Deviation (Z-Score)
+    logging.info("Computing per-user behavioral deviations...")
+    
+    # Đảm bảo cột user tồn tại trước khi groupby
+    if 'user' not in df_final.columns:
+         # Fallback cực đoan nếu mất user (hiếm khi xảy ra với fix trên)
+         df_final['user'] = 'unknown'
+
+    metrics = ["execution_time_ms", "rows_returned", "data_retrieval_speed"]
+    for metric in metrics:
+        if metric not in df_final.columns: 
+            df_final[metric] = 0.0
+            
+        col_name = f"{metric}_zscore"
+        
+        def compute_zscore(x):
+            if len(x) < 3: return pd.Series(0.0, index=x.index)
+            std = x.std(ddof=0)
+            if std == 0: return pd.Series(0.0, index=x.index)
+            return (x - x.mean()) / std
+
+        zscores = df_final.groupby('user', group_keys=False)[metric].apply(compute_zscore)
+        df_final[col_name] = zscores.fillna(0.0)
+
+    # 5. Feature Selection & Clean up
+    cat_cols = ["user", "client_ip", "database", "command_type"]
+    for col in cat_cols:
+        if col in df_final.columns:
+            df_final[col] = df_final[col].astype("str").astype("category")
+
+    final_features = [
+        "hour_sin", "hour_cos", "is_weekend", "is_late_night", "is_work_hours",
+        "query_length", "query_entropy", "num_tables", "num_joins", "num_where_conditions",
+        "num_subqueries", "has_limit", "has_order_by", "has_group_by", "has_union",
+        "is_select_star", "has_into_outfile", "has_load_data", "has_sleep_benchmark",
+        "is_risky_command", "is_admin_command", "accessed_sensitive_tables",
+        "has_error", "is_access_denied",
+        "execution_time_ms", "rows_returned", "rows_affected",
+        "execution_time_ms_zscore", "rows_returned_zscore",
+        "query_count_5m", "error_count_5m", "total_rows_5m", "data_retrieval_speed"
+    ]
+
+    return df_final, final_features
