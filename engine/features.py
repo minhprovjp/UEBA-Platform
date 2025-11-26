@@ -32,6 +32,8 @@ SENSITIVE_TABLES = {
 # High-risk commands
 RISKY_COMMANDS = {"DELETE", "DROP", "TRUNCATE", "UPDATE", "INSERT", "GRANT", "REVOKE", "CREATE USER", "ALTER USER"}
 
+SYSTEM_SCHEMAS = {"information_schema", "performance_schema", "mysql", "sys"}
+
 def _shannon_entropy(text: str) -> float:
     """Tính độ hỗn loạn của chuỗi (cao -> mã hóa/random string)"""
     if not text: return 0.0
