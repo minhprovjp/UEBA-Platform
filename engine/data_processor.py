@@ -73,8 +73,19 @@ class ProductionUBAEngine:
     def _save_buffer_to_disk(self):
         """Lưu Buffer xuống đĩa để an toàn (Crash-safe)"""
         try:
+            # [FIX] Ép kiểu các cột string dễ gây lỗi trước khi lưu
+            str_cols = ['error_message', 'query', 'normalized_query', 'query_digest', 
+                        'user', 'database', 'client_ip', 'connection_type', 'command_type', 
+                        'event_name', 'suspicious_func_name', 'privilege_cmd_name', 
+                        'unusual_activity_reason']
+            
+            df_to_save = self.training_buffer.copy()
+            for col in str_cols:
+                if col in df_to_save.columns:
+                    df_to_save[col] = df_to_save[col].astype(str)
+            
             # Parquet ghi rất nhanh
-            self.training_buffer.to_parquet(BUFFER_FILE_PATH, index=False)
+            df_to_save.to_parquet(BUFFER_FILE_PATH, index=False)
         except Exception as e:
             logger.error(f"Failed to persist buffer to disk: {e}")
 
@@ -139,19 +150,51 @@ class ProductionUBAEngine:
         """Hàm train nội bộ - Tách ra để tái sử dụng"""
         if len(self.training_buffer) < self.MIN_TRAIN_SIZE:
             return False
+        
+        # Danh sách các cột KHÔNG dùng cho Machine Learning
+        exclude_cols = [
+            # 1. Định danh & Thời gian (Metadata)
+            'timestamp', 
+            'event_id', 
+            'thread_os_id',
+            'source_dbms',      # Hằng số (luôn là MySQL)
+            'client_port',      # Port client thay đổi ngẫu nhiên (Ephemeral port)
+            
+            # 2. Văn bản thô (Raw Text) - Model không hiểu được
+            'query', 
+            'normalized_query', 
+            'error_message',    # Nội dung lỗi biến thiên quá nhiều
+            'query_digest',     # Hash chuỗi (Cardinallity quá cao, dễ gây overfit nếu data ít)
+            
+            # 3. Kết quả đầu ra (Label Leakage) - Cấm kỵ đưa vào input
+            'is_anomaly', 
+            'ml_anomaly_score', 
+            'unusual_activity_reason',
+            'analysis_type',
+            
+            # 4. Các cột phụ trợ / JSON
+            'accessed_tables', 
+            'sensitive_access_info', 
+            'tables_touched',
+            'suspicious_func_name', 
+            'privilege_cmd_name',
+            
+            # 5. Mã lỗi cụ thể (Optional)
+            # Nên bỏ error_code vì nó là dạng Category có quá nhiều giá trị (null, 1064, 1146...)
+            # Ta đã có 'has_error' và 'error_count' đại diện tốt hơn.
+            'error_code' 
+        ]
 
         # Nếu chưa có feature list, tự động chọn
         if not self.features:
-            # Loại bỏ các cột metadata không dùng để train
-            exclude_cols = ['timestamp', 'query', 'normalized_query', 'query_digest', 
-                            'error_message', 'is_anomaly', 'ml_anomaly_score', 
-                            'unusual_activity_reason', 'suspicious_func_name', 
-                            'privilege_cmd_name', 'accessed_tables', 'sensitive_access_info',
-                            'tables_touched', 'event_name', 'event_id'] 
-            
-            # Lấy tất cả cột số và category/object
+            # Lấy tất cả cột số và category
             potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
+            
+            # Lọc bỏ các cột trong blacklist
             self.features = [f for f in potential_feats if f not in exclude_cols]
+            
+            # Log ra để kiểm tra xem Model đang dùng feature gì
+            logger.info(f"🚀 Model Features ({len(self.features)}): {self.features}")
 
         # Tạo X cho LightGBM (giữ nguyên category)
         X = self.training_buffer[self.features].copy()
