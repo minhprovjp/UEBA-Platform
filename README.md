@@ -64,6 +64,15 @@ Các file cấu hình chứa thông tin nhạy cảm và đường dẫn đặc 
     *   Copy file `engine_config.json.template` và đổi tên thành `engine_config.json`.
     *   Bạn có thể giữ nguyên các giá trị mặc định ban đầu.
 
+3.  **Tạo `.env.template`:**
+    *   Copy file `.env.template` và đổi tên thành `.env`.
+    *   Bạn có thể giữ nguyên các giá trị mặc định ban đầu.
+
+4.  **Tạo `utils.js.template`:**
+    *   Copy file `utils.js.template` và đổi tên thành `utils.js`.
+    *   Tạo folder lib và di chuyển utils.js vào đó.
+    *   Bạn có thể giữ nguyên các giá trị mặc định ban đầu.
+
 ### 5. Khởi tạo Cơ sở dữ liệu
 
 Cơ sở dữ liệu SQLite sẽ được tự động tạo ra. Bạn chỉ cần chạy Engine một lần.
