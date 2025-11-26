@@ -90,9 +90,16 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     pub_entropy = row.get("query_entropy")
     pub_length = row.get("query_length")
     
+    # Hàm chuyển đổi int an toàn để tránh lỗi NaN
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == '': return 0
+            return int(float(val))
+        except: return 0
+    
     # Lấy giá trị từ Publisher gửi sang
-    err_cnt = int(row.get("error_count", 0))
-    has_err = int(row.get("has_error", 0))
+    err_cnt = safe_int(row.get("error_count"))
+    has_err = safe_int(row.get("has_error"))
     
     # Nếu publisher chưa tính (trường hợp log cũ), tính fallback
     if "has_error" not in row:
@@ -119,11 +126,12 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
 
     # 2. Performance Metrics
     exec_time = float(row.get("execution_time_ms", 0))
-    rows_ret = int(row.get("rows_returned", 0))
+    rows_ret = safe_int(row.get("rows_returned"))
+    
     f["execution_time_ms"] = exec_time
     f["rows_returned"] = rows_ret
-    f["rows_affected"] = int(row.get("rows_affected", 0))
-    f["no_index_used"] = int(row.get("no_index_used", 0))
+    f["rows_affected"] = safe_int(row.get("rows_affected"))
+    f["no_index_used"] = safe_int(row.get("no_index_used"))
     
     # Ratio: Rows per Time (Data Retrieval Speed)
     # Tránh chia cho 0
