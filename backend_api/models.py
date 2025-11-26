@@ -55,64 +55,102 @@ class AllLogs(Base):
    
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
+    
+    # --- Identity ---
     user = Column(String, index=True)
     client_ip = Column(String)
+    client_port = Column(Integer, nullable=True) 
+    connection_type = Column(String, nullable=True) 
+    thread_os_id = Column(Integer, nullable=True)  
     database = Column(String, nullable=True)
-    query = Column(Text, nullable=False)
-
-    # === ORIGINAL METRICS ===
     source_dbms = Column(String, default="MySQL")
-    error_code = Column(Integer, nullable=True)
-    error_message = Column(Text, nullable=True)
-    execution_time_ms = Column(Float, nullable=True, server_default='0')
-    rows_returned = Column(BigInteger, nullable=True, server_default='0')
-    rows_affected = Column(BigInteger, nullable=True, server_default='0')
-    # [UPDATE] Thêm trường quan trọng để tính hiệu suất
-    rows_examined = Column(BigInteger, nullable=True, server_default='0') 
 
-    # === ANALYSIS RESULT ===
-    is_anomaly = Column(Boolean, default=False) 
-    analysis_type = Column(String, nullable=True)
-    ml_anomaly_score = Column(Float, default=0.0)
-
-    # === NEW SOTA FEATURES (2025) ===
-    # 1. Structural / Complexity
-    query_length = Column(Integer, nullable=True)
-    query_entropy = Column(Float, nullable=True) # Độ hỗn loạn (phát hiện SQLi/Hex)
-    num_tables = Column(Integer, default=0)
-    num_joins = Column(Integer, default=0)
-    num_where_conditions = Column(Integer, default=0)
-    subquery_depth = Column(Integer, default=0)  # Độ sâu lồng nhau
-
-    # 2. Risk Flags
-    is_risky_command = Column(Boolean, default=False) # DROP, ALTER
-    is_admin_command = Column(Boolean, default=False) # GRANT, REVOKE
-    is_sensitive_access = Column(Boolean, default=False) # Access HR/Salaries
-    is_system_access = Column(Boolean, default=False) # Access mysql.*
-    has_comment = Column(Boolean, default=False) # Phát hiện bypass WAF
-    has_hex = Column(Boolean, default=False) # Phát hiện 0x...
+    # --- Content ---
+    query = Column(Text, nullable=False)
+    query_digest = Column(String, nullable=True)
+    normalized_query = Column(Text, nullable=True)
+    command_type = Column(String, nullable=True)
     
-    # 3. Contextual / Velocity (Rolling Windows)
-    # Lưu lại để debug mô hình
+    # --- Traceability ---
+    event_id = Column(BigInteger, nullable=True) 
+    event_name = Column(String, nullable=True)   
+
+    # --- Metrics ---
+    execution_time_ms = Column(Float, nullable=True, server_default='0')
+    lock_time_ms = Column(Float, nullable=True, server_default='0') # [NEW]
+    rows_returned = Column(BigInteger, nullable=True, server_default='0')
+    rows_examined = Column(BigInteger, nullable=True, server_default='0') # [NEW]
+    rows_affected = Column(BigInteger, nullable=True, server_default='0')
+    
+    # --- Analysis Features ---
+    query_length = Column(Integer, nullable=True)
+    query_entropy = Column(Float, nullable=True)
+    scan_efficiency = Column(Float, nullable=True) # [NEW]
+    
+    # --- Flags & Indicators ---
+    is_system_table = Column(Boolean, default=False) # [NEW]
+    is_admin_command = Column(Boolean, default=False)
+    is_risky_command = Column(Boolean, default=False)
+    has_comment = Column(Boolean, default=False)
+    has_hex = Column(Boolean, default=False)
+    
+    # --- Optimizer Metrics ---
+    created_tmp_disk_tables = Column(Integer, default=0)
+    created_tmp_tables = Column(Integer, default=0) # [NEW]
+    select_full_join = Column(Integer, default=0)
+    select_scan = Column(Integer, default=0)        # [NEW]
+    sort_merge_passes = Column(Integer, default=0)  # [NEW]
+    no_index_used = Column(Integer, default=0)
+    no_good_index_used = Column(Integer, default=0)
+
+    # --- ML Results ---
+    is_anomaly = Column(Boolean, default=False) 
+    ml_anomaly_score = Column(Float, default=0.0)
+    analysis_type = Column(String, nullable=True)
+    
+# 3. Contextual / Velocity (Rolling Windows) ---
     query_count_5m = Column(Float, nullable=True)
     error_count_5m = Column(Float, nullable=True)
+    total_rows_5m = Column(Float, nullable=True)
     data_retrieval_speed = Column(Float, nullable=True) # rows / time
-
-    # 4. Behavioral Deviation
+    
+    # --- Behavioral Z-Scores ---
     execution_time_ms_zscore = Column(Float, nullable=True)
     rows_returned_zscore = Column(Float, nullable=True)
 
-    # Misc
+    # --- Features for Rule-based ---
+    num_tables = Column(Integer, default=0)
+    num_joins = Column(Integer, default=0)
+    num_where_conditions = Column(Integer, default=0)
+    subquery_depth = Column(Integer, default=0)
+    is_sensitive_access = Column(Boolean, default=False)
+    is_system_access = Column(Boolean, default=False)
+    is_select_star = Column(Boolean, default=False)
+    has_into_outfile = Column(Boolean, default=False)
+    has_load_data = Column(Boolean, default=False)
+    has_sleep_benchmark = Column(Boolean, default=False)
+    accessed_sensitive_tables = Column(Integer, default=0)
     accessed_tables = Column(JSONB, nullable=True)
-    command_type = Column(String, nullable=True)
-    normalized_query = Column(Text, nullable=True)
+    unusual_activity_reason = Column(Text, nullable=True)
+    suspicious_func_name = Column(String, nullable=True)
+    is_suspicious_func = Column(Boolean, default=False)
+    is_privilege_change = Column(Boolean, default=False)
+    privilege_cmd_name = Column(String, nullable=True)
+    is_late_night = Column(Boolean, default=False)
+    is_work_hours = Column(Boolean, default=False)
+    is_potential_dump = Column(Boolean, default=False)
+    has_limit = Column(Boolean, default=False)
+    has_order_by = Column(Boolean, default=False)
+
+    # --- Errors ---
+    error_code = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
     error_count = Column(Integer, default=0)
     warning_count = Column(Integer, default=0)
-    created_tmp_disk_tables = Column(Integer, default=0)
-    no_index_used = Column(Integer, default=0)
 
-    # Indexes
+    # Indexes for performance
     __table_args__ = (
         Index('ix_all_logs_user_timestamp', 'user', 'timestamp'),
         Index('ix_all_logs_is_anomaly', 'is_anomaly'),
+        Index('ix_all_logs_ml_score', 'ml_anomaly_score'),
     )

@@ -142,21 +142,25 @@ class ProductionUBAEngine:
 
         # Nếu chưa có feature list, tự động chọn
         if not self.features:
+            # Loại bỏ các cột metadata không dùng để train
             exclude_cols = ['timestamp', 'query', 'normalized_query', 'query_digest', 
                             'error_message', 'is_anomaly', 'ml_anomaly_score', 
                             'unusual_activity_reason', 'suspicious_func_name', 
                             'privilege_cmd_name', 'accessed_tables', 'sensitive_access_info',
-                            'tables_touched'] # Added cleanup columns
+                            'tables_touched', 'event_name', 'event_id'] 
             
-            # Chọn các cột số và category
-            potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category']).columns.tolist()
+            # Lấy tất cả cột số và category/object
+            potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
             self.features = [f for f in potential_feats if f not in exclude_cols]
 
+        # Tạo X cho LightGBM (giữ nguyên category)
         X = self.training_buffer[self.features].copy()
         
-        # Fill NaN an toàn
+        # Xử lý NaN và kiểu dữ liệu cho X
         for col in X.columns:
-            if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype.name == 'category':
+            # Kiểm tra nếu là category hoặc object (string)
+            if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype == 'object':
+                X[col] = X[col].astype('category') # Ép về category cho LightGBM
                 if 'unknown' not in X[col].cat.categories:
                     X[col] = X[col].cat.add_categories('unknown')
                 X[col] = X[col].fillna('unknown')
@@ -164,17 +168,26 @@ class ProductionUBAEngine:
                 X[col] = X[col].fillna(0)
 
         try:
-            # Pipeline: Isolation Forest -> Pseudo Label -> LightGBM
+            # Tạo bản sao X_iso được mã hóa số học cho Isolation Forest
+            X_iso = X.copy()
+            for col in X_iso.columns:
+                if X_iso[col].dtype.name == 'category':
+                    # Chuyển chuỗi thành số (0, 1, 2...)
+                    X_iso[col] = X_iso[col].cat.codes
+
+            # 1. Pipeline: Isolation Forest (Dùng X_iso toàn số)
             iso = IsolationForest(contamination=0.05, random_state=42, n_jobs=-1)
-            iso.fit(X)
-            pseudo_pred = iso.predict(X)
+            iso.fit(X_iso)
+            pseudo_pred = iso.predict(X_iso)
             
             high_conf_anoms_mask = (pseudo_pred == -1)
             
-            # Tăng cường dữ liệu: Oversample anomalies nếu quá ít
+            # 2. Tạo tập train cho Supervised Model (LightGBM)
+            # Dùng X gốc (có category) vì LightGBM xử lý tốt hơn
             X_train = pd.concat([X, X[high_conf_anoms_mask]])
             y_train = np.concatenate([np.zeros(len(X)), np.ones(sum(high_conf_anoms_mask))])
 
+            # 3. Train LightGBM
             new_model = lgb.LGBMClassifier(
                 n_estimators=100,
                 learning_rate=0.05,

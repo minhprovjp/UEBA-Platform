@@ -450,29 +450,94 @@ def save_results_to_db(results: Dict[str, Any]):
 
     # Map to AllLogs model columns
     log_mapping = {
+        # Identity
         'timestamp': 'timestamp',
         'user': 'user',
         'client_ip': 'client_ip',
+        'client_port': 'client_port',          
+        'connection_type': 'connection_type',  
+        'thread_os_id': 'thread_os_id',        
         'database': 'database',
-        'query': 'query',
-        'execution_time_ms': 'execution_time_ms',
-        'rows_returned': 'rows_returned',
-        'rows_affected': 'rows_affected',
         'source_dbms': 'source_dbms',
-        'ml_anomaly_score': 'ml_anomaly_score',
-        'is_late_night': 'is_late_night',
-        'is_potential_dump': 'is_potential_dump',
-        'accessed_sensitive_tables': 'accessed_sensitive_tables',
-        'is_risky_command': 'is_risky_command',
-        'is_admin_command': 'is_admin_command',
+
+        # Content
+        'query': 'query',
+        'normalized_query': 'normalized_query',
+        'query_digest': 'query_digest',
+        'event_id': 'event_id',       
+        'event_name': 'event_name',   
+        'command_type': 'command_type',
+
+        # Metrics
+        'execution_time_ms': 'execution_time_ms',
+        'lock_time_ms': 'lock_time_ms',      
+        'rows_returned': 'rows_returned',
+        'rows_examined': 'rows_examined',     
+        'rows_affected': 'rows_affected',
+        'scan_efficiency': 'scan_efficiency', 
+
+        # Analysis
+        'query_length': 'query_length',
         'query_entropy': 'query_entropy',
-        'num_tables': 'num_tables',
-        'accessed_tables': 'accessed_tables',
+        'ml_anomaly_score': 'ml_anomaly_score',
+        
+        # Flags
+        'is_system_table': 'is_system_table',  
+        'is_admin_command': 'is_admin_command',
+        'is_risky_command': 'is_risky_command',
+        'has_comment': 'has_comment',
+        'has_hex': 'has_hex',
         'is_select_star': 'is_select_star',
         'has_into_outfile': 'has_into_outfile',
+        'is_anomaly': 'is_anomaly',
+        'analysis_type': 'analysis_type',
+
+        # Optimizer
+        'created_tmp_disk_tables': 'created_tmp_disk_tables',
+        'created_tmp_tables': 'created_tmp_tables',
+        'select_full_join': 'select_full_join',
+        'select_scan': 'select_scan',               
+        'sort_merge_passes': 'sort_merge_passes',  
+        'no_index_used': 'no_index_used',
+        'no_good_index_used': 'no_good_index_used',
+
+        # Contextual
+        'query_count_5m': 'query_count_5m',
+        'error_count_5m': 'error_count_5m',
+        'total_rows_5m': 'total_rows_5m',
+        'data_retrieval_speed': 'data_retrieval_speed',
+        
+        # Behavioral
+        'execution_time_ms_zscore': 'execution_time_ms_zscore',
+        'rows_returned_zscore': 'rows_returned_zscore',
+
+        # Rule-based extras
+        'num_tables': 'num_tables',
+        'num_joins': 'num_joins',
+        'num_where_conditions': 'num_where_conditions',
+        'subquery_depth': 'subquery_depth',
+        'is_sensitive_access': 'is_sensitive_access',
+        'is_system_access': 'is_system_access',
+        'has_load_data': 'has_load_data',
+        'has_sleep_benchmark': 'has_sleep_benchmark',
+        'accessed_sensitive_tables': 'accessed_sensitive_tables',
+        'accessed_tables': 'accessed_tables',
+        'unusual_activity_reason': 'unusual_activity_reason',
+        'suspicious_func_name': 'suspicious_func_name',
         'is_suspicious_func': 'is_suspicious_func',
         'is_privilege_change': 'is_privilege_change',
-        'unusual_activity_reason': 'unusual_activity_reason',
+        'privilege_cmd_name': 'privilege_cmd_name',
+        'is_late_night': 'is_late_night',
+        'is_work_hours': 'is_work_hours',
+        'is_potential_dump': 'is_potential_dump',
+        'has_limit': 'has_limit',
+        'has_order_by': 'has_order_by',
+
+        # Error Info
+        'error_code': 'error_code',
+        'error_message': 'error_message',
+        'error_count': 'error_count',
+        'warning_count': 'warning_count',
     }
 
     # Prepare records
@@ -493,10 +558,11 @@ def save_results_to_db(results: Dict[str, Any]):
                     val = val.iloc[0] if len(val) > 0 else None
                     
                 # BOOLEAN COLUMNS — ÉP VỀ True/False
-                if src_col in ['is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
+                if dest_col in ['is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
                             'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
                             'is_risky_command', 'is_admin_command', 'is_potential_dump', 
-                            'is_suspicious_func', 'is_privilege_change']:
+                            'is_suspicious_func', 'is_privilege_change', 'is_system_table',
+                            'is_sensitive_access', 'is_system_access', 'has_comment', 'has_hex', 'is_anomaly']:
                     if val in (1, '1', 'True', True, 'true', 'T'):
                         val = True
                     elif val in (0, '0', 'False', False, 'false', 'F', None):
@@ -509,23 +575,26 @@ def save_results_to_db(results: Dict[str, Any]):
                     val = json.dumps(val, ensure_ascii=False, default=str)
                 elif isinstance(val, (pd.Timestamp, datetime)):
                     val = val.isoformat()
-                elif isinstance(val, float) and src_col in ['ml_anomaly_score']:
+                elif isinstance(val, float) and dest_col in ['ml_anomaly_score', 'query_entropy', 'scan_efficiency']:
                     val = float(val) if not pd.isna(val) else None
                 else:
                     val = str(val) if pd.notna(val) else None
             
             rec[dest_col] = val
 
-        score = float(rec.get('ml_anomaly_score', 0) or 0)
-        rec['is_anomaly'] = bool(
-            score > 0.7 or
-            rec.get('is_late_night') or
-            rec.get('is_potential_dump') or
-            rec.get('is_risky_command') or
-            rec.get('is_suspicious_func') or
-            rec.get('is_privilege_change')
-        )
+        # Fallback logic for is_anomaly if not set by ML
+        if rec.get('is_anomaly') is None:
+            score = float(rec.get('ml_anomaly_score', 0) or 0)
+            rec['is_anomaly'] = bool(
+                score > 0.7 or
+                rec.get('is_late_night') or
+                rec.get('is_potential_dump') or
+                rec.get('is_risky_command') or
+                rec.get('is_suspicious_func') or
+                rec.get('is_privilege_change')
+            )
         records.append(rec)
+        
     if records:
         try:
             with SessionLocal() as db:

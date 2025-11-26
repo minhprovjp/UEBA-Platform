@@ -87,10 +87,14 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
 
     hour = ts.hour if ts else 12
     
+    # Lấy giá trị đã tính sẵn từ Publisher nếu có
+    pub_entropy = row.get("query_entropy")
+    pub_length = row.get("query_length")
+    
     # 1. Base Features
     f = {
-        "query_length": len(query),
-        "query_entropy": _shannon_entropy(query),
+        "query_length": pub_length if pd.notna(pub_length) else len(query),
+        "query_entropy": pub_entropy if pd.notna(pub_entropy) else _shannon_entropy(query),
         "hour_sin": np.sin(2 * np.pi * hour / 24.0),
         "hour_cos": np.cos(2 * np.pi * hour / 24.0),
         "is_weekend": 1 if ts and ts.weekday() >= 5 else 0,
