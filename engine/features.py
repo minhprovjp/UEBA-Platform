@@ -73,22 +73,6 @@ def _extract_tables(expression) -> set:
 
 def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     """Trích xuất Static Features từ 1 dòng log"""
-    
-    # 1. Debug Helper: Hàm chuyển đổi có log lỗi chi tiết
-    def safe_int(val, field_name="unknown"):
-        try:
-            # Xử lý các trường hợp None/NaN phổ biến
-            if val is None: return 0
-            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)): return 0
-            if str(val).strip() == '': return 0
-            
-            # Thử convert
-            return int(float(val))
-        except Exception as e:
-            # [DEBUG] In ra giá trị gây lỗi
-            logging.error(f"❌ [DEBUG ERROR] Field '{field_name}' failed to convert. Value: {val} (Type: {type(val)}). Error: {e}")
-            return 0
-
     query = str(row.get("query", "")).strip()
     
     # Timestamp handling
@@ -102,24 +86,36 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     hour = ts.hour if ts else 12
     weekday = ts.weekday() if ts else 0
     
+    # Lấy giá trị đã tính sẵn từ Publisher nếu có
     pub_entropy = row.get("query_entropy")
     pub_length = row.get("query_length")
     
-    # Debugging Error Count inputs
-    raw_error_count = row.get("error_count")
-    raw_has_error = row.get("has_error")
+    # Hàm chuyển đổi int an toàn tuyệt đối
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == '' or val is None: 
+                return 0
+            # Xử lý trường hợp float('inf') hoặc float('nan')
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val):
+                return 0
+            return int(f_val)
+        except: 
+            return 0
     
-    # Dùng safe_int kèm tên trường để debug
-    err_cnt = safe_int(raw_error_count, "error_count")
-    has_err = safe_int(raw_has_error, "has_error")
+    # Lấy giá trị từ Publisher gửi sang 
+    err_cnt = safe_int(row.get("error_count"))
+    has_err = safe_int(row.get("has_error"))
     
+    # Nếu publisher chưa tính (trường hợp log cũ), tính fallback
     if "has_error" not in row:
         err_code = row.get("error_code")
-        if err_cnt > 0 or (err_code is not None and safe_int(err_code, "error_code") != 0):
+        if err_cnt > 0 or (err_code is not None and safe_int(err_code) != 0):
             has_err = 1
     
     # 1. Base Features
     f = {
+        # Ưu tiên dùng giá trị từ Publisher
         "query_length": pub_length if pd.notna(pub_length) else len(query),
         "query_entropy": pub_entropy if pd.notna(pub_entropy) else _shannon_entropy(query),
         "hour_sin": np.sin(2 * np.pi * hour / 24.0),
@@ -127,20 +123,25 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         "is_weekend": 1 if weekday >= 5 else 0,
         "is_late_night": 1 if 0 <= hour < 6 else 0,
         "is_work_hours": 1 if 8 <= hour <= 18 else 0,
+        
+        # Truyền lại các giá trị lỗi
         "error_count": err_cnt,
         "has_error": has_err
     }
 
-    # 2. Performance Metrics (Debug từng trường số)
-    f["execution_time_ms"] = float(row.get("execution_time_ms", 0)) if pd.notna(row.get("execution_time_ms")) else 0.0
+    # 2. Performance Metrics
+    exec_time = float(row.get("execution_time_ms", 0)) if pd.notna(row.get("execution_time_ms")) else 0.0
     
-    rows_ret = safe_int(row.get("rows_returned"), "rows_returned")
+    rows_ret = safe_int(row.get("rows_returned"))
+    
+    f["execution_time_ms"] = exec_time
     f["rows_returned"] = rows_ret
-    f["rows_affected"] = safe_int(row.get("rows_affected"), "rows_affected")
-    f["no_index_used"] = safe_int(row.get("no_index_used"), "no_index_used")
+    f["rows_affected"] = safe_int(row.get("rows_affected"))
+    f["no_index_used"] = safe_int(row.get("no_index_used"))
     
-    # Ratio
-    f["data_retrieval_speed"] = rows_ret / (f["execution_time_ms"] + 0.001)
+    # Ratio: Rows per Time (Data Retrieval Speed)
+    # Tránh chia cho 0
+    f["data_retrieval_speed"] = rows_ret / (exec_time + 0.001)
 
     # 3. SQL Structure (Parser)
     parsed = safe_parse_sql(query)
