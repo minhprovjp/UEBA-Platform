@@ -6,11 +6,11 @@ from faker import Faker
 fake = Faker()
 
 # CẤU HÌNH
-OUTPUT_FILE = "simulation/scenario_script_10.csv"
+OUTPUT_FILE = "simulation/scenario_script_30d.csv"
 QUERY_LIB = "simulation/query_library.json"
 DB_STATE_FILE = "simulation/db_state.json" 
-DAYS = 10
-TOTAL_EVENTS = 20000 # Tăng lên để mô hình học tốt hơn
+DAYS = 30
+TOTAL_EVENTS = 100000 # Tăng lên để mô hình học tốt hơn
 
 # Load dữ liệu thật
 try:
