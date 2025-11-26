@@ -90,21 +90,27 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     pub_entropy = row.get("query_entropy")
     pub_length = row.get("query_length")
     
-    # Hàm chuyển đổi int an toàn để tránh lỗi NaN
+    # Hàm chuyển đổi int an toàn tuyệt đối
     def safe_int(val):
         try:
-            if pd.isna(val) or val == '': return 0
-            return int(float(val))
-        except: return 0
+            if pd.isna(val) or val == '' or val is None: 
+                return 0
+            # Xử lý trường hợp float('inf') hoặc float('nan')
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val):
+                return 0
+            return int(f_val)
+        except: 
+            return 0
     
-    # Lấy giá trị từ Publisher gửi sang
+    # Lấy giá trị từ Publisher gửi sang 
     err_cnt = safe_int(row.get("error_count"))
     has_err = safe_int(row.get("has_error"))
     
     # Nếu publisher chưa tính (trường hợp log cũ), tính fallback
     if "has_error" not in row:
         err_code = row.get("error_code")
-        if err_cnt > 0 or (err_code is not None and err_code != 0):
+        if err_cnt > 0 or (err_code is not None and safe_int(err_code) != 0):
             has_err = 1
     
     # 1. Base Features
@@ -112,7 +118,6 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         # Ưu tiên dùng giá trị từ Publisher
         "query_length": pub_length if pd.notna(pub_length) else len(query),
         "query_entropy": pub_entropy if pd.notna(pub_entropy) else _shannon_entropy(query),
-        
         "hour_sin": np.sin(2 * np.pi * hour / 24.0),
         "hour_cos": np.cos(2 * np.pi * hour / 24.0),
         "is_weekend": 1 if weekday >= 5 else 0,
@@ -125,7 +130,8 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     }
 
     # 2. Performance Metrics
-    exec_time = float(row.get("execution_time_ms", 0))
+    exec_time = float(row.get("execution_time_ms", 0)) if pd.notna(row.get("execution_time_ms")) else 0.0
+    
     rows_ret = safe_int(row.get("rows_returned"))
     
     f["execution_time_ms"] = exec_time
