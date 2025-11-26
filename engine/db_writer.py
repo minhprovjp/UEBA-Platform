@@ -450,82 +450,178 @@ def save_results_to_db(results: Dict[str, Any]):
 
     # Map to AllLogs model columns
     log_mapping = {
+        # Identity
         'timestamp': 'timestamp',
         'user': 'user',
         'client_ip': 'client_ip',
+        'client_port': 'client_port',          
+        'connection_type': 'connection_type',  
+        'thread_os_id': 'thread_os_id',        
         'database': 'database',
-        'query': 'query',
-        'execution_time_ms': 'execution_time_ms',
-        'rows_returned': 'rows_returned',
-        'rows_affected': 'rows_affected',
         'source_dbms': 'source_dbms',
-        'ml_anomaly_score': 'ml_anomaly_score',
-        'is_late_night': 'is_late_night',
-        'is_potential_dump': 'is_potential_dump',
-        'accessed_sensitive_tables': 'accessed_sensitive_tables',
-        'is_risky_command': 'is_risky_command',
-        'is_admin_command': 'is_admin_command',
+
+        # Content
+        'query': 'query',
+        'normalized_query': 'normalized_query',
+        'query_digest': 'query_digest',
+        'event_id': 'event_id',       
+        'event_name': 'event_name',   
+        'command_type': 'command_type',
+
+        # Metrics
+        'execution_time_ms': 'execution_time_ms',
+        'lock_time_ms': 'lock_time_ms',      
+        'rows_returned': 'rows_returned',
+        'rows_examined': 'rows_examined',     
+        'rows_affected': 'rows_affected',
+        'scan_efficiency': 'scan_efficiency', 
+
+        # Analysis
+        'query_length': 'query_length',
         'query_entropy': 'query_entropy',
-        'num_tables': 'num_tables',
-        'accessed_tables': 'accessed_tables',
+        'ml_anomaly_score': 'ml_anomaly_score',
+        
+        # Flags
+        'is_system_table': 'is_system_table',  
+        'is_admin_command': 'is_admin_command',
+        'is_risky_command': 'is_risky_command',
+        'has_comment': 'has_comment',
+        'has_hex': 'has_hex',
         'is_select_star': 'is_select_star',
         'has_into_outfile': 'has_into_outfile',
+        'is_anomaly': 'is_anomaly',
+        'analysis_type': 'analysis_type',
+
+        # Optimizer
+        'created_tmp_disk_tables': 'created_tmp_disk_tables',
+        'created_tmp_tables': 'created_tmp_tables',
+        'select_full_join': 'select_full_join',
+        'select_scan': 'select_scan',               
+        'sort_merge_passes': 'sort_merge_passes',  
+        'no_index_used': 'no_index_used',
+        'no_good_index_used': 'no_good_index_used',
+
+        # Contextual
+        'query_count_5m': 'query_count_5m',
+        'error_count_5m': 'error_count_5m',
+        'total_rows_5m': 'total_rows_5m',
+        'data_retrieval_speed': 'data_retrieval_speed',
+        
+        # Behavioral
+        'execution_time_ms_zscore': 'execution_time_ms_zscore',
+        'rows_returned_zscore': 'rows_returned_zscore',
+
+        # Rule-based extras
+        'num_tables': 'num_tables',
+        'num_joins': 'num_joins',
+        'num_where_conditions': 'num_where_conditions',
+        'subquery_depth': 'subquery_depth',
+        'is_sensitive_access': 'is_sensitive_access',
+        'is_system_access': 'is_system_access',
+        'has_load_data': 'has_load_data',
+        'has_sleep_benchmark': 'has_sleep_benchmark',
+        'accessed_sensitive_tables': 'accessed_sensitive_tables',
+        'accessed_tables': 'accessed_tables',
+        'unusual_activity_reason': 'unusual_activity_reason',
+        'suspicious_func_name': 'suspicious_func_name',
         'is_suspicious_func': 'is_suspicious_func',
         'is_privilege_change': 'is_privilege_change',
-        'unusual_activity_reason': 'unusual_activity_reason',
+        'privilege_cmd_name': 'privilege_cmd_name',
+        'is_late_night': 'is_late_night',
+        'is_work_hours': 'is_work_hours',
+        'is_potential_dump': 'is_potential_dump',
+        'has_limit': 'has_limit',
+        'has_order_by': 'has_order_by',
+
+        # Error Info
+        'error_code': 'error_code',
+        'error_message': 'error_message',
+        'error_count': 'error_count',
+        'has_error': 'has_error',
+        'warning_count': 'warning_count',
     }
 
-    # Prepare records
+# Prepare records
     records = []
+    
+    # Danh sách các cột Boolean trong DB (Cần ép kiểu chuẩn)
+    BOOL_COLS = {
+        'is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
+        'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
+        'is_risky_command', 'is_admin_command', 'is_potential_dump', 
+        'is_suspicious_func', 'is_privilege_change', 'is_system_table',
+        'is_sensitive_access', 'is_system_access', 'has_comment', 'has_hex', 
+        'is_anomaly', 'has_error' 
+    }
+
+    # Danh sách các cột Integer (Cần ép từ '0.0' -> 0)
+    INT_COLS = {
+        'created_tmp_disk_tables', 'created_tmp_tables', 'select_full_join', 
+        'select_scan', 'sort_merge_passes', 'no_index_used', 'no_good_index_used',
+        'error_count', 'warning_count', 'client_port', 'thread_os_id', 
+        'rows_returned', 'rows_examined', 'rows_affected', 'num_tables',
+        'num_joins', 'num_where_conditions', 'subquery_depth', 'query_length',
+        'accessed_sensitive_tables', 'event_id'
+    }
+
     for idx in all_logs_to_save.index:
         row = all_logs_to_save.loc[idx]
         rec = {}
         
         for src_col, dest_col in log_mapping.items():
-            if src_col not in row.index:
-                val = None
-            else:
+            val = None
+            if src_col in row.index:
                 val = row[src_col]
-                
-                if isinstance(val, (list, dict, set, np.ndarray)) and len(val) == 0:
-                    val = None
-                elif isinstance(val, (pd.Series, pd.DataFrame)):
-                    val = val.iloc[0] if len(val) > 0 else None
-                    
-                # BOOLEAN COLUMNS — ÉP VỀ True/False
-                if src_col in ['is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
-                            'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
-                            'is_risky_command', 'is_admin_command', 'is_potential_dump', 
-                            'is_suspicious_func', 'is_privilege_change']:
-                    if val in (1, '1', 'True', True, 'true', 'T'):
-                        val = True
-                    elif val in (0, '0', 'False', False, 'false', 'F', None):
-                        val = False
-                    else:
-                        val = bool(val)
-                elif pd.isna(val):
-                    val = None
-                elif isinstance(val, (list, dict, set)):
-                    val = json.dumps(val, ensure_ascii=False, default=str)
-                elif isinstance(val, (pd.Timestamp, datetime)):
-                    val = val.isoformat()
-                elif isinstance(val, float) and src_col in ['ml_anomaly_score']:
-                    val = float(val) if not pd.isna(val) else None
+
+            # Xử lý đặc biệt cho từng loại dữ liệu
+            if dest_col in BOOL_COLS:
+                # Ép mọi thể loại (0, '0', 0.0, False, 'False') về Boolean chuẩn Python
+                if pd.isna(val):
+                    val = False
                 else:
-                    val = str(val) if pd.notna(val) else None
+                    s_val = str(val).lower()
+                    val = s_val in ['1', 'true', 't', 'yes', 'y', '1.0']
             
+            elif dest_col in INT_COLS:
+                # Ép '0.0' hoặc '0' về int
+                try:
+                    if pd.isna(val):
+                        val = 0
+                    else:
+                        val = int(float(val))
+                except:
+                    val = 0
+            
+            elif isinstance(val, (list, dict, set, np.ndarray)):
+                # Serialize JSON
+                val = json.dumps(val, ensure_ascii=False, default=str) if val is not None else None
+            
+            elif isinstance(val, (pd.Timestamp, datetime)):
+                val = val.isoformat()
+                
+            elif pd.isna(val):
+                val = None
+                
+            else:
+                # Default về string cho các trường text
+                val = str(val)
+
             rec[dest_col] = val
 
-        score = float(rec.get('ml_anomaly_score', 0) or 0)
-        rec['is_anomaly'] = bool(
-            score > 0.7 or
-            rec.get('is_late_night') or
-            rec.get('is_potential_dump') or
-            rec.get('is_risky_command') or
-            rec.get('is_suspicious_func') or
-            rec.get('is_privilege_change')
-        )
+        # Fallback logic cho is_anomaly nếu chưa có
+        if not rec.get('is_anomaly'):
+            score = float(rec.get('ml_anomaly_score') or 0)
+            rec['is_anomaly'] = bool(
+                score > 0.7 or
+                rec.get('is_late_night') or
+                rec.get('is_potential_dump') or
+                rec.get('is_risky_command') or
+                rec.get('is_suspicious_func') or
+                rec.get('is_privilege_change')
+            )
+            
         records.append(rec)
+        
     if records:
         try:
             with SessionLocal() as db:

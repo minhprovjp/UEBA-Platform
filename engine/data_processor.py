@@ -1,11 +1,11 @@
 """
 ================================================================================
-MODULE XỬ LÝ DỮ LIỆU CHÍNH (PHIÊN BẢN ĐỘC LẬP) - FINAL VERSION 2025
+MODULE XỬ LÝ DỮ LIỆU CHÍNH
 ================================================================================
 Tích hợp:
 - Feature engineering cấp nghiên cứu (sqlglot + behavioral z-score + entropy)
 - Semi-supervised ML: Isolation Forest → pseudo-label → LightGBM (self-training)
-- Tất cả luật Rule-based cũ vẫn hoạt động tốt hơn nhờ feature mới
+- Persistent Buffering: Lưu cache training xuống đĩa để không mất dữ liệu khi restart
 """
 
 import os
@@ -37,7 +37,7 @@ from utils import (
 # Production model paths
 PROD_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_production.joblib")
 FALLBACK_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_fallback.joblib")
-MODEL_METADATA_PATH = os.path.join(MODELS_DIR, "model_metadata.json")
+BUFFER_FILE_PATH = os.path.join(MODELS_DIR, "training_buffer_cache.parquet")
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 
@@ -49,7 +49,34 @@ class ProductionUBAEngine:
         self.features = None
         self.model_version = "unknown"
         self.last_trained = None
+        
+        # Cấu hình Training
+        self.MIN_TRAIN_SIZE = 1      # Train ngay khi có 1 dòng
+        self.MAX_BUFFER_SIZE = 5000   # Giữ tối đa 5000 dòng để train (Sliding Window)
+        
+        # Khởi tạo Buffer từ đĩa (Persistence)
+        self.training_buffer = self._load_buffer_from_disk()
+        
         self.load_models()
+
+    def _load_buffer_from_disk(self) -> pd.DataFrame:
+        """Load dữ liệu cũ từ đĩa lên RAM khi khởi động lại"""
+        if os.path.exists(BUFFER_FILE_PATH):
+            try:
+                df = pd.read_parquet(BUFFER_FILE_PATH)
+                logger.info(f"🔄 Restored training buffer from disk: {len(df)} rows.")
+                return df
+            except Exception as e:
+                logger.error(f"Failed to load buffer file: {e}")
+        return pd.DataFrame()
+
+    def _save_buffer_to_disk(self):
+        """Lưu Buffer xuống đĩa để an toàn (Crash-safe)"""
+        try:
+            # Parquet ghi rất nhanh
+            self.training_buffer.to_parquet(BUFFER_FILE_PATH, index=False)
+        except Exception as e:
+            logger.error(f"Failed to persist buffer to disk: {e}")
 
     def load_models(self):
         """Load production → fallback → train new"""
@@ -75,13 +102,24 @@ class ProductionUBAEngine:
             except Exception as e:
                 logger.error(f"Failed to load fallback: {e}")
 
-        logger.warning("No model found. Will train on first batch.")
+        logger.warning("No model found.")
+        # Nếu không có model nhưng có buffer cũ -> Train ngay lập tức
+        if not self.training_buffer.empty and len(self.training_buffer) >= self.MIN_TRAIN_SIZE:
+            logger.info("No model found but buffer exists. Training immediately...")
+            self._train_core()
 
     def save_production_model(self, model, features):
         """Atomic save with versioning"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         version_hash = hashlib.md5(str(features).encode()).hexdigest()[:8]
-        version = f"v{len([f for f in os.listdir(MODELS_DIR) if f.startswith('lgb_uba_')])-1}_{version_hash}"
+        
+        # Tự động tăng version dựa trên số file hiện có
+        try:
+            existing = [f for f in os.listdir(MODELS_DIR) if f.startswith('lgb_uba_')]
+            ver_num = len(existing)
+        except: ver_num = 0
+            
+        version = f"v{ver_num}_{version_hash}"
 
         data = {
             'model': model,
@@ -91,50 +129,107 @@ class ProductionUBAEngine:
             'feature_count': len(features)
         }
 
-        # Backup current production
-        if os.path.exists(PROD_MODEL_PATH):
-            backup_path = PROD_MODEL_PATH.replace(".joblib", f"_backup_{timestamp}.joblib")
-            os.replace(PROD_MODEL_PATH, backup_path)
-
         # Save new production
         joblib.dump(data, PROD_MODEL_PATH)
-        joblib.dump(data, FALLBACK_MODEL_PATH)  # always update fallback
-        logger.info(f"New PRODUCTION model saved: {version} → {PROD_MODEL_PATH}")
+        # Luôn cập nhật fallback để an toàn
+        joblib.dump(data, FALLBACK_MODEL_PATH)
+        logger.info(f"✅ New PRODUCTION model saved: {version}")
 
-    def train_and_update(self, df_enhanced):
-        """Auto-retrain when enough new data"""
-        if len(df_enhanced) < 5000:
+    def _train_core(self):
+        """Hàm train nội bộ - Tách ra để tái sử dụng"""
+        if len(self.training_buffer) < self.MIN_TRAIN_SIZE:
             return False
 
-        X = df_enhanced[self.features].fillna(0) if self.features else df_enhanced.filter(like='').fillna(0)
+        # Nếu chưa có feature list, tự động chọn
+        if not self.features:
+            # Loại bỏ các cột metadata không dùng để train
+            exclude_cols = ['timestamp', 'query', 'normalized_query', 'query_digest', 
+                            'error_message', 'is_anomaly', 'ml_anomaly_score', 
+                            'unusual_activity_reason', 'suspicious_func_name', 
+                            'privilege_cmd_name', 'accessed_tables', 'sensitive_access_info',
+                            'tables_touched', 'event_name', 'event_id'] 
+            
+            # Lấy tất cả cột số và category/object
+            potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
+            self.features = [f for f in potential_feats if f not in exclude_cols]
 
-        # Self-training pipeline
-        iso = IsolationForest(contamination=0.015, random_state=42, n_jobs=-1)
-        iso.fit(X)
-        pseudo_pred = iso.predict(X)
-        high_conf_anoms = pseudo_pred == -1
+        # Tạo X cho LightGBM (giữ nguyên category)
+        X = self.training_buffer[self.features].copy()
+        
+        # Xử lý NaN và kiểu dữ liệu cho X
+        for col in X.columns:
+            # Kiểm tra nếu là category hoặc object (string)
+            if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype == 'object':
+                X[col] = X[col].astype('category') # Ép về category cho LightGBM
+                if 'unknown' not in X[col].cat.categories:
+                    X[col] = X[col].cat.add_categories('unknown')
+                X[col] = X[col].fillna('unknown')
+            else:
+                X[col] = X[col].fillna(0)
 
-        X_train = pd.concat([X, X[high_conf_anoms]])
-        y_train = np.concatenate([np.zeros(len(X)), np.ones(sum(high_conf_anoms))])
+        try:
+            # Tạo bản sao X_iso được mã hóa số học cho Isolation Forest
+            X_iso = X.copy()
+            for col in X_iso.columns:
+                if X_iso[col].dtype.name == 'category':
+                    # Chuyển chuỗi thành số (0, 1, 2...)
+                    X_iso[col] = X_iso[col].cat.codes
 
-        new_model = lgb.LGBMClassifier(
-            n_estimators=600,
-            learning_rate=0.05,
-            max_depth=-1,
-            num_leaves=256,
-            scale_pos_weight=20,
-            random_state=42,
-            n_jobs=-1,
-            verbose=-1
-        )
+            # 1. Pipeline: Isolation Forest (Dùng X_iso toàn số)
+            iso = IsolationForest(contamination=0.05, random_state=42, n_jobs=-1)
+            iso.fit(X_iso)
+            pseudo_pred = iso.predict(X_iso)
+            
+            high_conf_anoms_mask = (pseudo_pred == -1)
+            
+            # 2. Tạo tập train cho Supervised Model (LightGBM)
+            # Dùng X gốc (có category) vì LightGBM xử lý tốt hơn
+            X_train = pd.concat([X, X[high_conf_anoms_mask]])
+            y_train = np.concatenate([np.zeros(len(X)), np.ones(sum(high_conf_anoms_mask))])
 
-        cat_cols = [c for c in ['user', 'client_ip', 'database', 'command_type'] if c in X.columns]
-        new_model.fit(X_train, y_train, categorical_feature=cat_cols)
+            # 3. Train LightGBM
+            new_model = lgb.LGBMClassifier(
+                n_estimators=100,
+                learning_rate=0.05,
+                max_depth=5,
+                num_leaves=31,
+                scale_pos_weight=10,
+                random_state=42,
+                n_jobs=-1,
+                verbose=-1
+            )
 
-        self.save_production_model(new_model, list(X.columns))
-        self.model = new_model
-        self.features = list(X.columns)
-        return True
+            cat_cols = [c for c in ['user', 'client_ip', 'database', 'command_type'] if c in X.columns]
+            new_model.fit(X_train, y_train, categorical_feature=cat_cols)
+
+            self.save_production_model(new_model, self.features)
+            self.model = new_model
+            return True
+            
+        except Exception as e:
+            logger.error(f"Training core failed: {e}", exc_info=True)
+            return False
+
+    def train_and_update(self, df_enhanced):
+        """
+        Public method gọi khi có dữ liệu mới: Tích lũy -> Lưu -> Train
+        """
+        if df_enhanced.empty:
+            return False
+
+        # 1. Cộng dồn vào RAM
+        self.training_buffer = pd.concat([self.training_buffer, df_enhanced], ignore_index=True)
+        
+        # 2. Cắt bớt nếu quá lớn (Sliding Window)
+        if len(self.training_buffer) > self.MAX_BUFFER_SIZE:
+            self.training_buffer = self.training_buffer.iloc[-self.MAX_BUFFER_SIZE:]
+
+        # 3. [QUAN TRỌNG] Lưu ngay xuống đĩa (Persistence)
+        self._save_buffer_to_disk()
+
+        # 4. Train ngay lập tức nếu đủ dữ liệu
+        logger.info(f"Training triggered. Buffer size: {len(self.training_buffer)}")
+        return self._train_core()
 
 
 # Global engine instance
@@ -165,19 +260,37 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     if df_logs.empty:
         return {"all_logs": df_logs}
 
-    # ADVANCED FEATURES
+    # ADVANCED FEATURES (Features.py enhancement)
     df_enhanced, ML_FEATURES = enhance_features_batch(df_logs.copy())
     df_logs = df_enhanced
 
-    # Auto-retrain check
-    if uba_engine.model is None or len(df_logs) > 10000:
-        logger.info("Triggering auto-retrain...")
+    # [UPDATE] Always update buffer and attempt training
+    # Không cần chờ 10000 dòng nữa, buffer sẽ tự lo
+    try:
         uba_engine.train_and_update(df_logs)
+    except Exception as e:
+        logger.error(f"Auto-retrain trigger failed: {e}")
 
     # ML Scoring
     if uba_engine.model and uba_engine.features:
         try:
-            X = df_logs[uba_engine.features].fillna(0)
+            # Ensure all features exist
+            X = df_logs.copy()
+            for f in uba_engine.features:
+                if f not in X.columns:
+                    X[f] = 0
+            
+            X = X[uba_engine.features]
+            
+            # Fill NaN for scoring
+            for col in X.columns:
+                if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype.name == 'category':
+                    if 'unknown' not in X[col].cat.categories:
+                        X[col] = X[col].cat.add_categories('unknown')
+                    X[col] = X[col].fillna('unknown')
+                else:
+                    X[col] = X[col].fillna(0)
+
             scores = uba_engine.model.predict_proba(X)[:, 1]
             df_logs['ml_anomaly_score'] = scores
             threshold = max(np.quantile(scores, 0.99), 0.75)
