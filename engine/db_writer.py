@@ -537,54 +537,80 @@ def save_results_to_db(results: Dict[str, Any]):
         'error_code': 'error_code',
         'error_message': 'error_message',
         'error_count': 'error_count',
+        'has_error': 'has_error',
         'warning_count': 'warning_count',
     }
 
-    # Prepare records
+# Prepare records
     records = []
+    
+    # Danh sách các cột Boolean trong DB (Cần ép kiểu chuẩn)
+    BOOL_COLS = {
+        'is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
+        'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
+        'is_risky_command', 'is_admin_command', 'is_potential_dump', 
+        'is_suspicious_func', 'is_privilege_change', 'is_system_table',
+        'is_sensitive_access', 'is_system_access', 'has_comment', 'has_hex', 
+        'is_anomaly', 'has_error' 
+    }
+
+    # Danh sách các cột Integer (Cần ép từ '0.0' -> 0)
+    INT_COLS = {
+        'created_tmp_disk_tables', 'created_tmp_tables', 'select_full_join', 
+        'select_scan', 'sort_merge_passes', 'no_index_used', 'no_good_index_used',
+        'error_count', 'warning_count', 'client_port', 'thread_os_id', 
+        'rows_returned', 'rows_examined', 'rows_affected', 'num_tables',
+        'num_joins', 'num_where_conditions', 'subquery_depth', 'query_length',
+        'accessed_sensitive_tables', 'event_id'
+    }
+
     for idx in all_logs_to_save.index:
         row = all_logs_to_save.loc[idx]
         rec = {}
         
         for src_col, dest_col in log_mapping.items():
-            if src_col not in row.index:
-                val = None
-            else:
+            val = None
+            if src_col in row.index:
                 val = row[src_col]
-                
-                if isinstance(val, (list, dict, set, np.ndarray)) and len(val) == 0:
-                    val = None
-                elif isinstance(val, (pd.Series, pd.DataFrame)):
-                    val = val.iloc[0] if len(val) > 0 else None
-                    
-                # BOOLEAN COLUMNS — ÉP VỀ True/False
-                if dest_col in ['is_late_night', 'is_work_hours', 'is_select_star', 'has_limit', 
-                            'has_order_by', 'has_into_outfile', 'has_load_data', 'has_sleep_benchmark',
-                            'is_risky_command', 'is_admin_command', 'is_potential_dump', 
-                            'is_suspicious_func', 'is_privilege_change', 'is_system_table',
-                            'is_sensitive_access', 'is_system_access', 'has_comment', 'has_hex', 'is_anomaly']:
-                    if val in (1, '1', 'True', True, 'true', 'T'):
-                        val = True
-                    elif val in (0, '0', 'False', False, 'false', 'F', None):
-                        val = False
-                    else:
-                        val = bool(val)
-                elif pd.isna(val):
-                    val = None
-                elif isinstance(val, (list, dict, set)):
-                    val = json.dumps(val, ensure_ascii=False, default=str)
-                elif isinstance(val, (pd.Timestamp, datetime)):
-                    val = val.isoformat()
-                elif isinstance(val, float) and dest_col in ['ml_anomaly_score', 'query_entropy', 'scan_efficiency']:
-                    val = float(val) if not pd.isna(val) else None
+
+            # Xử lý đặc biệt cho từng loại dữ liệu
+            if dest_col in BOOL_COLS:
+                # Ép mọi thể loại (0, '0', 0.0, False, 'False') về Boolean chuẩn Python
+                if pd.isna(val):
+                    val = False
                 else:
-                    val = str(val) if pd.notna(val) else None
+                    s_val = str(val).lower()
+                    val = s_val in ['1', 'true', 't', 'yes', 'y', '1.0']
             
+            elif dest_col in INT_COLS:
+                # Ép '0.0' hoặc '0' về int
+                try:
+                    if pd.isna(val):
+                        val = 0
+                    else:
+                        val = int(float(val))
+                except:
+                    val = 0
+            
+            elif isinstance(val, (list, dict, set, np.ndarray)):
+                # Serialize JSON
+                val = json.dumps(val, ensure_ascii=False, default=str) if val is not None else None
+            
+            elif isinstance(val, (pd.Timestamp, datetime)):
+                val = val.isoformat()
+                
+            elif pd.isna(val):
+                val = None
+                
+            else:
+                # Default về string cho các trường text
+                val = str(val)
+
             rec[dest_col] = val
 
-        # Fallback logic for is_anomaly if not set by ML
-        if rec.get('is_anomaly') is None:
-            score = float(rec.get('ml_anomaly_score', 0) or 0)
+        # Fallback logic cho is_anomaly nếu chưa có
+        if not rec.get('is_anomaly'):
+            score = float(rec.get('ml_anomaly_score') or 0)
             rec['is_anomaly'] = bool(
                 score > 0.7 or
                 rec.get('is_late_night') or
@@ -593,6 +619,7 @@ def save_results_to_db(results: Dict[str, Any]):
                 rec.get('is_suspicious_func') or
                 rec.get('is_privilege_change')
             )
+            
         records.append(rec)
         
     if records:

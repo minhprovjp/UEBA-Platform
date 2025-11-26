@@ -147,6 +147,7 @@ class AllLogs(Base):
     error_message = Column(Text, nullable=True)
     error_count = Column(Integer, default=0)
     warning_count = Column(Integer, default=0)
+    has_error = Column(Boolean, default=False)
 
     # Indexes for performance
     __table_args__ = (

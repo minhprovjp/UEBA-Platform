@@ -207,6 +207,13 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                 for row in results:
                     row_dict = row._mapping
                     
+                    # --- Xử lý Lỗi ---
+                    error_cnt = int(row_dict['ERRORS'] or 0)
+                    err_code = int(row_dict['MYSQL_ERRNO']) if row_dict['MYSQL_ERRNO'] else 0
+                    
+                    # Logic: Có lỗi nếu error_count > 0 HOẶC mã lỗi khác 0
+                    has_err = 1 if (error_cnt > 0 or err_code != 0) else 0
+                    
                     # Cập nhật con trỏ batch
                     t_end = row_dict['TIMER_END']
                     current_row_timer = int(t_end) if t_end is not None else 0
@@ -281,7 +288,8 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         
                         "error_code": int(row_dict['MYSQL_ERRNO']) if row_dict['MYSQL_ERRNO'] else None,
                         "error_message": str(row_dict['MESSAGE_TEXT']) if row_dict['MESSAGE_TEXT'] else None,
-                        "error_count": int(row_dict['ERRORS'] or 0),
+                        "error_count": error_cnt,  # Đã có, đảm bảo int
+                        "has_error": has_err,
                         "warning_count": int(row_dict['WARNINGS'] or 0),
                         
                         "created_tmp_disk_tables": int(row_dict['CREATED_TMP_DISK_TABLES'] or 0),

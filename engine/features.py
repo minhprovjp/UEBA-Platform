@@ -1,6 +1,4 @@
 # engine/features.py
-# FINAL CORRECTED & ENHANCED FEATURE ENGINEERING FOR MYSQL LOG ANOMALY DETECTION
-# Based on: Ronao & Cho (2024), Zhang et al. (KDD 2023), Liu et al. (TNNLS 2024)
 
 import re
 import pandas as pd
@@ -86,19 +84,37 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         ts = ts.tz_localize(None)
 
     hour = ts.hour if ts else 12
+    weekday = ts.weekday() if ts else 0
     
     # Lấy giá trị đã tính sẵn từ Publisher nếu có
     pub_entropy = row.get("query_entropy")
     pub_length = row.get("query_length")
     
+    # Lấy giá trị từ Publisher gửi sang
+    err_cnt = int(row.get("error_count", 0))
+    has_err = int(row.get("has_error", 0))
+    
+    # Nếu publisher chưa tính (trường hợp log cũ), tính fallback
+    if "has_error" not in row:
+        err_code = row.get("error_code")
+        if err_cnt > 0 or (err_code is not None and err_code != 0):
+            has_err = 1
+    
     # 1. Base Features
     f = {
+        # Ưu tiên dùng giá trị từ Publisher
         "query_length": pub_length if pd.notna(pub_length) else len(query),
         "query_entropy": pub_entropy if pd.notna(pub_entropy) else _shannon_entropy(query),
+        
         "hour_sin": np.sin(2 * np.pi * hour / 24.0),
         "hour_cos": np.cos(2 * np.pi * hour / 24.0),
-        "is_weekend": 1 if ts and ts.weekday() >= 5 else 0,
-        "is_late_night": 1 if 0 <= hour <= 5 else 0,
+        "is_weekend": 1 if weekday >= 5 else 0,
+        "is_late_night": 1 if 0 <= hour < 6 else 0,
+        "is_work_hours": 1 if 8 <= hour <= 18 else 0,
+        
+        # Truyền lại các giá trị lỗi
+        "error_count": err_cnt,
+        "has_error": has_err
     }
 
     # 2. Performance Metrics
@@ -117,7 +133,7 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     parsed = safe_parse_sql(query)
     
     # Default values
-    for k in ["num_tables", "num_joins", "num_where", "subquery_depth", 
+    for k in ["num_tables", "num_joins", "num_where_conditions", "subquery_depth", 
               "is_sensitive_access", "is_system_access", "is_dcl", "is_ddl", 
               "has_comment", "has_hex"]:
         f[k] = 0
@@ -132,7 +148,7 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         # Elements
         f["num_tables"] = len(list(parsed.find_all(exp.Table)))
         f["num_joins"] = len(list(parsed.find_all(exp.Join)))
-        f["num_where"] = len(list(parsed.find_all(exp.Where)))
+        f["num_where_conditions"] = len(list(parsed.find_all(exp.Where)))
         
         # Subquery Depth
         depth = 0
@@ -163,9 +179,20 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     if "0X" in q_upper: f["has_hex"] = 1
     if "SELECT *" in q_upper: f["is_select_star"] = 1
     if "INTO OUTFILE" in q_upper: f["has_into_outfile"] = 1
+    if "LOAD DATA" in q_upper: f["has_load_data"] = 1
+    if re.search(r"SLEEP\s*\(", query, re.I) or re.search(r"BENCHMARK\s*\(", query, re.I):
+        f["has_sleep_benchmark"] = 1
     
-    # Error Flag
-    f["has_error"] = 1 if row.get("error_code") else 0
+    # Fallback command type if parser fails
+    if "command_type" not in f:
+        if "SELECT" in q_upper: f["command_type"] = "SELECT"
+        elif "INSERT" in q_upper: f["command_type"] = "INSERT"
+        elif "UPDATE" in q_upper: f["command_type"] = "UPDATE"
+        elif "DELETE" in q_upper: f["command_type"] = "DELETE"
+        else: f["command_type"] = "UNKNOWN"
+
+    # Error flags fallback (đã xử lý ở trên nhưng double check)
+    f["is_access_denied"] = 1 if "access denied" in str(row.get("error_message", "")).lower() else 0
 
     return f
 
@@ -195,18 +222,15 @@ def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         
     df_final = pd.concat([df, features_df], axis=1)
 
-    # 3. Contextual Features (Rolling Windows) - [ĐOẠN SỬA LỖI]
+    # 3. Contextual Features (Rolling Windows)
     logging.info("Generating Contextual Features (Rolling Windows)...")
     
     if 'timestamp' in df_final.columns:
         # Chuyển về naive datetime
         df_final['timestamp'] = pd.to_datetime(df_final['timestamp']).dt.tz_localize(None)
-        
-        # Sort bắt buộc
         df_final.sort_values(by=['user', 'timestamp'], inplace=True)
         
         def calc_rolling(g):
-            # g sẽ không có cột 'user' (do include_groups=False)
             g = g.set_index('timestamp').sort_index()
             win = '5min'
             
@@ -219,8 +243,7 @@ def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             return g.reset_index()
 
         try:
-            # [FIX QUAN TRỌNG]: group_keys=True để giữ 'user' trong index kết quả
-            # include_groups=False để tránh warning Deprecated
+            # group_keys=True để giữ 'user' trong index kết quả
             df_rolled = df_final.groupby('user', group_keys=True).apply(calc_rolling, include_groups=False)
             
             # Kết quả df_rolled có MultiIndex (user, index_cũ). 
@@ -234,7 +257,6 @@ def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             # Fallback cho pandas bản cũ
             df_final = df_final.groupby('user', group_keys=False).apply(calc_rolling)
 
-        # [FIX Warning Downcasting]
         pd.set_option('future.no_silent_downcasting', True)
         df_final = df_final.fillna(0).infer_objects(copy=False)
 
@@ -274,7 +296,7 @@ def enhance_features_batch(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         "num_subqueries", "has_limit", "has_order_by", "has_group_by", "has_union",
         "is_select_star", "has_into_outfile", "has_load_data", "has_sleep_benchmark",
         "is_risky_command", "is_admin_command", "accessed_sensitive_tables",
-        "has_error", "is_access_denied",
+        "has_error", "error_count", "is_access_denied",
         "execution_time_ms", "rows_returned", "rows_affected",
         "execution_time_ms_zscore", "rows_returned_zscore",
         "query_count_5m", "error_count_5m", "total_rows_5m", "data_retrieval_speed"
