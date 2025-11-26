@@ -317,27 +317,36 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # ML Scoring
     if uba_engine.model and uba_engine.features:
         try:
-            # Ensure all features exist
+            # 1. Chuẩn bị X với đúng các cột features mô hình cần
             X = df_logs.copy()
             for f in uba_engine.features:
                 if f not in X.columns:
                     X[f] = 0
-            
             X = X[uba_engine.features]
-            
-            # Fill NaN for scoring
+
+            # 2. [FIX] Ép kiểu Category tường minh cho giống lúc Train
+            cat_cols = ['user', 'client_ip', 'database', 'command_type']
             for col in X.columns:
-                if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype.name == 'category':
+                if col in cat_cols:
+                    # Chuyển sang string trước rồi mới sang category để đồng bộ
+                    X[col] = X[col].astype(str).astype('category')
+                    
+                    # Thêm category 'unknown' để tránh lỗi nếu gặp giá trị mới lạ
                     if 'unknown' not in X[col].cat.categories:
                         X[col] = X[col].cat.add_categories('unknown')
                     X[col] = X[col].fillna('unknown')
                 else:
-                    X[col] = X[col].fillna(0)
+                    # Các cột số thì ép về float/int và điền 0
+                    X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
 
+            # 3. Dự đoán
             scores = uba_engine.model.predict_proba(X)[:, 1]
             df_logs['ml_anomaly_score'] = scores
+            
+            # Ngưỡng động: Lấy top 1% hoặc > 0.75
             threshold = max(np.quantile(scores, 0.99), 0.75)
             anomalies_ml = df_logs[scores >= threshold].copy()
+            
         except Exception as e:
             logger.error(f"ML inference failed: {e}. Using rule-only mode.")
             df_logs['ml_anomaly_score'] = 0.0
