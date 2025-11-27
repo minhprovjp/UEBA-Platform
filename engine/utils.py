@@ -358,7 +358,7 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         
 def update_config_file(new_configs: dict):
     """
-    Đọc file config.py, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
+    Đọc file config.py.template, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
 
     Args:
         new_configs (dict): Một dictionary chứa các giá trị mới cần cập nhật.
@@ -366,7 +366,7 @@ def update_config_file(new_configs: dict):
     Returns:
         tuple: (bool, str) - (Thành công/Thất bại, Thông báo)
     """
-    config_path = 'config.py' # Đường dẫn đến file config.py trong cùng thư mục
+    config_path = 'config.py.template' # Đường dẫn đến file config.py.template trong cùng thư mục
     try:
         # Đọc tất cả các dòng của file vào một danh sách
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -411,7 +411,7 @@ def update_config_file(new_configs: dict):
                 # Giữ nguyên các dòng không phải là dòng gán giá trị (ví dụ: comment, import,...)
                 new_lines.append(line)
 
-        # Ghi đè lại toàn bộ file config.py với nội dung mới
+        # Ghi đè lại toàn bộ file config.py.template với nội dung mới
         # Chế độ 'w' (write) sẽ tự động xóa nội dung cũ trước khi ghi
         with open(config_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
@@ -423,7 +423,42 @@ def update_config_file(new_configs: dict):
         import traceback
         traceback.print_exc()
         return False, f"Lỗi khi lưu cấu hình: {e}"
-    
+
+
+# ============================================================
+# ACTIVE RESPONSE AUDIT LOGGER
+# ============================================================
+
+# Cấu hình một logger riêng cho audit
+audit_logger = logging.getLogger('ActiveResponseAudit')
+audit_logger.setLevel(logging.INFO)
+
+# Chỉ thêm handler nếu nó chưa có để tránh log lặp lại
+if not audit_logger.hasHandlers():
+    try:
+        # Sử dụng 'a' để ghi nối tiếp, 'utf-8'
+        file_handler = logging.FileHandler(ACTIVE_RESPONSE_AUDIT_LOG_PATH, mode='a', encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+        audit_logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"LỖI NGHIÊM TRỌNG: Không thể tạo file audit log tại {ACTIVE_RESPONSE_AUDIT_LOG_PATH}: {e}")
+
+def log_active_response_action(action: str, target: str, reason: str):
+    """
+    Ghi lại một hành động phản ứng chủ động vào file audit log.
+
+    Args:
+        action (str): Loại hành động (ví dụ: "LOCK_ACCOUNT", "KILL_SESSION").
+        target (str): Đối tượng bị tác động (ví dụ: "user@host", "Session 123").
+        reason (str): Lý do thực hiện.
+    """
+    try:
+        message = f"ACTION: {action} | TARGET: {target} | REASON: {reason}"
+        audit_logger.info(message)
+    except Exception as e:
+        print(f"[Active Response] Lỗi khi ghi audit log: {e}")
+
+
 def save_logs_to_parquet(records: list, source_dbms: str) -> int:
     if not records:
         return 0
