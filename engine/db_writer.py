@@ -10,7 +10,7 @@ import json
 import numpy as np
 
 # Đảm bảo import backend_api khi chạy từ project root
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
@@ -159,7 +159,7 @@ def save_results_to_db(results: Dict[str, Any]):
         'total_rows_5m': 'total_rows_5m',
         'data_retrieval_speed': 'data_retrieval_speed',
         'execution_time_ms_zscore': 'execution_time_ms_zscore',
-        'rows_returned_zscore': 'rows_returned_zscore',
+        'rows_returned_zscore': 'rows_returned_zscore',                    
         'num_tables': 'num_tables',
         'num_joins': 'num_joins',
         'num_where_conditions': 'num_where_conditions',
