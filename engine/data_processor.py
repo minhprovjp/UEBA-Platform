@@ -27,13 +27,14 @@ logger = logging.getLogger(__name__)
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, USER_MODELS_DIR
+from config import MODELS_DIR, USER_MODELS_DIR, ALERT_EMAIL_SETTINGS
 from engine.features import enhance_features_batch
 from utils import (
     is_late_night_query, is_potential_large_dump,
     analyze_sensitive_access, check_unusual_user_activity_time,
     is_suspicious_function_used, is_privilege_change, get_normalized_query
 )
+from email_alert import send_email_alert
 
 # Production model paths
 PROD_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_production.joblib")
@@ -484,6 +485,70 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     priv_res.columns = ['is_privilege_change', 'privilege_cmd_name']
     df_logs = pd.concat([df_logs, priv_res], axis=1)
     anomalies_privilege = df_logs[df_logs['is_privilege_change'] == True].copy()
+
+    # ===========================================
+    # GỬI EMAIL CẢNH BÁO NẾU PHÁT HIỆN BẤT THƯỜNG
+    # ===========================================
+    email_subject = "[ALERT] SUSPICIOUS ACTIVITY DETECTION!"
+    email_message = "🚨 Hệ thống UBA đã phát hiện các vi phạm tiềm ẩn:\n\n"
+
+    if not anomalies_late_night.empty:
+        first_time = anomalies_late_night['timestamp'].min().strftime('%Y-%m-%d %H:%M')
+        email_message += (
+            f"⚠️ Giờ Khuya: {len(anomalies_late_night)} truy vấn được thực hiện vào khung giờ bất thường.\n"
+            f"• Thời điểm sớm nhất: {first_time}\n\n"
+        )
+
+    if not anomalies_large_dump.empty:
+        first_time = anomalies_large_dump['timestamp'].min().strftime('%Y-%m-%d %H:%M')
+        email_message += (
+            f"⚠️ Dump dữ liệu lớn: {len(anomalies_large_dump)} truy vấn nghi ngờ truy xuất dữ liệu lớn.\n"
+            f"• Thời điểm đầu tiên: {first_time}\n\n"
+        )
+    if not anomalies_sensitive_access.empty:
+        first_time = anomalies_sensitive_access['timestamp'].min().strftime('%Y-%m-%d %H:%M')
+        email_message += (
+            f"⚠️ Truy cập bảng nhạy cảm: {len(anomalies_sensitive_access)} truy vấn vi phạm chính sách truy cập dữ liệu nhạy cảm.\n"
+            f"• Thời điểm đầu tiên: {first_time}\n\n"
+        )
+
+    if not anomalies_unusual_user_time.empty:
+        first_time = anomalies_unusual_user_time['timestamp'].min().strftime('%Y-%m-%d %H:%M')
+        email_message += (
+            f"⚠️ Hoạt động ngoài giờ: {len(anomalies_unusual_user_time)} truy vấn xảy ra ngoài giờ hoạt động thường lệ của user.\n"
+            f"• Thời điểm đầu tiên: {first_time}\n\n"
+        )
+    if not anomalies_multiple_tables_df.empty:
+        first_time = anomalies_multiple_tables_df['start_time'].min().strftime(
+            '%Y-%m-%d %H:%M')  # start_time: bat thuong dua tren session
+        email_message += (
+            f"⚠️ Truy cập nhiều bảng: {len(anomalies_multiple_tables_df)} phiên có dấu hiệu truy cập nhiều bảng.\n"
+            f"• Phiên đầu tiên: {first_time}\n\n"
+        )
+
+    email_message += (
+        "──────────────────────────────\n"
+        "Vui lòng truy cập Dashboard UBA để điều tra chi tiết.\n"
+    )
+
+    # Gui email canh bao
+    if email_message.strip():
+        result = send_email_alert(
+            email_subject,
+            email_message,
+            ALERT_EMAIL_SETTINGS["to_recipients"],
+            ALERT_EMAIL_SETTINGS["smtp_server"],
+            ALERT_EMAIL_SETTINGS["smtp_port"],
+            ALERT_EMAIL_SETTINGS["sender_email"],
+            ALERT_EMAIL_SETTINGS["sender_password"],
+            bcc_recipients=ALERT_EMAIL_SETTINGS["bcc_recipients"]
+        )
+        if result is True:
+            logging.info("Gửi cảnh báo thành công!")
+        else:
+            logging.error(f"Không gửi được cảnh báo - {result}")
+
+
 
     # Normal activities
     anomalous_indices = set(anomalies_ml.index)

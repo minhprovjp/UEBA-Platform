@@ -49,7 +49,7 @@ def check_and_send_alert(results: dict):
             count = len(df)
             total_anomalies += count
             report_lines.append(f"- {key.replace('anomalies_', '').title()}: {count} trường hợp")
-            
+
             # Lấy 3 ví dụ hàng đầu
             for _, row in df.head(3).iterrows():
                 user = row.get('user', 'N/A')
@@ -58,14 +58,14 @@ def check_and_send_alert(results: dict):
 
     if total_anomalies > 0:
         logging.info(f"Phát hiện {total_anomalies} bất thường, đang gửi email...")
-        
+
         subject = f"[UBA Cảnh Báo] Phát hiện {total_anomalies} hành vi bất thường mới"
         message_body = (
-            "Hệ thống Giám sát Hành vi Người dùng (UBA) vừa phát hiện các hoạt động đáng ngờ:\n\n"
-            + "\n".join(report_lines)
-            + "\n\nVui lòng kiểm tra Bảng điều khiển để biết thêm chi tiết."
+                "Hệ thống Giám sát Hành vi Người dùng (UBA) vừa phát hiện các hoạt động đáng ngờ:\n\n"
+                + "\n".join(report_lines)
+                + "\n\nVui lòng kiểm tra Bảng điều khiển để biết thêm chi tiết."
         )
-        
+
         try:
             result = send_email_alert(
                 subject=subject,
@@ -123,7 +123,6 @@ def start_engine():
 
                 # Save to DB
                 save_results_to_db(results)
-
                 # Send alert if high-risk
                 anomalies = results.get("anomalies_ml", pd.DataFrame())
                 if not anomalies.empty and anomalies['ml_anomaly_score'].max() > 0.85:
@@ -132,7 +131,6 @@ def start_engine():
                         results_df=anomalies,
                         top_n=8
                     )
-
                 # ACK messages
                 for stream, msg_id in ack_ids:
                     r.xack(stream, REDIS_GROUP_ENGINE, msg_id)

@@ -77,6 +77,7 @@ MODELS_DIR = os.path.join(PROJECT_ROOT, "trained_models")                       
 USER_MODELS_DIR = os.path.join(MODELS_DIR, "user_models")                           # Thư mục con để chứa các mô hình AI được huấn luyện riêng cho từng người dùng.
 FEEDBACK_FILE_PATH = os.path.join(PROJECT_ROOT, 'feedback.csv')                     # Tên file CSV để lưu trữ các phản hồi (feedback) từ người dùng.
 VALID_MODELS_FILE_PATH = os.path.join(PROJECT_ROOT, 'valid_models.json')            # Tên file JSON để lưu danh sách các model AI đã được xác thực thành công.
+ACTIVE_RESPONSE_AUDIT_LOG_PATH = os.path.join(PROJECT_ROOT, "active_response_audit.log")   # Tên file log cho các hành động phản ứng chủ động (Active Response)
 
 # Tạo một danh sách tất cả các thư mục cần tồn tại và lặp qua để tạo chúng.
 # Điều này đảm bảo rằng trước khi bất kỳ code nào khác chạy, môi trường đã sẵn sàng.
@@ -157,6 +158,18 @@ ALERT_EMAIL_SETTINGS = {
     
     # Danh sách người nhận ẩn danh (BCC).
     "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
+}
+
+# ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
+# Ngưỡng (số lượng vi phạm) để kích hoạt khóa tài khoản
+ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 5 # Ví dụ: Khóa user nếu có 5 vi phạm trở lên
+
+# Đọc cấu hình admin MySQL từ .env
+ACTIVE_RESPONSE_SETTINGS = {
+    "mysql_host": os.getenv("MYSQL_ADMIN_HOST"),
+    "mysql_port": os.getenv("MYSQL_ADMIN_PORT"),
+    "mysql_user": os.getenv("MYSQL_ADMIN_USER"),
+    "mysql_password": os.getenv("MYSQL_ADMIN_PASSWORD"),
 }
 
 # ==== REDIS / REALTIME PIPELINE ====
