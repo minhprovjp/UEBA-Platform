@@ -19,6 +19,7 @@ from sklearn.ensemble import IsolationForest
 from datetime import datetime
 import hashlib
 from pathlib import Path
+import time
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [DataProcessor-PROD] - %(message)s')
@@ -40,6 +41,9 @@ PROD_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_production.joblib")
 FALLBACK_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_fallback.joblib")
 BUFFER_FILE_PATH = os.path.join(MODELS_DIR, "training_buffer_cache.parquet")
 
+# File để lưu danh sách category lúc train
+CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib") 
+
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 
@@ -50,14 +54,18 @@ class ProductionUBAEngine:
         self.features = None
         self.model_version = "unknown"
         self.last_trained = None
+        self.cat_mapping = {}
         
         # Cấu hình Training
         self.MIN_TRAIN_SIZE = 1      # Train ngay khi có 1 dòng
         self.MAX_BUFFER_SIZE = 5000   # Giữ tối đa 5000 dòng để train (Sliding Window)
         
+        # Biến để kiểm soát tần suất ghi đĩa
+        self.last_save_time = time.time()
+        self.SAVE_INTERVAL_SEC = 60 # Chỉ ghi xuống đĩa mỗi 60s hoặc khi buffer đầy
+        
         # Khởi tạo Buffer từ đĩa (Persistence)
         self.training_buffer = self._load_buffer_from_disk()
-        
         self.load_models()
 
     def _load_buffer_from_disk(self) -> pd.DataFrame:
@@ -71,10 +79,15 @@ class ProductionUBAEngine:
                 logger.error(f"Failed to load buffer file: {e}")
         return pd.DataFrame()
 
-    def _save_buffer_to_disk(self):
-        """Lưu Buffer xuống đĩa để an toàn (Crash-safe)"""
+    def _save_buffer_to_disk(self, force=False):
+        """Lưu Buffer xuống đĩa với cơ chế Rate Limit"""
+        now = time.time()
+        # Chỉ ghi nếu force=True HOẶC đã quá 60s HOẶC buffer > 1000 dòng mới
+        if not force and (now - self.last_save_time < self.SAVE_INTERVAL_SEC):
+            return
+
         try:
-            # [FIX] Ép kiểu các cột string dễ gây lỗi trước khi lưu
+            # Ép kiểu các cột string dễ gây lỗi trước khi lưu
             str_cols = ['error_message', 'query', 'normalized_query', 'query_digest', 
                         'user', 'database', 'client_ip', 'connection_type', 'command_type', 
                         'event_name', 'suspicious_func_name', 'privilege_cmd_name', 
@@ -87,9 +100,11 @@ class ProductionUBAEngine:
             
             # Parquet ghi rất nhanh
             df_to_save.to_parquet(BUFFER_FILE_PATH, index=False)
+            self.last_save_time = now
+            # logging.info("Persistent buffer saved to disk.")
         except Exception as e:
             logger.error(f"Failed to persist buffer to disk: {e}")
-
+            
     def load_models(self):
         """Load production → fallback → train new"""
         if os.path.exists(PROD_MODEL_PATH):
@@ -97,6 +112,8 @@ class ProductionUBAEngine:
                 data = joblib.load(PROD_MODEL_PATH)
                 self.model = data['model']
                 self.features = data['features']
+                if os.path.exists(CAT_MAP_PATH):
+                	self.cat_mapping = joblib.load(CAT_MAP_PATH)
                 self.model_version = data.get('version', 'v0')
                 self.last_trained = data.get('trained_at', 'unknown')
                 logger.info(f"Loaded PRODUCTION model v{self.model_version} (trained: {self.last_trained})")
@@ -200,16 +217,22 @@ class ProductionUBAEngine:
         # Tạo X cho LightGBM (giữ nguyên category)
         X = self.training_buffer[self.features].copy()
         
+        # Chuẩn hóa Category khi Train
+        cat_cols = ['user', 'client_ip', 'database', 'command_type']
+        current_mapping = {}
+        
         # Xử lý NaN và kiểu dữ liệu cho X
         for col in X.columns:
-            # Kiểm tra nếu là category hoặc object (string)
-            if isinstance(X[col].dtype, pd.CategoricalDtype) or X[col].dtype == 'object':
-                X[col] = X[col].astype('category') # Ép về category cho LightGBM
-                if 'unknown' not in X[col].cat.categories:
-                    X[col] = X[col].cat.add_categories('unknown')
-                X[col] = X[col].fillna('unknown')
+            if col in cat_cols or X[col].dtype == 'object':
+                X[col] = X[col].astype(str).astype('category')
+                # Lưu lại danh sách category đã biết
+                current_mapping[col] = X[col].cat.categories.tolist()
             else:
                 X[col] = X[col].fillna(0)
+        
+        # Lưu mapping
+        self.cat_mapping = current_mapping
+        joblib.dump(self.cat_mapping, CAT_MAP_PATH)
 
         try:
             # Tạo bản sao X_iso được mã hóa số học cho Isolation Forest
@@ -222,9 +245,7 @@ class ProductionUBAEngine:
             # 1. Pipeline: Isolation Forest (Dùng X_iso toàn số)
             iso = IsolationForest(contamination=0.05, random_state=42, n_jobs=-1)
             iso.fit(X_iso)
-            pseudo_pred = iso.predict(X_iso)
-            
-            high_conf_anoms_mask = (pseudo_pred == -1)
+            high_conf_anoms_mask = (iso.predict(X_iso) == -1)
             
             # 2. Tạo tập train cho Supervised Model (LightGBM)
             # Dùng X gốc (có category) vì LightGBM xử lý tốt hơn
@@ -268,8 +289,8 @@ class ProductionUBAEngine:
         if len(self.training_buffer) > self.MAX_BUFFER_SIZE:
             self.training_buffer = self.training_buffer.iloc[-self.MAX_BUFFER_SIZE:]
 
-        # 3. [QUAN TRỌNG] Lưu ngay xuống đĩa (Persistence)
-        self._save_buffer_to_disk()
+        # 3. Lưu ngay xuống đĩa (Persistence)
+        self._save_buffer_to_disk(force=False)
 
         # 4. Train ngay lập tức nếu đủ dữ liệu
         logger.info(f"Training triggered. Buffer size: {len(self.training_buffer)}")
@@ -328,14 +349,16 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
             # 2. [FIX] Ép kiểu Category tường minh cho giống lúc Train
             cat_cols = ['user', 'client_ip', 'database', 'command_type']
             for col in X.columns:
-                if col in cat_cols:
-                    # Chuyển sang string trước rồi mới sang category để đồng bộ
-                    X[col] = X[col].astype(str).astype('category')
-                    
-                    # Thêm category 'unknown' để tránh lỗi nếu gặp giá trị mới lạ
-                    if 'unknown' not in X[col].cat.categories:
-                        X[col] = X[col].cat.add_categories('unknown')
-                    X[col] = X[col].fillna('unknown')
+                if col in uba_engine.cat_mapping:
+                    # Ép kiểu về Category với đúng danh sách đã học
+                    known_cats = uba_engine.cat_mapping[col]
+                    X[col] = X[col].astype(str).astype(pd.CategoricalDtype(categories=known_cats))
+                    # Các giá trị lạ sẽ tự động thành NaN -> Fill 'unknown' nếu 'unknown' có trong list, ko thì fill mode
+                    if 'unknown' in known_cats:
+                        X[col] = X[col].fillna('unknown')
+                    else:
+                        # Fallback về category đầu tiên nếu không có unknown
+                        X[col] = X[col].fillna(known_cats[0])
                 else:
                     # Các cột số thì ép về float/int và điền 0
                     X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
@@ -553,7 +576,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     return results
 
 
-# --------------------------- Model I/O (giữ lại nếu cần sau) ---------------------------
+# --------------------------- Model I/O ---------------------------
 def save_model_and_scaler(model, scaler, path):
     joblib.dump({'model': model, 'scaler': scaler}, path)
 

@@ -75,7 +75,18 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     """Trích xuất Static Features từ 1 dòng log"""
     query = str(row.get("query", "")).strip()
     
-    # Timestamp handling
+    q_upper = query.upper()
+
+    # Trả về -1 nếu lỗi để phân biệt với 0 thực sự
+    # Model sẽ học được rằng -1 là "Missing Value"
+    def safe_int(val):
+        try:
+            if pd.isna(val) or val == '' or val is None: return -1
+            f_val = float(val)
+            if math.isnan(f_val) or math.isinf(f_val): return -1
+            return int(f_val)
+        except: return -1
+
     ts = row.get("timestamp")
     if isinstance(ts, str):
         try: ts = pd.to_datetime(ts).tz_localize(None)
@@ -105,14 +116,19 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     
     # Lấy giá trị từ Publisher gửi sang 
     err_cnt = safe_int(row.get("error_count"))
+    # Nếu safe_int trả về -1 (lỗi dữ liệu), ta coi như 0 để tính logic flag, nhưng giữ -1 ở feature
+    err_cnt_logic = max(0, err_cnt) 
     has_err = safe_int(row.get("has_error"))
     
     # Nếu publisher chưa tính (trường hợp log cũ), tính fallback
     if "has_error" not in row:
         err_code = row.get("error_code")
-        if err_cnt > 0 or (err_code is not None and safe_int(err_code) != 0):
+        if err_cnt_logic > 0:
             has_err = 1
-    
+        elif err_code is not None:
+            try:
+                if int(float(err_code)) != 0: has_err = 1
+            except: pass
     # 1. Base Features
     f = {
         # Ưu tiên dùng giá trị từ Publisher
@@ -125,8 +141,8 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         "is_work_hours": 1 if 8 <= hour <= 18 else 0,
         
         # Truyền lại các giá trị lỗi
-        "error_count": err_cnt,
-        "has_error": has_err
+        "error_count": err_cnt, # Có thể là -1
+        "has_error": max(0, has_err) # Flag nên là 0/1
     }
 
     # 2. Performance Metrics
@@ -139,25 +155,33 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
     f["rows_affected"] = safe_int(row.get("rows_affected"))
     f["no_index_used"] = safe_int(row.get("no_index_used"))
     
-    # Ratio: Rows per Time (Data Retrieval Speed)
-    # Tránh chia cho 0
-    f["data_retrieval_speed"] = rows_ret / (exec_time + 0.001)
+    # Ratio: Rows per Time (Data Retrieval Speed) Xử lý chia cho 0 hoặc dữ liệu lỗi (-1)
+    f["data_retrieval_speed"] = 0.0
+    if rows_ret >= 0:
+        f["data_retrieval_speed"] = rows_ret / (exec_time + 0.001)
 
     # 3. SQL Structure (Parser)
     parsed = safe_parse_sql(query)
     
+    f["is_parse_failed"] = 1 if parsed is None else 0
+
     # Default values
     for k in ["num_tables", "num_joins", "num_where_conditions", "subquery_depth", 
               "is_sensitive_access", "is_system_access", "is_dcl", "is_ddl", 
-              "has_comment", "has_hex"]:
+              "has_comment", "has_hex", "is_risky_command", "is_admin_command",
+              "is_select_star", "has_into_outfile", "has_load_data", "has_sleep_benchmark"]:
         f[k] = 0
     f["accessed_tables"] = []
 
     if parsed:
         cmd = parsed.key.upper() if hasattr(parsed, "key") else "UNKNOWN"
         f["command_type"] = cmd
-        f["is_dcl"] = 1 if cmd in {"GRANT", "REVOKE", "CREATE USER"} else 0
-        f["is_ddl"] = 1 if cmd in {"CREATE", "DROP", "ALTER", "TRUNCATE"} else 0
+        
+        # Check commands via parser (More accurate)
+        if cmd in RISKY_COMMANDS: f["is_risky_command"] = 1
+        if cmd in {"GRANT", "REVOKE", "CREATE USER", "ALTER USER", "SET PASSWORD"}: f["is_admin_command"] = 1
+        if cmd in {"GRANT", "REVOKE", "CREATE USER"}: f["is_dcl"] = 1
+        if cmd in {"CREATE", "DROP", "ALTER", "TRUNCATE"}: f["is_ddl"] = 1
 
         # Elements
         f["num_tables"] = len(list(parsed.find_all(exp.Table)))
@@ -173,22 +197,15 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
             except: break
         f["subquery_depth"] = min(depth, 10)
 
-        # Tables check
-        tables_found = set()
-        for t in parsed.find_all(exp.Table):
-            t_name = t.name.lower()
-            db_name = t.db.lower() if t.db else ""
-            full = f"{db_name}.{t_name}" if db_name else t_name
-            tables_found.add(full)
-            
-            if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES:
-                f["is_sensitive_access"] = 1
-            if db_name in SYSTEM_SCHEMAS:
-                f["is_system_access"] = 1
+        tables_found = _extract_tables(parsed)
+        for full in tables_found:
+            t_name = full.split('.')[-1]
+            if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES: f["is_sensitive_access"] = 1
+            db_part = full.split('.')[0] if '.' in full else ''
+            if db_part in SYSTEM_SCHEMAS: f["is_system_access"] = 1
         f["accessed_tables"] = list(tables_found)
 
-    # 4. Regex Heuristics (Fallback & Injection patterns)
-    q_upper = query.upper()
+    # 4. Regex Heuristics (Luôn chạy để backup khi parser fail hoặc SQLi obfucated)
     if "--" in query or "/*" in query or "#" in query: f["has_comment"] = 1
     if "0X" in q_upper: f["has_hex"] = 1
     if "SELECT *" in q_upper: f["is_select_star"] = 1
@@ -205,7 +222,7 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         elif "DELETE" in q_upper: f["command_type"] = "DELETE"
         else: f["command_type"] = "UNKNOWN"
 
-    # Error flags fallback (đã xử lý ở trên nhưng double check)
+    # Error flags fallback
     f["is_access_denied"] = 1 if "access denied" in str(row.get("error_message", "")).lower() else 0
 
     return f

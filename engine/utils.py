@@ -358,7 +358,7 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         
 def update_config_file(new_configs: dict):
     """
-    Đọc file config.py.template, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
+    Đọc file config.py, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
 
     Args:
         new_configs (dict): Một dictionary chứa các giá trị mới cần cập nhật.
@@ -366,7 +366,7 @@ def update_config_file(new_configs: dict):
     Returns:
         tuple: (bool, str) - (Thành công/Thất bại, Thông báo)
     """
-    config_path = 'config.py.template' # Đường dẫn đến file config.py.template trong cùng thư mục
+    config_path = 'config.py' # Đường dẫn đến file config.py trong cùng thư mục
     try:
         # Đọc tất cả các dòng của file vào một danh sách
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -411,7 +411,7 @@ def update_config_file(new_configs: dict):
                 # Giữ nguyên các dòng không phải là dòng gán giá trị (ví dụ: comment, import,...)
                 new_lines.append(line)
 
-        # Ghi đè lại toàn bộ file config.py.template với nội dung mới
+        # Ghi đè lại toàn bộ file config.py với nội dung mới
         # Chế độ 'w' (write) sẽ tự động xóa nội dung cũ trước khi ghi
         with open(config_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)

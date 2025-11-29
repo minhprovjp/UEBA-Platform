@@ -23,7 +23,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - [PerfSchemaPublisher] - %(message)s"
 )
 
-# Tên file state mới
+# File state
 PERF_SCHEMA_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_schema.state")
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 
@@ -40,19 +40,18 @@ def handle_shutdown(signum, frame):
 signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
-# === 1. Quản lý State (Dùng TIMER_END) ===
-def read_last_known_timestamp(state_file_path=PERF_SCHEMA_STATE_FILE) -> int:
+# === 1. Quản lý State ===
+def read_last_known_event_id(state_file_path=PERF_SCHEMA_STATE_FILE) -> int:
     try:
         with open(state_file_path, 'r', encoding='utf-8') as f:
             state = json.load(f)
-            # Trả về 0 nếu file rỗng hoặc lỗi
-            return int(state.get("last_timestamp", 0))
+            return int(state.get("last_event_id", 0))
     except:
-        logging.warning("Không tìm thấy state file. Bắt đầu từ timestamp = 0.")
+        logging.warning("Không tìm thấy state file. Bắt đầu từ EVENT_ID = 0.")
         return 0
         
-def write_last_known_timestamp(ts: int, state_file_path=PERF_SCHEMA_STATE_FILE):
-    state = {"last_timestamp": ts, "last_updated": datetime.now(timezone.utc).isoformat()}
+def write_last_known_event_id(last_id: int, state_file_path=PERF_SCHEMA_STATE_FILE):
+    state = {"last_event_id": last_id, "last_updated": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
     os.makedirs(os.path.dirname(state_file_path) or ".", exist_ok=True)
     try:
         with open(state_file_path, 'w', encoding='utf-8') as f:
@@ -66,27 +65,23 @@ def connect_db(db_url: str):
         try:
             engine = create_engine(db_url)
             with engine.connect() as conn:
-                try:
-                    conn.execute(text("SELECT 1"))
-                except: pass
+                conn.execute(text("SELECT 1"))
             logging.info("Kết nối MySQL (Publisher) thành công.")
             return engine
         except Exception as e:
             logging.error(f"Kết nối MySQL thất bại: {e}. Thử lại sau 5 giây...")
             time.sleep(5)
-    return None
 
 def connect_redis():
     while is_running:
         try:
             r = Redis.from_url(REDIS_URL, decode_responses=True)
             r.ping()
-            logging.info("Kết nối Redis (Publisher) thành công.")
+            logging.info("Kết nối Redis thành công.")
             return r
         except RedisConnectionError as e:
             logging.error(f"Kết nối Redis thất bại: {e}. Thử lại sau 5 giây...")
             time.sleep(5)
-    return None
 
 # === 3. Logic Publisher chính ===
 
@@ -97,6 +92,7 @@ def calculate_entropy(text):
     length = len(text)
     return -sum((count/length) * math.log2(count/length) for count in counter.values())
 
+# === 4. Main Loop ===
 def monitor_performance_schema(poll_interval_sec: int = 2):
     global is_running
     
@@ -105,18 +101,18 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
     
     if not db_engine or not redis_client: return
 
-    last_timestamp = read_last_known_timestamp()
+    last_event_id = read_last_known_event_id()
     
     # Sử dụng bảng LONG để không bị mất dữ liệu của các thread đã đóng
-    TABLE_NAME = "performance_schema.events_statements_history_long"
+    TABLE_NAME = "performance_schema.events_statements_history"
 
-    logging.info(f"Starting from timestamp > {last_timestamp}")
+    logging.info(f"🚀 Publisher bắt đầu. Starting EVENT_ID > {last_event_id}")
 
     # Query lấy dữ liệu
     sql_query = text("""
         SELECT 
-            e.TIMER_START,
-            e.TIMER_END,
+            TRUNCATE(e.TIMER_START / 1000000000, 4) AS TIMER_START,
+            TRUNCATE(e.TIMER_END / 1000000000, 4) AS TIMER_END,
             e.EVENT_ID,
             e.EVENT_NAME,
             e.SQL_TEXT,
@@ -143,96 +139,49 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             COALESCE(t.PROCESSLIST_HOST, 'unknown') AS PROCESSLIST_HOST,
             t.CONNECTION_TYPE,          
             t.THREAD_OS_ID
-        FROM performance_schema.events_statements_history_long e
+        FROM performance_schema.events_statements_history e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
-        WHERE e.TIMER_END > :last_ts
+        WHERE e.EVENT_ID > :last_id
             AND e.SQL_TEXT IS NOT NULL
             AND e.SQL_TEXT NOT LIKE '%performance_schema%'
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
-        ORDER BY e.TIMER_END ASC
+        ORDER BY e.EVENT_ID ASC
         LIMIT 5000
     """)
 
-    # Query kiểm tra Max Timer (để phát hiện DB Restart)
-    check_max_timer_sql = text(f"SELECT MAX(TIMER_END) FROM {TABLE_NAME}")
+    # Query kiểm tra Restart
+    check_max_id_sql = text(f"SELECT MAX(EVENT_ID) FROM {TABLE_NAME}")
     
-    # Query lấy Uptime (để tính timestamp thực)
+    # Query Uptime để tính Timestamp chính xác
     uptime_sql = text("SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='UPTIME'")
-
-    logging.info(f"Publisher bắt đầu. Last Timer End: {last_timestamp}")
-
+    
     while is_running:
-        batch_start = time.time()
         new_records = []
         
         try:
             with db_engine.connect() as conn:
-                # 1. Lấy MAX Timer hiện tại.
-                # Nếu bảng trống (NULL), ta coi như Timer = 0
-                current_max_timer = conn.execute(check_max_timer_sql).scalar()
-                if current_max_timer is None:
-                    current_max_timer = 0
-                else:
-                    current_max_timer = int(current_max_timer)
-                
-                # 2. Logic phát hiện DB Restart hoặc Bảng trống
-                # Nếu DB đang là 0 (trống) mà file state đang lưu số to -> Reset state về 0
-                if current_max_timer < last_timestamp:
-                    if current_max_timer == 0:
-                        logging.info("Bảng history_long đang trống. Chờ dữ liệu mới...")
-                    if current_max_timer > 0:
-                        logging.warning(f"⚠️ DB Restart Detected (DB: {current_max_timer} < Saved: {last_timestamp}). Resetting state.")
-                    
-                    last_timestamp = 0
-                    write_last_known_timestamp(0)
-                    time.sleep(poll_interval_sec)
-                    continue
-                
-                # Nếu không có dữ liệu mới (DB Timer == Last Saved Timer), nghỉ ngơi
-                if current_max_timer == last_timestamp:
-                    time.sleep(poll_interval_sec)
-                    continue
-
-                # 3. Tính Boot Time (để convert Timer -> Real Time)
+                # --- Tính toán Thời gian thực ---
                 uptime_res = conn.execute(uptime_sql).scalar()
                 db_uptime_sec = float(uptime_res) if uptime_res else 0
                 boot_time = datetime.now(timezone.utc) - timedelta(seconds=db_uptime_sec)
 
-                # 4. Lấy Log
-                results = conn.execute(sql_query, {"last_ts": last_timestamp})
-                
-                # Biến tạm để tìm max timer TRONG BATCH NÀY
-                batch_max_timer = last_timestamp
+                # --- Lấy Log ---
+                results = conn.execute(sql_query, {"last_id": last_event_id})
 
                 for row in results:
                     row_dict = row._mapping
-                    
-                    # --- Xử lý Lỗi ---
-                    error_cnt = int(row_dict['ERRORS'] or 0)
-                    err_code = int(row_dict['MYSQL_ERRNO']) if row_dict['MYSQL_ERRNO'] else 0
-                    
-                    # Logic: Có lỗi nếu error_count > 0 HOẶC mã lỗi khác 0
-                    has_err = 1 if (error_cnt > 0 or err_code != 0) else 0
-                    
-                    # Cập nhật con trỏ batch
-                    t_end = row_dict['TIMER_END']
-                    current_row_timer = int(t_end) if t_end is not None else 0
-                    
-                    if current_row_timer > batch_max_timer:
-                        batch_max_timer = current_row_timer
+                    eid = int(row_dict['EVENT_ID'])
 
-                    # --- Xử lý Timestamp chính xác ---
-                    t_start = row_dict['TIMER_START']
-                    timer_start_pico = float(t_start) if t_start is not None else 0
-                    
-                    if timer_start_pico > 0:
-                        # Timer là pico-giây (10^-12), chia 10^12 ra giây
-                        real_time = boot_time + timedelta(seconds=timer_start_pico / 1e12)
+                    # Tính Timestamp chính xác
+                    # BootTime + TimerStart (pico -> sec)
+                    timer_start_ms = float(row_dict['TIMER_START'] or 0)
+                    if timer_start_ms > 0:
+                        real_time = boot_time + timedelta(seconds=timer_start_ms)
                         ts_iso = real_time.isoformat().replace("+00:00", "Z")
                     else:
                         ts_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-                    # --- Feature Extraction Logic (New) ---
+                    # --- Feature Extraction Logic ---
                     sql_text = str(row_dict['SQL_TEXT'] or '')
                     sql_upper = sql_text.upper()
                     host_str = str(row_dict['PROCESSLIST_HOST'] or '')
@@ -255,24 +204,29 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                     # Scan Efficiency: 1.0 is good, 0.0001 is bad (scan huge data for few rows)
                     scan_efficiency = rows_sent / (rows_examined + 1)
 
-                    # Flags
+                    # Risk Flags
                     db_name = str(row_dict['CURRENT_SCHEMA'] or 'unknown').lower()
                     is_system = 1 if db_name in ['mysql', 'information_schema', 'performance_schema', 'sys'] else 0
                     is_admin = 1 if any(k in sql_upper for k in ['GRANT ', 'REVOKE ', 'CREATE USER']) else 0
                     is_risky = 1 if any(k in sql_upper for k in ['DROP ', 'TRUNCATE ']) else 0
                     has_comment = 1 if ('--' in sql_text or '/*' in sql_text or '#' in sql_text) else 0
+                    
+                    # Errors
+                    err_no = int(row_dict['MYSQL_ERRNO'] or 0)
+                    err_cnt = int(row_dict['ERRORS'] or 0)
+                    has_error = 1 if (err_cnt > 0 or err_no != 0) else 0
 
                     record = {
                         "timestamp": ts_iso,
+                        "event_id": eid,
+                        "event_name": str(row_dict['EVENT_NAME']),   
                         "user": str(row_dict['PROCESSLIST_USER'] or 'unknown'),
                         "client_ip": client_ip,
                         "client_port": client_port,
                         "database": db_name,
                         "query": sql_text,
                         "normalized_query": str(row_dict['DIGEST_TEXT'] or ''),
-                        "query_digest": str(row_dict['DIGEST'] or ''),
-                        "event_id": int(row_dict['EVENT_ID']),         
-                        "event_name": str(row_dict['EVENT_NAME']),     
+                        "query_digest": str(row_dict['DIGEST'] or ''),    
                         "query_length": len(sql_text),                 
                         "query_entropy": float(f"{entropy:.4f}"),
                         "is_system_table": is_system, 
@@ -286,12 +240,14 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "rows_examined": rows_examined,
                         "rows_affected": int(row_dict['ROWS_AFFECTED'] or 0),
                         
-                        "error_code": int(row_dict['MYSQL_ERRNO']) if row_dict['MYSQL_ERRNO'] else None,
+                        # Errors
+                        "error_code": err_no if err_no != 0 else None,
                         "error_message": str(row_dict['MESSAGE_TEXT']) if row_dict['MESSAGE_TEXT'] else None,
-                        "error_count": error_cnt,  # Đã có, đảm bảo int
-                        "has_error": has_err,
+                        "error_count": err_cnt,  # Đã có, đảm bảo int
+                        "has_error": has_error,
                         "warning_count": int(row_dict['WARNINGS'] or 0),
                         
+                        # Optimizer Metrics
                         "created_tmp_disk_tables": int(row_dict['CREATED_TMP_DISK_TABLES'] or 0),
                         "created_tmp_tables": int(row_dict['CREATED_TMP_TABLES'] or 0),
                         "select_full_join": int(row_dict['SELECT_FULL_JOIN'] or 0),
@@ -304,47 +260,27 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "thread_os_id": int(row_dict['THREAD_OS_ID'] or 0),
                         "source_dbms": "MySQL"
                     }
+
                     new_records.append(record)
+                    last_event_id = int(row_dict['EVENT_ID'])
 
-                # 5. Gửi Redis & Lưu Parquet
-                if new_records:
-                    pipe = redis_client.pipeline()
-                    for rec in new_records:
-                        pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, ensure_ascii=False)})
-                    pipe.execute()
+            # Publish if any
+            if new_records:
+                pipe = redis_client.pipeline()
+                for rec in new_records:
+                    pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, ensure_ascii=False)})
+                pipe.execute()
 
-                    save_logs_to_parquet(new_records, source_dbms="MySQL")
-                    
-                    # Thành công mới cập nhật State
-                    last_timestamp = batch_max_timer
-                    write_last_known_timestamp(last_timestamp)
-                    
-                    logging.info(f"Published {len(new_records)} logs. Query time: {round(time.time() - batch_start, 3)}s")
-                
-                else:
-                    # Trường hợp đặc biệt: Có query mới (current_max_timer > last)
-                    # NHƯNG bị filter lọc hết (ví dụ query của uba_user)
-                    # -> Ta vẫn phải cập nhật con trỏ để không bị kẹt mãi ở mốc cũ
-                    if current_max_timer > last_timestamp:
-                        logging.debug(f"Skipping filtered logs (Timer: {last_timestamp} -> {current_max_timer})")
-                        last_timestamp = current_max_timer
-                        write_last_known_timestamp(last_timestamp)
+                save_logs_to_parquet(new_records, source_dbms="MySQL")
+                write_last_known_event_id(last_event_id)
+                logging.info(f"Published {len(new_records)} new statements (up to EVENT_ID {last_event_id})")
 
         except Exception as e:
-            if is_running:
-                logging.error(f"Error in publisher loop: {e}")
-                time.sleep(5)
-                try:
-                    db_engine = connect_db(MYSQL_LOG_DATABASE_URL)
-                    redis_client = connect_redis()
-                except: pass
+            logging.error(f"Error in publisher loop: {e}", exc_info=True)
+            db_engine = connect_db(MYSQL_LOG_DATABASE_URL)
+            redis_client = connect_redis()
 
-        # Sleep
-        for _ in range(int(poll_interval_sec * 2)):
-            if not is_running: break
-            time.sleep(0.5)
-
-    logging.info("Publisher đã dừng hoàn toàn.")
+        time.sleep(poll_interval_sec)
 
 if __name__ == "__main__":
     monitor_performance_schema()
