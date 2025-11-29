@@ -432,6 +432,7 @@ def update_config_file(new_configs: dict):
 # Cấu hình một logger riêng cho audit
 audit_logger = logging.getLogger('ActiveResponseAudit')
 audit_logger.setLevel(logging.INFO)
+audit_logger.propagate = False
 
 # Chỉ thêm handler nếu nó chưa có để tránh log lặp lại
 if not audit_logger.hasHandlers():
@@ -441,7 +442,7 @@ if not audit_logger.hasHandlers():
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
         audit_logger.addHandler(file_handler)
     except Exception as e:
-        print(f"LỖI NGHIÊM TRỌNG: Không thể tạo file audit log tại {ACTIVE_RESPONSE_AUDIT_LOG_PATH}: {e}")
+        print(f"LỖI: Không thể tạo file audit log tại {ACTIVE_RESPONSE_AUDIT_LOG_PATH}: {e}")
 
 def log_active_response_action(action: str, target: str, reason: str):
     """
@@ -455,6 +456,8 @@ def log_active_response_action(action: str, target: str, reason: str):
     try:
         message = f"ACTION: {action} | TARGET: {target} | REASON: {reason}"
         audit_logger.info(message)
+        for handler in audit_logger.handlers:
+            handler.flush()
     except Exception as e:
         print(f"[Active Response] Lỗi khi ghi audit log: {e}")
 
