@@ -1,34 +1,51 @@
-# simulation\step2_create_scenario.py
-import json, csv, random
+# simulation/step2_create_scenario.py
+import json, csv, random, uuid, sys
 from datetime import datetime, timedelta
 from faker import Faker
 
 fake = Faker()
 
 # CẤU HÌNH
-OUTPUT_FILE = "simulation/scenario_script_30d.csv"
+OUTPUT_FILE = "simulation/scenario_script_10day.csv"
 QUERY_LIB = "simulation/query_library.json"
-DB_STATE_FILE = "simulation/db_state.json" 
-DAYS = 30
-TOTAL_EVENTS = 100000 # Tăng lên để mô hình học tốt hơn
+DB_STATE_FILE = "simulation/db_state.json"
+USERS_CONFIG_FILE = "simulation/users_config.json" 
+DAYS = 10
+TOTAL_EVENTS = 20000 
 
-# Load dữ liệu thật
 try:
     with open(DB_STATE_FILE, 'r') as f: VALID_DATA = json.load(f)
-except:
-    print("⚠️ Cảnh báo: Không có db_state.json. Dùng dữ liệu giả.")
-    VALID_DATA = {}
+except: VALID_DATA = {}
 
-# DANH SÁCH USER (Phân loại rõ ràng)
-USERS = {
-    "SALES": [f"sale_user_{i}" for i in range(20)],
-    "HR":    [f"hr_user_{i}" for i in range(5)],
-    "DEV":   [f"dev_user_{i}" for i in range(10)],
-    "ADMIN": ["admin_user"], # User đặc quyền
-    "BAD_ACTOR": ["dave_insider", "unknown_ip", "script_kiddie", "apt_group_x"] # Kẻ xấu lộ mặt
-}
+# --- LOAD USER TỪ CONFIG ---
+USERS = {}
+try:
+    with open(USERS_CONFIG_FILE, 'r') as f:
+        USERS = json.load(f)
+        # Thêm Hacker bên ngoài (Không có trong DB, nhưng có trong kịch bản)
+        USERS["EXTERNAL_HACKER"] = ["unknown_ip", "script_kiddie", "apt_group_x"]
+        # Gộp danh sách kẻ xấu để dùng chung
+        USERS["ALL_BAD_ACTORS"] = USERS.get("BAD_ACTOR", []) + USERS["EXTERNAL_HACKER"]
+        print(f"✅ Đã load User từ file config: {len(USERS['SALES'])} Sales, {len(USERS['HR'])} HR...")
+except Exception as e:
+    print(f"❌ Lỗi: Không tìm thấy {USERS_CONFIG_FILE}. Hãy chạy Setup trước!")
+    sys.exit(1)
 
-# KHO VŨ KHÍ TẤN CÔNG (ATTACK ARSENAL)
+# IP Generator
+def generate_fake_ip(user):
+    if user in USERS["EXTERNAL_HACKER"]:
+        return f"10.0.{random.randint(1,254)}.{random.randint(1,254)}"
+    # Dave Insider dùng IP nội bộ nhưng khác dải
+    if user == "dave_insider":
+        return f"192.168.100.{random.randint(1,254)}"
+    return f"192.168.1.{hash(user) % 250 + 1}"
+
+# Port Generator
+def generate_fake_port(behavior):
+    if behavior == "SCANNING": return random.randint(10000, 65000)
+    return random.randint(10000, 60000)
+
+# KHO VŨ KHÍ
 ATTACK_PAYLOADS = {
     "SQLI_CLASSIC": [
         "' OR '1'='1", 
@@ -77,7 +94,6 @@ def safe_replace(query, placeholder, value, is_string=False):
     if placeholder not in query: return query
     val_str = str(value)
     if is_string:
-        # Kiểm tra xem đã có dấu nháy chưa để tránh double quotes
         if f"'{placeholder}'" in query: return query.replace(f"'{placeholder}'", f"'{val_str}'")
         elif f'"{placeholder}"' in query: return query.replace(f'"{placeholder}"', f"'{val_str}'")
         else: return query.replace(placeholder, f"'{val_str}'")
@@ -174,7 +190,7 @@ def fill_placeholders(q):
         else: val = random.choice(cust_ids)
         q = safe_replace(q, "{id}", val)
 
-    # Các ID phụ (Random vì không track trong db_state, nhưng không sao)
+    # Các ID phụ
     if "{order_id}" in q: q = safe_replace(q, "{order_id}", random.randint(1, 20000))
     if "{review_id}" in q: q = safe_replace(q, "{review_id}", random.randint(1, 5000))
     if "{item_id}" in q: q = safe_replace(q, "{item_id}", random.randint(1, 50000))
@@ -243,6 +259,7 @@ def generate_complex_scenario():
         else: step = random.randint(300, 900) # Đêm/Cuối tuần
         
         current_time += timedelta(seconds=step)
+        timestamp_str = current_time.isoformat() + "Z"
         
         # --- 2. XÁC ĐỊNH LOẠI HÀNH VI (Bình thường vs Tấn công) ---
         # Mặc định là bình thường
@@ -383,21 +400,31 @@ def generate_complex_scenario():
             query = fill_placeholders(raw_query)
             is_anomaly = 1
 
-        # Ghi dữ liệu
+        # --- 4. TẠO TAG ---
+        sim_ip = generate_fake_ip(user)
+        sim_port = generate_fake_port(behavior)
+        sim_id = uuid.uuid4().hex[:8]
+        
+        # Tag đầy đủ: User, IP, Port, ID, Behavior, Anomaly, Timestamp
+        tag = f"/* SIM_META:{user}|{sim_ip}|{sim_port}|ID:{sim_id}|BEH:{behavior}|ANO:{is_anomaly}|TS:{timestamp_str} */"
+        
+        # Gắn tag vào query luôn
+        final_query_with_tag = f"{tag} {query}"
+
+        # --- 5. Ghi ra CSV ---
         scenario_data.append({
-            "timestamp": current_time.isoformat() + "Z",
+            "timestamp": timestamp_str,
             "user": user,
             "database": db_target,
-            "query": query,
+            "query": final_query_with_tag, # Query đã có tag
             "is_anomaly": is_anomaly,
-            "behavior_type": behavior # Thêm cột này để dễ debug/label
+            "behavior_type": behavior
         })
         count += 1
         
-    # Lưu file
     keys = list(scenario_data[0].keys())
     with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
+        writer = csv.DictWriter(f, fieldnames=keys, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         writer.writerows(scenario_data)
     print(f"✅ Kịch bản hoàn tất: {OUTPUT_FILE}")
