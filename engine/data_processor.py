@@ -113,7 +113,7 @@ class ProductionUBAEngine:
                 self.model = data['model']
                 self.features = data['features']
                 if os.path.exists(CAT_MAP_PATH):
-                	self.cat_mapping = joblib.load(CAT_MAP_PATH)
+                    self.cat_mapping = joblib.load(CAT_MAP_PATH)
                 self.model_version = data.get('version', 'v0')
                 self.last_trained = data.get('trained_at', 'unknown')
                 logger.info(f"Loaded PRODUCTION model v{self.model_version} (trained: {self.last_trained})")
