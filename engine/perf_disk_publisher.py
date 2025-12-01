@@ -76,11 +76,16 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
     sql = text("""
         SELECT * FROM uba_db.uba_persistent_log 
         WHERE id > :lid 
-          AND processlist_user NOT IN ('event_scheduler', 'uba_user', 'boot')
-          AND (current_schema IS NULL OR current_schema != 'uba_db')
+          AND (PROCESSLIST_USER IS NULL OR PROCESSLIST_USER NOT IN ('event_scheduler', 'uba_user', 'boot'))
+          AND (CURRENT_SCHEMA IS NULL OR CURRENT_SCHEMA != 'uba_db')
           AND sql_text NOT LIKE '%uba_persistent_log%'
+          AND SQL_TEXT NOT LIKE '%performance_schema%'
+          AND SQL_TEXT NOT LIKE '%uba_db%'
+          AND SQL_TEXT != 'rollback'
+          AND SQL_TEXT != 'FLUSH PRIVILEGES'
+          AND SQL_TEXT IS NOT NULL
         ORDER BY id ASC 
-        LIMIT 5000
+        LIMIT 5000;
     """)
 
     while is_running:

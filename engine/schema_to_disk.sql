@@ -6,7 +6,7 @@ CREATE DATABASE IF NOT EXISTS uba_db CHARACTER SET utf8mb4 COLLATE utf8mb4_gener
 
 -- Cấp quyền đọc bảng log cho uba_user
 GRANT SELECT ON uba_db.* TO 'uba_user'@'localhost';
-GRANT SELECT ON uba_db.* TO 'uba_user'@'%';
+-- GRANT SELECT ON uba_db.* TO 'uba_user'@'%';
 
 -- Áp dụng quyền ngay lập tức
 FLUSH PRIVILEGES;
@@ -238,8 +238,13 @@ BEGIN
     FROM performance_schema.events_statements_history_long e
     LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
     WHERE e.SQL_TEXT IS NOT NULL
-      AND e.SQL_TEXT NOT LIKE '%performance_schema%'
-      AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
+            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+            AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
+            AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
+            AND e.SQL_TEXT != 'rollback'
+            AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
+            AND e.SQL_TEXT != '%version_comment%'
+            AND e.SQL_TEXT != '%auto_commit%'
       -- Lọc chồng lấn 10s để đảm bảo không sót
       AND DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND) > (v_max_ts - INTERVAL 10 SECOND);
 
