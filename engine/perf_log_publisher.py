@@ -104,7 +104,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
     last_event_id = read_last_known_event_id()
     
     # Sử dụng bảng LONG để không bị mất dữ liệu của các thread đã đóng
-    TABLE_NAME = "performance_schema.events_statements_history"
+    TABLE_NAME = "performance_schema.events_statements_history_long"
 
     logging.info(f"🚀 Publisher bắt đầu. Starting EVENT_ID > {last_event_id}")
 
@@ -139,12 +139,17 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             COALESCE(t.PROCESSLIST_HOST, 'unknown') AS PROCESSLIST_HOST,
             t.CONNECTION_TYPE,          
             t.THREAD_OS_ID
-        FROM performance_schema.events_statements_history e
+        FROM performance_schema.events_statements_history_long e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.EVENT_ID > :last_id
             AND e.SQL_TEXT IS NOT NULL
             AND e.SQL_TEXT NOT LIKE '%performance_schema%'
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
+            AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
+            AND e.SQL_TEXT != 'rollback'
+            AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
+            AND e.SQL_TEXT != '%version_comment%'
+            AND e.SQL_TEXT != '%auto_commit%'
         ORDER BY e.EVENT_ID ASC
         LIMIT 5000
     """)
