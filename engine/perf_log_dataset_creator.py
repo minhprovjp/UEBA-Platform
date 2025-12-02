@@ -226,7 +226,7 @@ def process_logs():
             AND e.SQL_TEXT != '%version_comment%'
             AND e.SQL_TEXT != '%auto_commit%'
         ORDER BY e.TIMER_END ASC 
-        LIMIT 5000;
+        LIMIT 5000
     """)
     
     check_pending_sql = text("SELECT COUNT(*) FROM performance_schema.events_statements_history_long WHERE TIMER_END > :last_ts")
