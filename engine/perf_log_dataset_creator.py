@@ -47,6 +47,30 @@ def sort_final_csv():
     except Exception as e:
         print(f"❌ Error sorting CSV: {e}")
 
+def spoof_error_message(error_msg, fake_ip):
+    """
+    Thay thế 'user'@'localhost' thành 'user'@'fake_ip' trong thông báo lỗi.
+    Input: Access denied for user 'dev_user_0'@'localhost' ...
+    Output: Access denied for user 'dev_user_0'@'192.168.1.149' ...
+    """
+    if not error_msg: return ""
+    
+    # Regex tìm pattern: 'username'@'hostname'
+    pattern = r"'([^']+)'@'([^']+)'"
+    match = re.search(pattern, error_msg)
+    
+    if match:
+        username = match.group(1)
+        hostname = match.group(2) # Thường là localhost hoặc ip thật
+        
+        if hostname != fake_ip:
+            # Thay thế localhost bằng IP fake
+            old_str = f"'{username}'@'{hostname}'"
+            new_str = f"'{username}'@'{fake_ip}'"
+            return error_msg.replace(old_str, new_str)
+            
+    return error_msg
+
 def handle_shutdown(signum, frame):
     global is_running
     is_running = False
@@ -132,29 +156,29 @@ def process_logs():
     csv_headers = [
         "timestamp", "event_id", "event_name", 
         "user", "client_ip", "client_port", "database", 
-        "query", "query_digest", "normalized_query",
-        "query_length", "entropy", 
+        "query", "normalized_query", "query_digest",
+        "query_length", "query_entropy", 
         
         # Nhóm Cờ (Flags)
-        "is_system_table", "is_admin_command", "is_risky_command", "has_comment",
+        "is_system_table", "scan_efficiency", "is_admin_command", "is_risky_command", "has_comment",
         
         # Nhóm Thời gian & Hiệu năng
         "execution_time_ms", "lock_time_ms", 
-        "rows_returned", "rows_examined", "rows_affected", "scan_efficiency",
+        "rows_returned", "rows_examined", "rows_affected",
+        
+        # Nhóm Lỗi
+        "error_code", "error_message", "error_count", "has_error", "warning_count",
         
         # Nhóm Optimizer (Rất quan trọng để phát hiện bất thường)
         "created_tmp_disk_tables", "created_tmp_tables", 
         "select_full_join", "select_scan", "sort_merge_passes",
         "no_index_used", "no_good_index_used",
         
-        # Nhóm Lỗi
-        "error_code", "error_message", "error_count", "has_error", "warning_count",
-        
         # Nhóm Định danh hệ thống
         "connection_type", "thread_os_id",
         
         # NHÃN (LABELS) - QUAN TRỌNG NHẤT
-        "behavior_type", "is_anomaly", "source_dbms"
+        "source_dbms", "behavior_type", "is_anomaly"
     ]
     
     # Khởi tạo/Kiểm tra file CSV
@@ -193,9 +217,9 @@ def process_logs():
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_END > :last_ts 
             AND e.SQL_TEXT IS NOT NULL
-            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+            AND e.SQL_TEXT NOT LIKE '%performance_schema%'e
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
-            AND e.SQL_TEXT LIKE '%SIM_META%' 
+            -- AND e.SQL_TEXT LIKE '%SIM_META%'  
         ORDER BY e.TIMER_END ASC 
         LIMIT 5000
     """)
@@ -253,6 +277,14 @@ def process_logs():
                     is_risky = 1 if any(k in sql_up for k in ['DROP ', 'TRUNCATE ']) else 0
                     has_comment = 1 if ('--' in clean_sql or '/*' in clean_sql or '#' in clean_sql) else 0
                     is_system = 1 if r_map['CURRENT_SCHEMA'] in ['mysql','information_schema','performance_schema','sys'] else 0
+                    
+                    # Lấy message gốc từ MySQL
+                    raw_error_msg = str(r_map['MESSAGE_TEXT'] or "")
+                    
+                    # Nếu có IP fake (từ tag), thì sửa lại message cho khớp
+                    final_error_msg = raw_error_msg
+                    if meta["sim_ip"] and raw_error_msg:
+                        final_error_msg = spoof_error_message(raw_error_msg, meta["sim_ip"])
 
                     # 3. Tạo Record
                     rec = {
@@ -264,23 +296,26 @@ def process_logs():
                         "client_port": meta["sim_port"],
                         "database": str(r_map['CURRENT_SCHEMA'] or 'unknown').lower(),
                         "query": clean_sql,
-                        "query_digest": str(r_map['DIGEST'] or ''),
                         "normalized_query": str(r_map['DIGEST_TEXT'] or ''),
-                        
+                        "query_digest": str(r_map['DIGEST'] or ''),                        
                         "query_length": len(clean_sql),
-                        "entropy": float(f"{entropy:.4f}"),
-                        
+                        "query_entropy": float(f"{entropy:.4f}"),
                         "is_system_table": is_system,
+                        "scan_efficiency": float(f"{scan_efficiency:.6f}"),
                         "is_admin_command": is_admin,
                         "is_risky_command": is_risky,
                         "has_comment": has_comment,
-                        
                         "execution_time_ms": float(r_map['execution_time_ms'] or 0),
                         "lock_time_ms": float(r_map['lock_time_ms'] or 0),
                         "rows_returned": rows_sent,
                         "rows_examined": rows_exam,
                         "rows_affected": int(r_map['ROWS_AFFECTED'] or 0),
-                        "scan_efficiency": float(f"{scan_efficiency:.6f}"),
+                        
+                        "error_code": int(r_map['MYSQL_ERRNO'] or 0),
+                        "error_message": final_error_msg,
+                        "error_count": int(r_map['ERRORS'] or 0),
+                        "has_error": 1 if int(r_map['ERRORS'] or 0) > 0 or int(r_map['MYSQL_ERRNO'] or 0) > 0 else 0,
+                        "warning_count": int(r_map['WARNINGS'] or 0),
                         
                         "created_tmp_disk_tables": int(r_map['CREATED_TMP_DISK_TABLES'] or 0),
                         "created_tmp_tables": int(r_map['CREATED_TMP_TABLES'] or 0),
@@ -292,16 +327,9 @@ def process_logs():
                         
                         "connection_type": str(r_map['CONNECTION_TYPE'] or 'unknown'),
                         "thread_os_id": int(r_map['THREAD_OS_ID'] or 0),
-                        
-                        "error_code": int(r_map['MYSQL_ERRNO'] or 0),
-                        "error_message": str(r_map['MESSAGE_TEXT'] or ""),
-                        "error_count": int(r_map['ERRORS'] or 0),
-                        "has_error": 1 if int(r_map['ERRORS'] or 0) > 0 or int(r_map['MYSQL_ERRNO'] or 0) > 0 else 0,
-                        "warning_count": int(r_map['WARNINGS'] or 0),
-                        
+                        "source_dbms": "MySQL",
                         "behavior_type": meta["beh_type"],
-                        "is_anomaly": meta["is_anomaly"],
-                        "source_dbms": "MySQL"
+                        "is_anomaly": meta["is_anomaly"]
                     }
                     records.append(rec)
 

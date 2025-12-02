@@ -4,7 +4,7 @@ import csv, threading, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CẤU HÌNH ---
-SCENARIO_FILE = "simulation/scenario_script_10.csv"
+SCENARIO_FILE = "simulation/scenario_script_10day.csv"
 SIM_USER_PASSWORD = "password" 
 NUM_THREADS = 20
 BATCH_SIZE = 50       

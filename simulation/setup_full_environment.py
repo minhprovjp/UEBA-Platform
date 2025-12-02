@@ -244,73 +244,123 @@ def populate_data_and_export():
     print("💾 Đã xuất file 'simulation/db_state.json'.")
 
 # --- HÀM TẠO USER & XUẤT CONFIG (QUAN TRỌNG) ---
-def setup_users():
-    print("\n👤 3. TẠO USER VÀ XUẤT CONFIG...")
+def setup_users_and_permissions():
+    print("\n👤 3. PHÂN QUYỀN & XUẤT FILE CONFIG...")
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Clean old users
+    cur.execute("SELECT User, Host FROM mysql.user WHERE User LIKE '%_user%' OR User IN ('dave_insider', 'intern_temp')")
+    for u, h in cur.fetchall(): cur.execute(f"DROP USER '{u}'@'{h}'")
+    
+    # Định nghĩa quyền chi tiết (Để xuất ra JSON cho Step 2 đọc)
+    # Cấu trúc: Role -> { DB: [Actions] }
+    ROLE_PERMISSIONS = {
+        "SALES": {
+            "sales_db": ["SELECT", "INSERT", "UPDATE"],
+            "hr_db": [] # Không có quyền
+        },
+        "HR": {
+            "sales_db": ["SELECT"], # Cho xem đơn hàng
+            "hr_db": ["SELECT", "INSERT", "UPDATE"]
+        },
+        "DEV": {
+            "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"],
+            "hr_db": ["SELECT", "INSERT", "UPDATE"], # Dev không được xóa HR
+            "mysql": ["SELECT"] # Cho phép xem log hệ thống (fix lỗi slow_log)
+        },
+        "BAD_ACTOR": { "sales_db": ["SELECT"] }, # Dave
+        "VULNERABLE": {} # Intern không có quyền gì
+    }
+
+    # Tạo User thực tế
+    user_map = {} # Để lưu vào JSON: user -> role
+    
+    # 1. Sales (20 user)
+    for i in range(6):
+        u = f"sale_user_{i}"
+        user_map[u] = "SALES"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 2. HR (5 user)
+    for i in range(2):
+        u = f"hr_user_{i}"
+        user_map[u] = "HR"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON hr_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 3. Dev (10 user)
+    for i in range(3):
+        u = f"dev_user_{i}"
+        user_map[u] = "DEV"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE, DROP, ALTER ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON hr_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT ON mysql.* TO '{u}'@'%'") # Cho phép xem mysql.slow_log
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 4. Dave Insider
+    u = "dave_insider"
+    user_map[u] = "BAD_ACTOR"
+    cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+    cur.execute(f"GRANT SELECT ON sales_db.* TO '{u}'@'%'")
+    
+    # 5. Intern (Vulnerable)
+    u = "intern_temp"
+    user_map[u] = "VULNERABLE"
+    cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+    cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'") # Chỉ login được
+
+    cur.execute("FLUSH PRIVILEGES")
+    conn.close()
+
+    # Xuất file JSON để Step 2 dùng
+    config_data = {
+        "roles": ROLE_PERMISSIONS,
+        "users": user_map
+    }
+    
+    os.makedirs("simulation", exist_ok=True)
+    with open(USERS_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, indent=2)
+    print(f"✅ Đã lưu file phân quyền chuẩn: {USERS_CONFIG_FILE}")
+
+def setup_system_config():
+    print("\n⚙️ 4. CẤU HÌNH PERFORMANCE SCHEMA & GIÁM SÁT...")
     conn = get_conn()
     cursor = conn.cursor()
     
-    cursor.execute("SELECT User, Host FROM mysql.user WHERE User LIKE '%_user%' OR User IN ('dave_insider', 'intern_temp')")
-    for u, h in cursor.fetchall(): cursor.execute(f"DROP USER '{u}'@'{h}'")
-    
-    # Cấu trúc lưu file config
-    exported_users = {
-        "SALES": [],
-        "HR": [],
-        "DEV": [],
-        "BAD_ACTOR": [],
-        "VULNERABLE": []
-    }
-
-    # Định nghĩa số lượng và quyền
-    user_definitions = [
-        ("sale_user", "SALES", 6, [
-        	("sales_db", ["SELECT", "INSERT", "UPDATE"]),
-        	# KHÔNG CÓ QUYỀN HR_DB -> Để test lỗi Access Denied
-        ]),
-        ("hr_user", "HR", 2, [
-        	("hr_db", ["SELECT", "INSERT", "UPDATE"])
-        ]),
-        ("dev_user", "DEV", 3, [
-        	("sales_db", ["SELECT", "INSERT", "UPDATE", "DELETE"]), ("hr_db", ["SELECT", "INSERT", "UPDATE", "DELETE"])
-        ]),
-        # Dave Insider: Giả vờ là user thường, quyền rất thấp
-        ("dave_insider", "BAD_ACTOR", 1, [
-        	("sales_db", ["SELECT"])
-        ]),
-        # User 'intern_temp': Mật khẩu yếu, bị hacker chiếm dụng để login.
-        # Quyền hạn: Rỗng (Chỉ login được, chạy lệnh gì cũng lỗi)
-        ("intern_temp", "VULNERABLE", 1, [])
-    ]
-
-    for prefix, category, count, perms in user_definitions:
-        for i in range(count):
-            if count == 1: username = prefix
-            else: username = f"{prefix}_{i}"
-            
-            # Lưu vào danh sách
-            if category in exported_users:
-                exported_users[category].append(username)
-
-            try:
-                cursor.execute(f"CREATE USER '{username}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
-            except: pass
-
-            for db, rights in perms:
-                privs = ", ".join(rights)
-                cursor.execute(f"GRANT {privs} ON {db}.* TO '{username}'@'%'")
-            
-            cursor.execute(f"GRANT USAGE ON *.* TO '{username}'@'%'")
-
-    cursor.execute("FLUSH PRIVILEGES")
-    conn.close()
-  	
-    with open(USERS_CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(exported_users, f, indent=2)
-    
-    print(f"✅ Đã lưu danh sách user vào: {USERS_CONFIG_FILE}")
+    try:
+        # 1. Bật Performance Schema (Consumer & Instrument)
+        print("   -> Enabling Performance Schema consumers/instruments...")
+        cursor.execute("UPDATE performance_schema.setup_consumers SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long'")
+        cursor.execute("UPDATE performance_schema.setup_instruments SET ENABLED = 'YES', TIMED = 'YES' WHERE NAME LIKE 'statement/%'")
+        
+        # 2. Cấu hình User giám sát (uba_user)
+        print("   -> Configuring 'uba_user'...")
+        # Xóa cũ
+        cursor.execute("DROP USER IF EXISTS 'uba_user'@'localhost'")
+        # Tạo mới (Native Password để tương thích tốt nhất)
+        cursor.execute("CREATE USER 'uba_user'@'localhost' IDENTIFIED WITH mysql_native_password BY 'password'")
+        # Cấp quyền đọc toàn bộ (bao gồm Performance Schema)
+        cursor.execute("GRANT SELECT ON *.* TO 'uba_user'@'localhost'")
+        # Áp dụng
+        cursor.execute("FLUSH PRIVILEGES")
+        
+        print("✅ Cấu hình hệ thống hoàn tất (Log đã bật, uba_user đã sẵn sàng).")
+        
+    except Exception as e:
+        print(f"⚠️ Lỗi cấu hình hệ thống: {e}")
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     setup_database_structure()
     populate_data_and_export()
-    setup_users()
+    setup_users_and_permissions()
+    setup_system_config()
     print("\n🎉 MÔI TRƯỜNG FINAL ĐÃ SẴN SÀNG!")
