@@ -3,22 +3,46 @@ import os, json, time, threading, logging, re, sys
 import pandas as pd
 from datetime import datetime, timezone
 from redis import Redis
-from sqlalchemy.engine.url import make_url 
+from sqlalchemy.engine.url import make_url
 from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet 
+    from engine.utils import save_logs_to_parquet
 
+    # try:
+    #     # Đọc URL của publisher kia để biết nó dùng user nào
+    #     db_url = make_url(MYSQL_LOG_DATABASE_URL)
+    #     FILTER_USER = db_url.username
+    #     logging.info(f"[MySQLPublisher] Sẽ lọc (ignore) tất cả hành vi của user: '{FILTER_USER}'")
+    # except Exception as e:
+    #     logging.error(f"[MySQLPublisher] Không thể parse MYSQL_LOG_DATABASE_URL để tìm user. Sẽ không lọc. Lỗi: {e}")
+    #     FILTER_USER = None
+
+    # === LOGIC LỌC USER MỚI (HỖ TRỢ NHIỀU USER) ===
+    EXCLUDED_USERS = set()
+
+    # 1. Lấy user từ URL kết nối Log (Log Reader)
     try:
-        # Đọc URL của publisher kia để biết nó dùng user nào
         db_url = make_url(MYSQL_LOG_DATABASE_URL)
-        FILTER_USER = db_url.username
-        logging.info(f"[MySQLPublisher] Sẽ lọc (ignore) tất cả hành vi của user: '{FILTER_USER}'")
+        if db_url.username:
+            EXCLUDED_USERS.add(db_url.username)
+            # logging.info(f"[MySQLPublisher] Auto-exclude Log Reader User: '{db_url.username}'")
     except Exception as e:
-        logging.error(f"[MySQLPublisher] Không thể parse MYSQL_LOG_DATABASE_URL để tìm user. Sẽ không lọc. Lỗi: {e}")
-        FILTER_USER = None
+        logging.error(f"[MySQLPublisher] Lỗi parse MYSQL_LOG_DATABASE_URL: {e}")
+
+    # 2. Lấy user từ cấu hình Active Response Admin (Admin User)
+    try:
+        # ACTIVE_RESPONSE_SETTINGS được import từ config
+        admin_user = ACTIVE_RESPONSE_SETTINGS.get("mysql_user")
+        if admin_user:
+            EXCLUDED_USERS.add(admin_user)
+            # logging.info(f"[MySQLPublisher] Auto-exclude Admin User: '{admin_user}'")
+    except Exception as e:
+        logging.error(f"[MySQLPublisher] Lỗi lấy Active Response Admin: {e}")
+
+    #logging.info(f"[MySQLPublisher] Danh sách user sẽ bị bỏ qua (Ignored Users): {EXCLUDED_USERS}")
 
 except ImportError:
     print("Lỗi: Không thể import 'config' hoặc 'engine.utils'.")
@@ -29,7 +53,8 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - [MySQLPublisher] - %(message)s"
 )
 
-STREAM_KEY = None # Sẽ được set khi chạy
+STREAM_KEY = None  # Sẽ được set khi chạy
+
 
 # --- HÀM KẾT NỐI REDIS TIN CẬY ---
 def connect_redis():
@@ -43,6 +68,7 @@ def connect_redis():
         except ConnectionError as e:
             logging.error(f"Kết nối Redis (Publisher) thất bại: {e}. Thử lại sau 5 giây...")
             time.sleep(5)
+
 
 # ==============================================================================
 # LOGIC TỪ MYSQL_LOG_PARSER.PY
@@ -58,6 +84,7 @@ mysql_init_db_regex = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z)\s+(?P<thread_id>\d+)\s+Init DB\s+(?P<db_name>\S+)"
 )
 
+
 def read_last_known_state(state_file_path=MYSQL_STATE_FILE_PATH):
     """Đọc state (vị trí byte, sessions) từ file JSON."""
     try:
@@ -67,6 +94,7 @@ def read_last_known_state(state_file_path=MYSQL_STATE_FILE_PATH):
     except (FileNotFoundError, json.JSONDecodeError):
         logging.warning(f"Không tìm thấy state file. Bắt đầu từ đầu.")
         return 0, {}
+
 
 def write_last_known_state(size, sessions, state_file_path=MYSQL_STATE_FILE_PATH):
     """Ghi state (vị trí byte, sessions) ra file JSON."""
@@ -78,7 +106,9 @@ def write_last_known_state(size, sessions, state_file_path=MYSQL_STATE_FILE_PATH
     except Exception as e:
         logging.error(f"Không thể ghi state file: {e}")
 
-def parse_and_append_log_data(new_lines, sessions, filter_user=None):
+
+# def parse_and_append_log_data(new_lines, sessions, filter_user=None):
+def parse_and_append_log_data(new_lines, sessions, excluded_users=None):
     """
     Hàm parse lõi. Nhận dòng log mới và dict sessions hiện tại,
     trả về DataFrame các query đã parse và dict sessions đã cập nhật.
@@ -121,9 +151,20 @@ def parse_and_append_log_data(new_lines, sessions, filter_user=None):
         if connect_match:
             data = connect_match.groupdict()
             connected_user = data['user']
-            if filter_user and connected_user == filter_user:
-                logging.debug(f"Bỏ qua session 'Connect' từ user bị lọc: {connected_user}")
-                continue # Bỏ qua, không thêm session này vào 'sessions'
+            # if filter_user and connected_user == filter_user:
+            #     logging.debug(f"Bỏ qua session 'Connect' từ user bị lọc: {connected_user}")
+            #     continue  # Bỏ qua, không thêm session này vào 'sessions'
+            # db_for_session = data.get('db') if data.get('db') else 'N/A'
+            # sessions[data['thread_id']] = {
+            #     'user': connected_user,
+            #     'host': data['host'],
+            #     'db': db_for_session
+            # }
+            # === CẬP NHẬT LOGIC LỌC TẠI ĐÂY ===
+            if excluded_users and connected_user in excluded_users:
+                #logging.debug(f"Bỏ qua session 'Connect' từ user bị lọc: {connected_user}")
+                continue  # Bỏ qua, không thêm session này vào 'sessions'
+
             db_for_session = data.get('db') if data.get('db') else 'N/A'
             sessions[data['thread_id']] = {
                 'user': connected_user,
@@ -146,10 +187,11 @@ def parse_and_append_log_data(new_lines, sessions, filter_user=None):
             # Đây là dòng tiếp theo của một query đa dòng
             if line:
                 # Giữ nguyên `raw` để giữ thụt đầu dòng
-                current_multiline_query_parts.append(raw) 
+                current_multiline_query_parts.append(raw)
 
-    process_complete_query() # Xử lý query cuối cùng (nếu có)
+    process_complete_query()  # Xử lý query cuối cùng (nếu có)
     return pd.DataFrame(parsed_data), sessions
+
 
 # ==============================================================================
 # LOGIC PUBLISHER
@@ -158,6 +200,7 @@ def parse_and_append_log_data(new_lines, sessions, filter_user=None):
 def _open_log(path: str):
     """Mở file log ở chế độ text, ignore lỗi mã hoá."""
     return open(path, "r", encoding="utf-8", errors="ignore")
+
 
 def _jsonify_record(rec: dict) -> str:
     """Đảm bảo timestamp JSON-serializable."""
@@ -168,14 +211,16 @@ def _jsonify_record(rec: dict) -> str:
         r["timestamp"] = ts.tz_convert("UTC").isoformat()
     return json.dumps(r, ensure_ascii=False)
 
+
 def monitor_log_file(
-    source_log_path: str,
-    redis_url: str,
-    stream_key: str,
-    state_file_path: str = MYSQL_STATE_FILE_PATH,
-    poll_interval_ms: int = 200,          # Tần suất "nhìn" file
-    stop_event: Optional[threading.Event] = None,
-    filter_user: Optional[str] = None
+        source_log_path: str,
+        redis_url: str,
+        stream_key: str,
+        state_file_path: str = MYSQL_STATE_FILE_PATH,
+        poll_interval_ms: int = 200,  # Tần suất "nhìn" file
+        stop_event: Optional[threading.Event] = None,
+        # filter_user: Optional[str] = None
+        excluded_users: Optional[set] = None # Đổi tham số
 ):
     """
     Theo dõi file log, parse và publish realtime vào Redis Streams.
@@ -190,14 +235,22 @@ def monitor_log_file(
     last_size, sessions = read_last_known_state(state_file_path)
     published_total = 0
     f = None
-    
-    if filter_user and sessions:
+
+    # if filter_user and sessions:
+    #     initial_count = len(sessions)
+    #     sessions = {tid: s for tid, s in sessions.items() if s.get('user') != filter_user}
+    #     filtered_count = initial_count - len(sessions)
+    #     if filtered_count > 0:
+    #         logging.info(f"Đã lọc {filtered_count} session đang hoạt động của user '{filter_user}' từ file state.")
+
+    # === CẬP NHẬT LOGIC LỌC SESSIONS CŨ ===
+    if excluded_users and sessions:
         initial_count = len(sessions)
-        sessions = {tid: s for tid, s in sessions.items() if s.get('user') != filter_user}
+        # Lọc bỏ các session cũ thuộc về user bị cấm
+        sessions = {tid: s for tid, s in sessions.items() if s.get('user') not in excluded_users}
         filtered_count = initial_count - len(sessions)
         if filtered_count > 0:
-            logging.info(f"Đã lọc {filtered_count} session đang hoạt động của user '{filter_user}' từ file state.")
-            
+            logging.info(f"Đã lọc {filtered_count} session cũ thuộc danh sách Excluded Users.")
     logging.info(f"Start monitoring {source_log_path} → {stream_key} (poll={poll_interval_ms}ms)")
     logging.info("Publisher đang chạy... Nhấn Ctrl+C để dừng.")
 
@@ -217,7 +270,7 @@ def monitor_log_file(
             except Exception:
                 f.seek(0)
                 last_size = 0
-                
+
         while True:
             if stop_event and stop_event.is_set():
                 logging.info("Stop signal received. Exiting monitor loop...")
@@ -238,21 +291,25 @@ def monitor_log_file(
                     current_size = os.path.getsize(source_log_path)
                 except FileNotFoundError:
                     logging.warning("Log file missing, waiting to reappear...")
-                    try: f.close()
-                    except Exception: pass
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
                     f = None
                     time.sleep(poll_interval_ms / 1000.0)
                     continue
-                
+
                 try:
                     current_pos = f.tell()
                 except Exception:
-                    current_pos = last_size # Fallback
+                    current_pos = last_size  # Fallback
 
                 if current_size < current_pos:
                     logging.warning("Detected rotation/truncate → reopen & reset sessions.")
-                    try: f.close()
-                    except Exception: pass
+                    try:
+                        f.close()
+                    except Exception:
+                        pass
                     f = _open_log(source_log_path)
                     f.seek(0)
                     last_size = 0
@@ -262,52 +319,56 @@ def monitor_log_file(
                 new_lines = f.readlines()
                 if new_lines:
                     try:
-                        last_size = f.tell() # Cập nhật last_size ngay sau khi đọc
+                        last_size = f.tell()  # Cập nhật last_size ngay sau khi đọc
                     except Exception:
-                        last_size = current_size # Fallback
+                        last_size = current_size  # Fallback
 
                     # Parse & publish
-                    df_new, sessions = parse_and_append_log_data(new_lines, sessions, filter_user)
+                    # df_new, sessions = parse_and_append_log_data(new_lines, sessions, filter_user)
+
+                    # === CẬP NHẬT GỌI HÀM PARSE ===
+                    df_new, sessions = parse_and_append_log_data(new_lines, sessions, excluded_users)
                     if not df_new.empty:
                         pipe = r.pipeline()
                         recs = df_new.to_dict(orient="records")
-                        
+
                         try:
                             # Đặt tên nguồn log rõ ràng để phân biệt
-                            save_logs_to_parquet(recs, source_dbms="MySQL_GQL_File") 
+                            save_logs_to_parquet(recs, source_dbms="MySQL_GQL_File")
                             logging.info(f"Đã lưu {len(recs)} bản ghi GQL File vào Staging.")
                         except Exception as e:
                             logging.error(f"Lỗi khi lưu file Parquet (Staging): {e}", exc_info=True)
-                            
+
                         for rec in recs:
                             # 1. Gửi đến Redis Stream (Luồng nóng)
                             pipe.xadd(stream_key, {"data": _jsonify_record(rec)})
                         pipe.execute()
                         published_total += len(recs)
-                    
+
                     # Ghi state sau mỗi đợt đọc thành công
                     write_last_known_state(last_size, sessions, state_file_path)
 
                 else:
                     # không có dòng mới
                     time.sleep(poll_interval_ms / 1000.0)
-            
+
             except ConnectionError as e:
                 logging.error(f"Mất kết nối Redis (Publisher): {e}. Đang kết nối lại...")
                 r = connect_redis()
-                
+
             except Exception as e:
                 logging.error(f"Lỗi không xác định trong publisher loop: {e}", exc_info=True)
                 time.sleep(5)
 
     except KeyboardInterrupt:
         logging.info("Đã nhận tín hiệu (Ctrl+C). Publisher đang dừng...")
-        
+
     finally:
         if f:
             f.close()
-        
+
         logging.info(f"Publisher đã dừng. Tổng số đã publish: {published_total}")
+
 
 def start_mysql_publisher_blocking():
     """Entry chạy đơn giản cho CLI."""
@@ -320,8 +381,10 @@ def start_mysql_publisher_blocking():
         state_file_path=MYSQL_STATE_FILE_PATH,
         poll_interval_ms=200,
         stop_event=None,
-        filter_user=FILTER_USER
+        # filter_user=FILTER_USER
+        excluded_users=EXCLUDED_USERS  # Truyền Set user
     )
+
 
 if __name__ == "__main__":
     start_mysql_publisher_blocking()
