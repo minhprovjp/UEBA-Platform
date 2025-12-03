@@ -10,6 +10,7 @@ Việc tập trung tất cả các giá trị này vào một nơi giúp dễ d�
 
 # Import các thư viện cần thiết
 from datetime import time as dt_time
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 
@@ -136,6 +137,10 @@ DEFAULT_OLLAMA_MODEL = 'seneca'                 # Tên model mặc định sẽ 
 OLLAMA_TIMEOUT_SECONDS = 3600                   # Thời gian chờ tối đa (giây) khi gọi AI (1 giờ).
 
 # --- 3. Cấu hình Cảnh báo qua Email ---
+LAST_EMAIL_SENT_TIME = datetime.min
+EMAIL_COOLDOWN_SECONDS = 90  # x second gửi 1 lần
+PENDING_VIOLATIONS = []       # Buffer chứa các vi phạm đang chờ gửi
+
 # Đọc các giá trị từ file .env đã được load ở đầu file.
 # os.getenv("KEY", "default_value") sẽ lấy giá trị của biến môi trường "KEY",
 # nếu không tìm thấy, nó sẽ sử dụng "default_value".
@@ -161,8 +166,8 @@ ALERT_EMAIL_SETTINGS = {
 }
 
 # ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
-# Ngưỡng (số lượng vi phạm) để kích hoạt khóa tài khoản
-ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 5 # Ví dụ: Khóa user nếu có 5 vi phạm trở lên
+# Ngưỡng để kích hoạt khóa tài khoản
+ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 3
 
 # Đọc cấu hình admin MySQL từ .env
 ACTIVE_RESPONSE_SETTINGS = {
