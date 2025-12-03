@@ -19,7 +19,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [R
 logger = logging.getLogger("ResponseHandler")
 
 
-    
 # --- HÀM KẾT NỐI REDIS TIN CẬY ---
 def connect_redis():
     """Kết nối đến Redis với cơ chế thử lại vô hạn."""
