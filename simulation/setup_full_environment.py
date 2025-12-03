@@ -1,16 +1,20 @@
-# simulation\setup_full_environment.py
+# simulation/setup_full_environment.py
 import mysql.connector
 from faker import Faker
 import random
 import json
+import os
 
 # --- CẤU HÌNH ---
 DB_CONFIG = {
     "host": "localhost",
     "port": 3306,
     "user": "root", 
-    "password": "root" # <--- NHỚ SỬA PASSWORD CỦA BẠN
+    "password": "root", # <--- PASSWORD ROOT
+    "auth_plugin": "mysql_native_password"
 }
+COMMON_USER_PASSWORD = "password"
+USERS_CONFIG_FILE = "simulation/users_config.json" # File cấu hình user
 
 fake = Faker()
 
@@ -20,20 +24,14 @@ def get_conn(db=None):
     return mysql.connector.connect(**cfg)
 
 def setup_database_structure():
-    print("🚀 1. KHỞI TẠO CẤU TRÚC DATABASE 'DOANH NGHIỆP'...")
+    print("🚀 1. KHỞI TẠO CẤU TRÚC DATABASE...")
     conn = get_conn()
     cursor = conn.cursor()
-    
-    # Tạo DB
     for db in ['sales_db', 'hr_db', 'admin_db']:
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db}")
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db} CHARACTER SET utf8mb4")
     
     # --- SALES DB ---
-    conn.close()
-    conn = get_conn("sales_db")
-    cursor = conn.cursor()
-    
-    # Xóa cũ tạo mới cho sạch
+    conn.close(); conn = get_conn("sales_db"); cursor = conn.cursor()
     tables = ["reviews", "order_items", "orders", "inventory", "products", "marketing_campaigns", "customers"]
     for t in tables: cursor.execute(f"DROP TABLE IF EXISTS {t}")
 
@@ -99,8 +97,7 @@ def setup_database_structure():
     conn.close()
 
     # --- HR DB ---
-    conn = get_conn("hr_db")
-    cursor = conn.cursor()
+    conn = get_conn("hr_db"); cursor = conn.cursor()
     tables = ["salaries", "attendance", "employees", "departments"]
     for t in tables: cursor.execute(f"DROP TABLE IF EXISTS {t}")
 
@@ -140,17 +137,14 @@ def setup_database_structure():
 
 def populate_data_and_export():
     print("\n🌱 2. ĐANG ĐỔ DỮ LIỆU MẪU (SEEDING)...")
-    
-    # Biến lưu trạng thái để export
     db_state = {
         "customer_ids": [], "product_ids": [], "product_skus": [],
         "product_categories": [], "cities": [],
         "employee_ids": [], "dept_ids": [], "campaign_ids": []
     }
 
-    # --- SEED SALES ---
-    conn = get_conn("sales_db")
-    cursor = conn.cursor()
+    # Seed Sales
+    conn = get_conn("sales_db"); cursor = conn.cursor()
 
     # 1. Customers
     print("   -> Seeding 2000 Customers...")
@@ -175,7 +169,6 @@ def populate_data_and_export():
         prod_data.append((fake.word().title(), random.choice(categories), random.uniform(10, 2000), sku, fake.company(), fake.date_this_year()))
     cursor.executemany("INSERT INTO products (name, category, price, sku, supplier, created_at) VALUES (%s,%s,%s,%s,%s,%s)", prod_data)
     conn.commit()
-    
     cursor.execute("SELECT id, sku, price FROM products")
     products = cursor.fetchall()
     db_state["product_ids"] = [p[0] for p in products]
@@ -218,17 +211,12 @@ def populate_data_and_export():
     for i in range(0, len(item_batch), batch_size):
         cursor.executemany("INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES (%s,%s,%s,%s)", item_batch[i:i+batch_size])
     conn.commit()
-    
     conn.close()
 
-    # --- SEED HR ---
-    conn = get_conn("hr_db")
-    cursor = conn.cursor()
-
-    # 5. Departments
+    # Seed HR
+    conn = get_conn("hr_db"); cursor = conn.cursor()
     depts = ['Sales', 'Marketing', 'IT', 'HR', 'Finance']
-    for d in depts:
-        cursor.execute("INSERT INTO departments (dept_name, location) VALUES (%s, %s)", (d, 'HQ'))
+    for d in depts: cursor.execute("INSERT INTO departments (dept_name, location) VALUES (%s, %s)", (d, 'HQ'))
     conn.commit()
     cursor.execute("SELECT dept_id FROM departments")
     db_state["dept_ids"] = [row[0] for row in cursor.fetchall()]
@@ -240,52 +228,139 @@ def populate_data_and_export():
         emp_data.append((fake.name(), fake.email(), fake.job(), random.choice(db_state["dept_ids"]), fake.date_this_decade(), random.uniform(3000, 15000)))
     cursor.executemany("INSERT INTO employees (name, email, position, dept_id, hire_date, salary) VALUES (%s,%s,%s,%s,%s,%s)", emp_data)
     conn.commit()
-    
     cursor.execute("SELECT employee_id FROM employees")
     db_state["employee_ids"] = [row[0] for row in cursor.fetchall()]
 
     # 7. Salaries & Attendance
     sal_data = [(eid, random.uniform(3000, 20000), random.uniform(0, 5000), fake.date_this_month()) for eid in db_state["employee_ids"]]
     cursor.executemany("INSERT INTO salaries (employee_id, amount, bonus, payment_date) VALUES (%s,%s,%s,%s)", sal_data)
-    
     conn.commit()
     conn.close()
 
-    # --- EXPORT JSON (QUAN TRỌNG NHẤT) ---
     # Làm sạch list set
     db_state["cities"] = list(set(db_state["cities"]))
-    
-    with open("simulation/db_state.json", "w") as f:
-        json.dump(db_state, f, indent=2)
+    os.makedirs("simulation", exist_ok=True)
+    with open("simulation/db_state.json", "w") as f: json.dump(db_state, f, indent=2)
     print("💾 Đã xuất file 'simulation/db_state.json'.")
 
-def setup_users():
-    print("\n👤 3. TẠO USER HỆ THỐNG (ĐỒNG BỘ VỚI KỊCH BẢN)...")
+# --- HÀM TẠO USER & XUẤT CONFIG (QUAN TRỌNG) ---
+def setup_users_and_permissions():
+    print("\n👤 3. PHÂN QUYỀN & XUẤT FILE CONFIG...")
+    conn = get_conn()
+    cur = conn.cursor()
+    
+    # Clean old users
+    cur.execute("SELECT User, Host FROM mysql.user WHERE User LIKE '%_user%' OR User IN ('dave_insider', 'intern_temp')")
+    for u, h in cur.fetchall(): cur.execute(f"DROP USER '{u}'@'{h}'")
+    
+    # Định nghĩa quyền chi tiết (Để xuất ra JSON cho Step 2 đọc)
+    # Cấu trúc: Role -> { DB: [Actions] }
+    ROLE_PERMISSIONS = {
+        "SALES": {
+            "sales_db": ["SELECT", "INSERT", "UPDATE"],
+            "hr_db": [] # Không có quyền
+        },
+        "HR": {
+            "sales_db": ["SELECT"], # Cho xem đơn hàng
+            "hr_db": ["SELECT", "INSERT", "UPDATE"]
+        },
+        "DEV": {
+            "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"],
+            "hr_db": ["SELECT", "INSERT", "UPDATE"], # Dev không được xóa HR
+            "mysql": ["SELECT"] # Cho phép xem log hệ thống (fix lỗi slow_log)
+        },
+        "BAD_ACTOR": { "sales_db": ["SELECT"] }, # Dave
+        "VULNERABLE": {} # Intern không có quyền gì
+    }
+
+    # Tạo User thực tế
+    user_map = {} # Để lưu vào JSON: user -> role
+    
+    # 1. Sales (20 user)
+    for i in range(6):
+        u = f"sale_user_{i}"
+        user_map[u] = "SALES"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 2. HR (5 user)
+    for i in range(2):
+        u = f"hr_user_{i}"
+        user_map[u] = "HR"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON hr_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 3. Dev (10 user)
+    for i in range(3):
+        u = f"dev_user_{i}"
+        user_map[u] = "DEV"
+        cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE, DROP, ALTER ON sales_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT, INSERT, UPDATE ON hr_db.* TO '{u}'@'%'")
+        cur.execute(f"GRANT SELECT ON mysql.* TO '{u}'@'%'") # Cho phép xem mysql.slow_log
+        cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'")
+
+    # 4. Dave Insider
+    u = "dave_insider"
+    user_map[u] = "BAD_ACTOR"
+    cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+    cur.execute(f"GRANT SELECT ON sales_db.* TO '{u}'@'%'")
+    
+    # 5. Intern (Vulnerable)
+    u = "intern_temp"
+    user_map[u] = "VULNERABLE"
+    cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY '{COMMON_USER_PASSWORD}'")
+    cur.execute(f"GRANT USAGE ON *.* TO '{u}'@'%'") # Chỉ login được
+
+    cur.execute("FLUSH PRIVILEGES")
+    conn.close()
+
+    # Xuất file JSON để Step 2 dùng
+    config_data = {
+        "roles": ROLE_PERMISSIONS,
+        "users": user_map
+    }
+    
+    os.makedirs("simulation", exist_ok=True)
+    with open(USERS_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(config_data, f, indent=2)
+    print(f"✅ Đã lưu file phân quyền chuẩn: {USERS_CONFIG_FILE}")
+
+def setup_system_config():
+    print("\n⚙️ 4. CẤU HÌNH PERFORMANCE SCHEMA & GIÁM SÁT...")
     conn = get_conn()
     cursor = conn.cursor()
     
-    # Tạo danh sách user khớp với Step 2
-    users = []
-    for i in range(20): users.append( (f"sale_user_{i}", "sales_db") )
-    for i in range(10): users.append( (f"dev_user_{i}", "sales_db") )
-    for i in range(5):  users.append( (f"hr_user_{i}", "hr_db") )
-    users.append( ("dave_insider", "sales_db") )
-
-    for user, db in users:
-        try:
-            cursor.execute(f"CREATE USER IF NOT EXISTS '{user}'@'%' IDENTIFIED BY 'password'")
-            # Cấp quyền rộng rãi cho môi trường lab
-            cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON sales_db.* TO '{user}'@'%'")
-            cursor.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON hr_db.* TO '{user}'@'%'")
-            cursor.execute(f"GRANT SELECT ON mysql.user TO '{user}'@'%'") # Cho phép xem user
-        except: pass
+    try:
+        # 1. Bật Performance Schema (Consumer & Instrument)
+        print("   -> Enabling Performance Schema consumers/instruments...")
+        cursor.execute("UPDATE performance_schema.setup_consumers SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long'")
+        cursor.execute("UPDATE performance_schema.setup_instruments SET ENABLED = 'YES', TIMED = 'YES' WHERE NAME LIKE 'statement/%'")
         
-    cursor.execute("FLUSH PRIVILEGES")
-    conn.close()
-    print("✅ Đã tạo User xong.")
+        # 2. Cấu hình User giám sát (uba_user)
+        print("   -> Configuring 'uba_user'...")
+        # Xóa cũ
+        cursor.execute("DROP USER IF EXISTS 'uba_user'@'localhost'")
+        # Tạo mới (Native Password để tương thích tốt nhất)
+        cursor.execute("CREATE USER 'uba_user'@'localhost' IDENTIFIED WITH mysql_native_password BY 'password'")
+        # Cấp quyền đọc toàn bộ (bao gồm Performance Schema)
+        cursor.execute("GRANT SELECT ON *.* TO 'uba_user'@'localhost'")
+        # Áp dụng
+        cursor.execute("FLUSH PRIVILEGES")
+        
+        print("✅ Cấu hình hệ thống hoàn tất (Log đã bật, uba_user đã sẵn sàng).")
+        
+    except Exception as e:
+        print(f"⚠️ Lỗi cấu hình hệ thống: {e}")
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     setup_database_structure()
     populate_data_and_export()
-    setup_users()
-    print("\n🎉 MÔI TRƯỜNG FINAL ĐÃ SẴN SÀNG! HÃY CHẠY STEP 1 -> 2 -> 3.")
+    setup_users_and_permissions()
+    setup_system_config()
+    print("\n🎉 MÔI TRƯỜNG FINAL ĐÃ SẴN SÀNG!")

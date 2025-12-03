@@ -1,34 +1,83 @@
-# simulation\step2_create_scenario.py
-import json, csv, random
+# simulation/step2_create_scenario.py
+import json, csv, random, uuid, sys
 from datetime import datetime, timedelta
 from faker import Faker
 
 fake = Faker()
 
 # CẤU HÌNH
-OUTPUT_FILE = "simulation/scenario_script_30d.csv"
+OUTPUT_FILE = "simulation/scenario_script_10day.csv"
 QUERY_LIB = "simulation/query_library.json"
-DB_STATE_FILE = "simulation/db_state.json" 
-DAYS = 30
-TOTAL_EVENTS = 100000 # Tăng lên để mô hình học tốt hơn
+DB_STATE_FILE = "simulation/db_state.json"
+USERS_CONFIG_FILE = "simulation/users_config.json" 
+DAYS = 10
+TOTAL_EVENTS = 20000 
 
-# Load dữ liệu thật
 try:
     with open(DB_STATE_FILE, 'r') as f: VALID_DATA = json.load(f)
-except:
-    print("⚠️ Cảnh báo: Không có db_state.json. Dùng dữ liệu giả.")
-    VALID_DATA = {}
+except: VALID_DATA = {}
 
-# DANH SÁCH USER (Phân loại rõ ràng)
-USERS = {
-    "SALES": [f"sale_user_{i}" for i in range(20)],
-    "HR":    [f"hr_user_{i}" for i in range(5)],
-    "DEV":   [f"dev_user_{i}" for i in range(10)],
-    "ADMIN": ["admin_user"], # User đặc quyền
-    "BAD_ACTOR": ["dave_insider", "unknown_ip", "script_kiddie", "apt_group_x"] # Kẻ xấu lộ mặt
-}
+# --- LOAD USER & QUYỀN TỪ CONFIG ---
+USERS_MAP = {}  # Chi tiết quyền từng user: {'user1': {'role': 'SALES', 'permissions': ...}}
+ROLE_RULES = {} # Luật lệ của từng Role: {'SALES': {'sales_db': [...]}}
+USER_GROUPS = {} # Danh sách user theo nhóm: {'SALES': ['user1', 'user2'], 'DEV': [...]}
 
-# KHO VŨ KHÍ TẤN CÔNG (ATTACK ARSENAL)
+try:
+    with open(USERS_CONFIG_FILE, 'r') as f:
+        config_data = json.load(f)
+        # 1. Load Role Rules
+        ROLE_RULES = config_data.get("roles", {})
+        
+        # 2. Load User Map và tự động Grouping
+        raw_users = config_data.get("users", {})
+        
+        # Khởi tạo các nhóm rỗng để tránh KeyError sau này
+        for role in ROLE_RULES.keys():
+            USER_GROUPS[role] = []
+        USER_GROUPS["EXTERNAL_HACKER"] = ["unknown_ip", "script_kiddie", "apt_group_x"]
+        
+        # Duyệt qua từng user trong file json để phân loại
+        for username, role_name in raw_users.items():
+            # Lưu vào USER_MAP để check quyền sau này
+            # Lưu ý: File json của bạn chỉ lưu string "DEV", không lưu chi tiết permissions từng user
+            # Nên ta sẽ map permissions từ ROLE_RULES vào đây
+            USERS_MAP[username] = {
+                "role": role_name,
+                "permissions": ROLE_RULES.get(role_name, {})
+            }
+            
+            # Lưu vào USER_GROUPS
+            if role_name not in USER_GROUPS:
+                USER_GROUPS[role_name] = []
+            USER_GROUPS[role_name].append(username)
+            
+        # Tạo nhóm tổng hợp Bad Actors
+        USER_GROUPS["ALL_BAD"] = USER_GROUPS.get("BAD_ACTOR", []) + USER_GROUPS["EXTERNAL_HACKER"]
+        
+        print(f"✅ Đã load Config User: {len(USERS_MAP)} users.")
+        print(f"   - Sales: {len(USER_GROUPS.get('SALES', []))}")
+        print(f"   - HR: {len(USER_GROUPS.get('HR', []))}")
+        print(f"   - Dev: {len(USER_GROUPS.get('DEV', []))}")
+        
+except Exception as e:
+    print(f"❌ Lỗi đọc file {USERS_CONFIG_FILE}: {e}")
+    sys.exit(1)
+
+# IP Generator
+def generate_fake_ip(user):
+    if user in USER_GROUPS["EXTERNAL_HACKER"]:
+        return f"10.0.{random.randint(1,254)}.{random.randint(1,254)}"
+    # Dave Insider dùng IP nội bộ nhưng khác dải
+    if user == "dave_insider":
+        return f"192.168.100.{random.randint(1,254)}"
+    return f"192.168.1.{hash(user) % 250 + 1}"
+
+# Port Generator
+def generate_fake_port(behavior):
+    if behavior == "SCANNING": return random.randint(10000, 65000)
+    return random.randint(10000, 60000)
+
+# KHO VŨ KHÍ
 ATTACK_PAYLOADS = {
     "SQLI_CLASSIC": [
         "' OR '1'='1", 
@@ -77,7 +126,6 @@ def safe_replace(query, placeholder, value, is_string=False):
     if placeholder not in query: return query
     val_str = str(value)
     if is_string:
-        # Kiểm tra xem đã có dấu nháy chưa để tránh double quotes
         if f"'{placeholder}'" in query: return query.replace(f"'{placeholder}'", f"'{val_str}'")
         elif f'"{placeholder}"' in query: return query.replace(f'"{placeholder}"', f"'{val_str}'")
         else: return query.replace(placeholder, f"'{val_str}'")
@@ -174,7 +222,7 @@ def fill_placeholders(q):
         else: val = random.choice(cust_ids)
         q = safe_replace(q, "{id}", val)
 
-    # Các ID phụ (Random vì không track trong db_state, nhưng không sao)
+    # Các ID phụ
     if "{order_id}" in q: q = safe_replace(q, "{order_id}", random.randint(1, 20000))
     if "{review_id}" in q: q = safe_replace(q, "{review_id}", random.randint(1, 5000))
     if "{item_id}" in q: q = safe_replace(q, "{item_id}", random.randint(1, 50000))
@@ -218,6 +266,38 @@ def fill_placeholders(q):
 
     return sanitize_query(q)
 
+def get_query_type(sql):
+    sql = sql.strip().upper()
+    if sql.startswith("SELECT"): return "SELECT"
+    if sql.startswith("INSERT"): return "INSERT"
+    if sql.startswith("UPDATE"): return "UPDATE"
+    if sql.startswith("DELETE"): return "DELETE"
+    return "UNKNOWN"
+
+def is_query_allowed(username, db_target, query):
+    """
+    Kiểm tra xem user có quyền chạy lệnh này trên DB này không.
+    """
+    if username not in USERS_MAP: return True # Hacker (không có trong map) thì bỏ qua check
+    
+    user_info = USERS_MAP[username]
+    perms = user_info.get("permissions", {})
+    
+    # 1. Check quyền Admin (*)
+    if "*" in perms: return True
+    
+    # 2. Check DB
+    if db_target not in perms: return False
+    
+    # 3. Check Command Type
+    db_rights = perms.get(db_target, [])
+    if "ALL" in db_rights or "ALL PRIVILEGES" in db_rights: return True
+    
+    cmd_type = get_query_type(query)
+    if cmd_type in db_rights: return True
+    
+    return False
+
 def generate_complex_scenario():
     queries = load_queries()
     if not queries: 
@@ -243,6 +323,7 @@ def generate_complex_scenario():
         else: step = random.randint(300, 900) # Đêm/Cuối tuần
         
         current_time += timedelta(seconds=step)
+        timestamp_str = current_time.isoformat() + "Z"
         
         # --- 2. XÁC ĐỊNH LOẠI HÀNH VI (Bình thường vs Tấn công) ---
         # Mặc định là bình thường
@@ -275,7 +356,7 @@ def generate_complex_scenario():
             else:
                 role = "DEV" if random.random() < 0.8 else "SALES" # Trực đêm
                 
-            user = random.choice(USERS[role])
+            user = random.choice(USER_GROUPS[role])
             db_target = "hr_db" if role == "HR" else "sales_db"
             
             # Lấy query từ Library
@@ -294,7 +375,7 @@ def generate_complex_scenario():
                 pass 
             
             victim_role = random.choice(["HR", "SALES"]) # Nạn nhân
-            user = random.choice(USERS[victim_role])
+            user = random.choice(USER_GROUPS[victim_role])
             
             # Hacker dùng nick HR để xem bảng lương hoặc User hệ thống
             raw_query = random.choice(queries.get("ATTACK", ["SELECT * FROM mysql.user"]))
@@ -306,7 +387,7 @@ def generate_complex_scenario():
 
         elif behavior == "LATERAL_MOVEMENT":
             # Kịch bản: Sales tò mò sang HR
-            user = random.choice(USERS["SALES"])
+            user = random.choice(USER_GROUPS["SALES"])
             db_target = "hr_db" # <--- ĐIỂM BẤT THƯỜNG
             
             # Sales chạy query của HR
@@ -316,7 +397,7 @@ def generate_complex_scenario():
 
         elif behavior == "DATA_EXFILTRATION":
             # Kịch bản: Dev hoặc Sales dump dữ liệu lớn
-            user = random.choice(USERS["DEV"] + USERS["SALES"])
+            user = random.choice(USER_GROUPS["DEV"] + USER_GROUPS["SALES"])
             db_target = "sales_db"
             
             # Query không có LIMIT hoặc SELECT * bảng lớn
@@ -331,7 +412,7 @@ def generate_complex_scenario():
 
         elif behavior == "SQL_INJECTION_CLASSIC":
             # Kịch bản: Web App bị tấn công (User bất kỳ hoặc unknown)
-            user = random.choice(USERS["SALES"] + USERS["BAD_ACTOR"])
+            user = random.choice(USER_GROUPS["SALES"] + USER_GROUPS["ALL_BAD"])
             db_target = "sales_db"
             
             # Lấy query bình thường và tiêm thuốc độc
@@ -342,7 +423,7 @@ def generate_complex_scenario():
             is_anomaly = 1
             
         elif behavior == "SQL_INJECTION_BLIND": 
-            user = random.choice(USERS["BAD_ACTOR"])
+            user = random.choice(USER_GROUPS["ALL_BAD"])
             db_target = "sales_db"
             # Query có vẻ bình thường nhưng chứa SLEEP
             base = "SELECT * FROM products WHERE id = {id}"
@@ -352,19 +433,19 @@ def generate_complex_scenario():
 
         elif behavior == "RECONNAISSANCE":
             # Hacker dò quét thông tin
-            user = random.choice(USERS["BAD_ACTOR"] + USERS["DEV"]) # Dev tò mò hoặc Hacker
+            user = random.choice(USER_GROUPS["ALL_BAD"] + USER_GROUPS["DEV"]) # Dev tò mò hoặc Hacker
             db_target = "information_schema"
             query = random.choice(ATTACK_PAYLOADS["RECON"])
             is_anomaly = 1
 
         elif behavior == "PRIVILEGE_ESCALATION":
-            user = random.choice(USERS["BAD_ACTOR"]) # Dave cố gắng chiếm quyền
+            user = random.choice(USER_GROUPS["ALL_BAD"]) # Dave cố gắng chiếm quyền
             db_target = "mysql"
             query = random.choice(ATTACK_PAYLOADS["PRIV_ESC"])
             is_anomaly = 1
 
         elif behavior == "DOS_ATTEMPT": 
-            user = random.choice(USERS["BAD_ACTOR"])
+            user = random.choice(USER_GROUPS["ALL_BAD"])
             db_target = "sales_db"
             query = random.choice(ATTACK_PAYLOADS["DOS"])
             is_anomaly = 1
@@ -376,28 +457,39 @@ def generate_complex_scenario():
             is_anomaly = 1
 
         elif behavior == "INSIDER_THREAT":
-            # Kịch bản cũ: Dave hoặc Unknown phá hoại
-            user = random.choice(USERS["BAD_ACTOR"])
+            # Kịch bản: Dave hoặc Unknown phá hoại
+            user = random.choice(USER_GROUPS["ALL_BAD"])
             db_target = random.choice(["hr_db", "sales_db"])
             raw_query = random.choice(queries.get("ATTACK", ["DROP TABLE customers"]))
             query = fill_placeholders(raw_query)
             is_anomaly = 1
 
-        # Ghi dữ liệu
+        # --- 4. TẠO TAG ---
+        sim_ip = generate_fake_ip(user)
+        sim_port = generate_fake_port(behavior)
+        sim_id = uuid.uuid4().hex[:8]
+        
+        # Tag đầy đủ: User, IP, Port, ID, Behavior, Anomaly, Timestamp
+        tag = f"/* SIM_META:{user}|{sim_ip}|{sim_port}|ID:{sim_id}|BEH:{behavior}|ANO:{is_anomaly}|TS:{timestamp_str} */"
+        
+        # Gắn tag vào query luôn
+        final_query_with_tag = f"{tag} {query}"
+
+        # --- 5. Ghi ra CSV ---
         scenario_data.append({
-            "timestamp": current_time.isoformat() + "Z",
+            "timestamp": timestamp_str,
             "user": user,
             "database": db_target,
-            "query": query,
+            "query": final_query_with_tag, # Query đã có tag
             "is_anomaly": is_anomaly,
-            "behavior_type": behavior # Thêm cột này để dễ debug/label
+            "behavior_type": behavior
         })
         count += 1
+        if count % 2000 == 0: sys.stdout.write(f"\r⚡ Tiến độ: {count}/{TOTAL_EVENTS}...")
         
-    # Lưu file
     keys = list(scenario_data[0].keys())
     with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
+        writer = csv.DictWriter(f, fieldnames=keys, quoting=csv.QUOTE_ALL)
         writer.writeheader()
         writer.writerows(scenario_data)
     print(f"✅ Kịch bản hoàn tất: {OUTPUT_FILE}")

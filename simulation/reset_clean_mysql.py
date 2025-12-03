@@ -1,6 +1,7 @@
 # simulation/reset_clean_mysql.py
 import mysql.connector
 import os
+from redis import Redis
 
 # --- CẤU HÌNH ROOT ---
 # Phải dùng quyền ROOT để xóa sạch mọi thứ
@@ -10,6 +11,10 @@ DB_CONFIG = {
     "user": "root",
     "password": "root" # <-- Thay password root của bạn vào đây
 }
+REDIS_URL = "redis://localhost:6379/0"
+FILES_TO_DELETE = [
+    "logs/.mysql_perf_creator.state",
+]
 
 def get_conn():
     try:
@@ -96,6 +101,48 @@ def clean_files():
     except:
         print("   - Không truy cập được thư mục Temp (Bỏ qua)")
 
+def reset_system():
+    print("🚀 BẮT ĐẦU RESET TOÀN BỘ HỆ THỐNG...")
+    
+    # 1. Xóa file tạm và dataset cũ
+    for f_path in FILES_TO_DELETE:
+        if os.path.exists(f_path):
+            try:
+                os.remove(f_path)
+                print(f"✅ Đã xóa file: {f_path}")
+            except Exception as e:
+                print(f"❌ Lỗi xóa {f_path}: {e}")
+        else:
+            print(f"ℹ️  File {f_path} không tồn tại (Sạch).")
+
+    # 2. Xóa dữ liệu Redis
+    try:
+        r = Redis.from_url(REDIS_URL)
+        r.flushall()
+        print("✅ Đã xóa sạch Redis (FLUSHALL).")
+    except Exception as e:
+        print(f"❌ Lỗi kết nối Redis: {e}")
+
+    # 3. Xóa sạch bộ nhớ đệm MySQL (Quan trọng nhất)
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        
+        # Tắt consumer để truncate an toàn
+        cur.execute("UPDATE performance_schema.setup_consumers SET ENABLED = 'NO' WHERE NAME = 'events_statements_history_long'")
+        
+        # Xóa sạch bảng
+        cur.execute("TRUNCATE TABLE performance_schema.events_statements_history_long")
+        
+        # Bật lại consumer ngay lập tức
+        cur.execute("UPDATE performance_schema.setup_consumers SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long'")
+        
+        print("✅ Đã TRUNCATE bảng log MySQL (Bộ nhớ về 0 dòng).")
+        conn.close()
+    except Exception as e:
+        print(f"❌ Lỗi MySQL: {e}")
+
+
 def main():
     conn = get_conn()
     if not conn: return
@@ -109,6 +156,7 @@ def main():
     
     conn.close()
     clean_files()
+    reset_system()
     
     print("\n✨ MYSQL ĐÃ SẠCH BÓNG! BẠN CÓ THỂ CHẠY LẠI SETUP.")
 
