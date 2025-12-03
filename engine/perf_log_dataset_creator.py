@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", date
 
 # --- CẤU HÌNH ---
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_creator.state")
-CSV_OUTPUT_FILE = "final_dataset_10days.csv"
+CSV_OUTPUT_FILE = "final_dataset_10day.csv"
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0
@@ -217,7 +217,7 @@ def process_logs():
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_END > :last_ts
             AND e.SQL_TEXT IS NOT NULL
-            AND e.SQL_TEXT NOT LIKE '%performance_schema%'e
+            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
             AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
             AND e.SQL_TEXT LIKE '%SIM_META%' 
