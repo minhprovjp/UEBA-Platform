@@ -98,7 +98,7 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
     messages.append(("info", f"Bắt đầu Hành động 1 (LOCK) cho user '{user_name}'..."))
 
     # 1.1. Truy vấn để tìm tất cả host của user
-    sql_find_hosts = f"SELECT host FROM mysql.user WHERE user = '{user_name}';"
+    sql_find_hosts = f"SELECT host FROM mysql.user WHERE user = '{user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
 
     success_find, msg_find, hosts_to_lock = execute_mysql_query(
         db_config, sql_find_hosts, fetch_results=True
@@ -117,7 +117,7 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
 
         # 1.2. Lặp và khóa từng host
         for host in hosts_to_lock:
-            sql_lock = f"ALTER USER '{user_name}'@'{host}' ACCOUNT LOCK;"
+            sql_lock = f"ALTER USER '{user_name}'@'{host}' ACCOUNT LOCK /* UBA_EVENT */;"
             reason_lock = f"{reason} | Lockdown @{host}"
 
             success_lock, msg_lock, _ = execute_mysql_query(db_config, sql_lock, fetch_results=False)
@@ -135,7 +135,7 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
     messages.append(("info", f"Bắt đầu Hành động 2 (KILL) cho user '{user_name}'..."))
 
     # 2.1. Truy vấn PROCESSLIST để tìm các session ID đang hoạt động
-    sql_find_sessions = f"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE USER = '{user_name}';"
+    sql_find_sessions = f"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE USER = '{user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
 
     success_find_sess, msg_find_sess, session_ids_to_kill = execute_mysql_query(
         db_config, sql_find_sessions, fetch_results=True
@@ -154,7 +154,7 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
 
         # 2.2. Lặp và KILL từng session
         for session_id in session_ids_to_kill:
-            sql_kill = f"KILL CONNECTION {session_id};"
+            sql_kill = f"KILL CONNECTION {session_id} /* UBA_EVENT */;"
             reason_kill = f"{reason} | Terminate session ID {session_id}"
 
             success_kill, msg_kill, _ = execute_mysql_query(db_config, sql_kill, fetch_results=False)

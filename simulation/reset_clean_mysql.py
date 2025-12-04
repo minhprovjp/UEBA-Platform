@@ -43,7 +43,7 @@ def clean_users(cursor):
     users_to_drop = []
     for u, h in users:
         # Chỉ xóa các user liên quan đến mô phỏng, KHÔNG xóa root hay mysql.sys
-        if any(x in u for x in ['sale_user', 'hr_user', 'dev_user', 'dave', 'hacker', 'backdoor', 'script_kiddie', 'unknown']):
+        if any(x in u for x in ['sale_user', 'hr_user', 'dev_user', 'dave', 'hacker', 'backdoor', 'intern_temp', 'script_kiddie', 'unknown']):
             users_to_drop.append((u, h))
     
     for u, h in users_to_drop:
