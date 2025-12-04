@@ -1,4 +1,4 @@
-// vite.config.js
+// uba_frontend/vite.config.js
 import path from "path" // <-- Thêm dòng này
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react-swc'

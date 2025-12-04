@@ -1,4 +1,4 @@
-// src/components/AnomalyDetailModal.jsx
+// uba_frontend/src/components/AnomalyDetailModal.jsx
 import React from 'react';
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";

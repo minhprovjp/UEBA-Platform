@@ -31,13 +31,15 @@ def connect_redis():
 def ensure_group(r: Redis, stream: str, group: str):
     """Đảm bảo Consumer Group tồn tại"""
     try:
-        r.xgroup_create(stream, group, id="0-0", mkstream=True)
+        r.xgroup_create(stream, group, id="$", mkstream=True)
         logging.info(f"Created consumer group {group} on {stream}")
     except ResponseError as e:
         if "BUSYGROUP" in str(e):
             logging.info(f"Consumer group {group} already exists on {stream}.")
+            pass
         else:
-            raise
+            logging.error(f"❌ Lỗi tạo group {group} trên {stream}: {e}")
+            raise e
 
 def check_and_send_alert(results: dict):
     """Kiểm tra kết quả, tạo báo cáo và gửi email nếu cần."""
@@ -66,32 +68,32 @@ def check_and_send_alert(results: dict):
                 + "\n\nVui lòng kiểm tra Bảng điều khiển để biết thêm chi tiết."
         )
 
-        try:
-            result = send_email_alert(
-                subject=subject,
-                message=message_body,
-                to_recipients=ALERT_EMAIL_SETTINGS["to_recipients"],
-                smtp_server=ALERT_EMAIL_SETTINGS["smtp_server"],
-                smtp_port=int(ALERT_EMAIL_SETTINGS["smtp_port"]),
-                sender_email=ALERT_EMAIL_SETTINGS["sender_email"],
-                sender_password=ALERT_EMAIL_SETTINGS["sender_password"],
-                bcc_recipients=ALERT_EMAIL_SETTINGS.get("bcc_recipients")
-            )
-            if result is True:
-                logging.info("Gửi email cảnh báo thành công.")
-            else:
-                logging.error(f"Gửi email cảnh báo thất bại: {result}")
-        except Exception as e:
-            logging.error(f"Lỗi nghiêm trọng khi gọi send_email_alert: {e}")
+        # try:
+        #     result = send_email_alert(
+        #         subject=subject,
+        #         message=message_body,
+        #         to_recipients=ALERT_EMAIL_SETTINGS["to_recipients"],
+        #         smtp_server=ALERT_EMAIL_SETTINGS["smtp_server"],
+        #         smtp_port=int(ALERT_EMAIL_SETTINGS["smtp_port"]),
+        #         sender_email=ALERT_EMAIL_SETTINGS["sender_email"],
+        #         sender_password=ALERT_EMAIL_SETTINGS["sender_password"],
+        #         bcc_recipients=ALERT_EMAIL_SETTINGS.get("bcc_recipients")
+        #     )
+        #     if result is True:
+        #         logging.info("Gửi email cảnh báo thành công.")
+        #     else:
+        #         logging.error(f"Gửi email cảnh báo thất bại: {result}")
+        # except Exception as e:
+        #     logging.error(f"Lỗi nghiêm trọng khi gọi send_email_alert: {e}")
 
 def start_engine():
-    r = Redis.from_url(REDIS_URL, decode_responses=True)
+    r = connect_redis()
+    
+    logging.info(f"Initializing Consumer Group: {REDIS_GROUP_ENGINE}")
     for stream in STREAMS.values():
-        try:
-            r.xgroup_create(stream, REDIS_GROUP_ENGINE, id="0", mkstream=True)
-        except:
-            pass
+        ensure_group(r, stream, REDIS_GROUP_ENGINE)
 
+    ensure_group(r, "uba:logs:mysql", REDIS_GROUP_ENGINE)
     logging.info("Realtime UBA Engine STARTED — Monitoring MySQL Performance Schema")
 
     while True:
@@ -100,7 +102,7 @@ def start_engine():
                 groupname=REDIS_GROUP_ENGINE,
                 consumername=REDIS_CONSUMER_NAME,
                 streams=STREAMS,
-                count=100,
+                count=10000,
                 block=5000
             )
 
@@ -125,12 +127,12 @@ def start_engine():
                 save_results_to_db(results)
                 # Send alert if high-risk
                 anomalies = results.get("anomalies_ml", pd.DataFrame())
-                if not anomalies.empty and anomalies['ml_anomaly_score'].max() > 0.85:
-                    send_email_alert(
-                        subject=f"UBA ALERT: {len(anomalies)} High-Risk Queries (Score > 0.85)",
-                        results_df=anomalies,
-                        top_n=8
-                    )
+                # if not anomalies.empty and anomalies['ml_anomaly_score'].max() > 0.85:
+                #     send_email_alert(
+                #         subject=f"UBA ALERT: {len(anomalies)} High-Risk Queries (Score > 0.85)",
+                #         results_df=anomalies,
+                #         top_n=8
+                #     )
                 # ACK messages
                 for stream, msg_id in ack_ids:
                     r.xack(stream, REDIS_GROUP_ENGINE, msg_id)
@@ -140,6 +142,7 @@ def start_engine():
             break
         except Exception as e:
             logging.error(f"Engine error: {e}", exc_info=True)
+            time.sleep(1)
 
 if __name__ == "__main__":
     start_engine()

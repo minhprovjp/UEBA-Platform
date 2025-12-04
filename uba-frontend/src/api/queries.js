@@ -1,4 +1,4 @@
-// src/api/queries.js
+// uba_frontend/src/api/queries.js
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient, cleanParams } from './client';
 import { toast } from 'sonner';
@@ -14,6 +14,7 @@ export const useAnomalyKpis = () =>
       return data; // {late_night, large_dump, multi_table, sensitive_access, profile_deviation, total}
     },
     staleTime: 30_000,
+    refetchInterval: 1000,
   });
 
 // Facets (users, types)
@@ -25,6 +26,7 @@ export const useAnomalyFacets = () =>
       return data; // {users:[], types:[]}
     },
     staleTime: 60_000,
+    refetchInterval: 1000,
   });
 
 // Search hợp nhất (server-side)
@@ -46,6 +48,8 @@ export const useAnomalySearch = (filters) =>
       return data; // {items, total}
     },
     keepPreviousData: true,
+    staleTime: 0,           
+    refetchInterval: 1000,
   });
 
 // Hook để lấy TẤT CẢ logs (có phân trang và bộ lọc)
@@ -80,7 +84,8 @@ export const useAnomalyStats = () =>
       const { data } = await apiClient.get('/api/anomalies/stats');
       return data; // { event_count, aggregate_count, total_count }
     },
-    staleTime: 30_000,
+    staleTime: 0,            // Dữ liệu luôn được coi là "cũ" ngay lập tức để chấp nhận cái mới
+    refetchInterval: 1000,   // Tự động gọi lại API mỗi 5000ms (5 giây)
   });
 
 export const useEventAnomalies = (filters) =>
@@ -101,6 +106,8 @@ export const useEventAnomalies = (filters) =>
       return data; // UnifiedAnomaly[]
     },
     keepPreviousData: true,
+    staleTime: 0,          
+    refetchInterval: 1000,
   });
 
 export const useAggregateAnomalies = (filters) =>
@@ -121,6 +128,8 @@ export const useAggregateAnomalies = (filters) =>
       return data; // UnifiedAnomaly[]
     },
     keepPreviousData: true,
+    staleTime: 0,         
+    refetchInterval: 1000,
   });
 
 // (tuỳ chọn) dữ liệu để vẽ biểu đồ theo giờ từ Event anomalies
@@ -137,6 +146,7 @@ export const useEventAnomalyHistogram = () =>
       return hours;
     },
     staleTime: 30_000,
+    refetchInterval: 1000,
   });
 
 export const useAnomalyTypeStats = () =>
@@ -147,6 +157,7 @@ export const useAnomalyTypeStats = () =>
       return data; // { by_type: {late_night, dump, multi_table, sensitive, user_time, ml}, total }
     },
     staleTime: 30_000,
+    refetchInterval: 1000,
   });
 
 

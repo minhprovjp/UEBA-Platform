@@ -1,4 +1,4 @@
-// src/pages/SettingsPage.jsx
+// // uba_frontend/src/pages/SettingsPage.jsx
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

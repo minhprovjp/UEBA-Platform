@@ -2,7 +2,7 @@
 import os, json, logging, sys, time, signal, re, math, csv
 from datetime import datetime, timedelta, timezone
 from collections import Counter
-from redis import Redis
+from redis import Redis, ConnectionError
 from sqlalchemy import create_engine, text
 import pandas as pd
 
@@ -18,10 +18,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", date
 
 # --- CẤU HÌNH ---
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_creator.state")
-CSV_OUTPUT_FILE = "final_dataset_10day.csv"
+CSV_OUTPUT_FILE = "final_dataset_30d.csv"
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0
+
+# --- HELPER FUNCTIONS ---
 
 def sort_final_csv():
     """
@@ -36,10 +38,9 @@ def sort_final_csv():
         df = pd.read_csv(CSV_OUTPUT_FILE)
         
         # Chuyển cột timestamp sang datetime để sort chuẩn
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
-        # Sort
-        df = df.sort_values(by='timestamp')
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.sort_values(by='timestamp')
         
         # Lưu lại (Ghi đè)
         df.to_csv(CSV_OUTPUT_FILE, index=False, quoting=csv.QUOTE_ALL)
@@ -54,34 +55,27 @@ def spoof_error_message(error_msg, fake_ip):
     Output: Access denied for user 'dev_user_0'@'192.168.1.149' ...
     """
     if not error_msg: return ""
-    
     # Regex tìm pattern: 'username'@'hostname'
     pattern = r"'([^']+)'@'([^']+)'"
     match = re.search(pattern, error_msg)
-    
     if match:
         username = match.group(1)
-        hostname = match.group(2) # Thường là localhost hoặc ip thật
-        
+        hostname = match.group(2)
         if hostname != fake_ip:
-            # Thay thế localhost bằng IP fake
             old_str = f"'{username}'@'{hostname}'"
             new_str = f"'{username}'@'{fake_ip}'"
             return error_msg.replace(old_str, new_str)
-            
     return error_msg
 
 def handle_shutdown(signum, frame):
     global is_running
     is_running = False
     print("\nStopping Creator...")
-    # Khi bấm Ctrl+C, sẽ thực hiện sắp xếp file
     sort_final_csv()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, handle_shutdown)
 
-# --- HELPER FUNCTIONS ---
 def extract_extended_metadata(sql_text, db_user, db_host):
     """
     Parse Tag từ Step 3: /* SIM_META:User|IP|Port|ID:x|BEH:type|ANO:0|TS:timestamp */
@@ -95,7 +89,7 @@ def extract_extended_metadata(sql_text, db_user, db_host):
         "sim_port": 0,
         "beh_type": "NORMAL", 
         "is_anomaly": 0,
-        "sim_ts": None # Thêm trường timestamp giả lập
+        "sim_ts": None
     }
     
     clean_sql = sql_text
@@ -111,7 +105,7 @@ def extract_extended_metadata(sql_text, db_user, db_host):
             for p in parts[3:]:
                 if p.startswith("BEH:"): meta["beh_type"] = p.replace("BEH:", "")
                 if p.startswith("ANO:"): meta["is_anomaly"] = int(p.replace("ANO:", ""))
-                if p.startswith("TS:"): meta["sim_ts"] = p.replace("TS:", "") # Bắt timestamp
+                if p.startswith("TS:"): meta["sim_ts"] = p.replace("TS:", "")
             
             clean_sql = re.sub(pattern, "", sql_text).strip()
             
@@ -131,11 +125,10 @@ def init_csv_file(headers):
         try:
             with open(CSV_OUTPUT_FILE, 'r', encoding='utf-8') as f:
                 existing_header = f.readline().strip().replace('"', '').split(',')
-                # So sánh header (bỏ qua khác biệt nhỏ về khoảng trắng)
                 if len(existing_header) == len(headers) and existing_header[0] == headers[0]:
                     should_create = False
                 else:
-                    logging.warning("⚠️ CSV Header mismatch! Deleting old file to prevent corruption.")
+                    logging.warning("⚠️ CSV Header mismatch! Deleting old file.")
         except: pass
     
     if should_create:
@@ -149,35 +142,30 @@ def init_csv_file(headers):
 def process_logs():
     global is_running, total_collected
     engine = create_engine(MYSQL_LOG_DATABASE_URL)
-    try: redis = Redis.from_url(REDIS_URL, decode_responses=True)
-    except: redis = None
     
+    # Kết nối Redis an toàn (Soft connect)
+    redis_client = None
+    try:
+        redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        logging.info("✅ Redis Connected")
+    except:
+        logging.warning("⚠️ Redis connection failed at startup. Will retry later.")
+
     # Init CSV Header
     csv_headers = [
         "timestamp", "event_id", "event_name", 
         "user", "client_ip", "client_port", "database", 
         "query", "normalized_query", "query_digest",
         "query_length", "query_entropy", 
-        
-        # Nhóm Cờ (Flags)
         "is_system_table", "scan_efficiency", "is_admin_command", "is_risky_command", "has_comment",
-        
-        # Nhóm Thời gian & Hiệu năng
         "execution_time_ms", "lock_time_ms", 
         "rows_returned", "rows_examined", "rows_affected",
-        
-        # Nhóm Lỗi
         "error_code", "error_message", "error_count", "has_error", "warning_count",
-        
-        # Nhóm Optimizer (Rất quan trọng để phát hiện bất thường)
         "created_tmp_disk_tables", "created_tmp_tables", 
         "select_full_join", "select_scan", "sort_merge_passes",
         "no_index_used", "no_good_index_used",
-        
-        # Nhóm Định danh hệ thống
         "connection_type", "thread_os_id",
-        
-        # NHÃN (LABELS) - QUAN TRỌNG NHẤT
         "source_dbms", "behavior_type", "is_anomaly"
     ]
     
@@ -190,14 +178,13 @@ def process_logs():
             writer = csv.DictWriter(f, fieldnames=csv_headers, quoting=csv.QUOTE_ALL)
             writer.writeheader()
 
-    # Load trạng thái cũ để không đọc lại log đã xử lý
+    # Load State
     try:
         with open(STATE_FILE, 'r') as f: last_ts = int(json.load(f).get("last_timestamp", 0))
     except: last_ts = 0
 
     logging.info(f"Dataset Creator started. Monitoring from TIMER_END: {last_ts}")
 
-    # Query lấy Log
     sql_query = text("""
         SELECT 
             e.TIMER_START, e.TIMER_END, 
@@ -235,11 +222,16 @@ def process_logs():
                 curr_max = conn.execute(check_max).scalar()
                 curr_max = int(curr_max) if curr_max is not None else 0
                 
-                # Nếu DB khởi động lại (Timer reset về 0), ta reset last_ts
                 if curr_max < last_ts: last_ts = 0
                 pending_count = conn.execute(check_pending_sql, {"last_ts": last_ts}).scalar() or 0
+                
                 if pending_count == 0:
-                    time.sleep(0.5); continue
+                    # Update state if empty to avoid lag
+                    if curr_max > last_ts:
+                         last_ts = curr_max
+                         with open(STATE_FILE, 'w') as f: json.dump({"last_timestamp": last_ts}, f)
+                    time.sleep(0.5)
+                    continue
 
                 uptime = float(conn.execute(get_uptime).scalar() or 0)
                 boot_time = datetime.now(timezone.utc) - timedelta(seconds=uptime)
@@ -252,21 +244,20 @@ def process_logs():
                     r_map = r._mapping
                     if r_map['TIMER_END'] > batch_max: batch_max = r_map['TIMER_END']
 
-                    # 1. Bóc tách Metadata (bao gồm Fake Time)
+                    # 1. Bóc tách Metadata
                     raw_sql = str(r_map['SQL_TEXT'] or '')
                     meta, clean_sql = extract_extended_metadata(
                         raw_sql, str(r_map['PROCESSLIST_USER']), str(r_map['PROCESSLIST_HOST'])
                     )
 
-                    # 2. XỬ LÝ TIME (Quan trọng nhất cho Rule Testing)
-                    # Nếu kịch bản có TS, dùng TS đó. Nếu không, tính từ hệ thống.
+                    # 2. Xử lý Time
                     if meta["sim_ts"]:
                         ts_iso = meta["sim_ts"]
                     else:
                         t_start = float(r_map['TIMER_START'] or 0)
                         ts_iso = (boot_time + timedelta(seconds=t_start/1e12)).isoformat().replace("+00:00", "Z")
 
-                    # Tính toán Feature
+                    # 3. Tính toán Feature
                     entropy = calculate_entropy(clean_sql)
                     sql_up = clean_sql.upper()
                     
@@ -281,13 +272,11 @@ def process_logs():
                     
                     # Lấy message gốc từ MySQL
                     raw_error_msg = str(r_map['MESSAGE_TEXT'] or "")
-                    
                     # Nếu có IP fake (từ tag), thì sửa lại message cho khớp
                     final_error_msg = raw_error_msg
                     if meta["sim_ip"] and raw_error_msg:
                         final_error_msg = spoof_error_message(raw_error_msg, meta["sim_ip"])
 
-                    # 3. Tạo Record
                     rec = {
                         "timestamp": ts_iso,
                         "event_id": int(r_map['EVENT_ID']),
@@ -311,13 +300,11 @@ def process_logs():
                         "rows_returned": rows_sent,
                         "rows_examined": rows_exam,
                         "rows_affected": int(r_map['ROWS_AFFECTED'] or 0),
-                        
                         "error_code": int(r_map['MYSQL_ERRNO'] or 0),
                         "error_message": final_error_msg,
                         "error_count": int(r_map['ERRORS'] or 0),
                         "has_error": 1 if int(r_map['ERRORS'] or 0) > 0 or int(r_map['MYSQL_ERRNO'] or 0) > 0 else 0,
                         "warning_count": int(r_map['WARNINGS'] or 0),
-                        
                         "created_tmp_disk_tables": int(r_map['CREATED_TMP_DISK_TABLES'] or 0),
                         "created_tmp_tables": int(r_map['CREATED_TMP_TABLES'] or 0),
                         "select_full_join": int(r_map['SELECT_FULL_JOIN'] or 0),
@@ -325,7 +312,6 @@ def process_logs():
                         "sort_merge_passes": int(r_map['SORT_MERGE_PASSES'] or 0),
                         "no_index_used": int(r_map['NO_INDEX_USED'] or 0),
                         "no_good_index_used": int(r_map['NO_GOOD_INDEX_USED'] or 0),
-                        
                         "connection_type": str(r_map['CONNECTION_TYPE'] or 'unknown'),
                         "thread_os_id": int(r_map['THREAD_OS_ID'] or 0),
                         "source_dbms": "MySQL",
@@ -334,32 +320,47 @@ def process_logs():
                     }
                     records.append(rec)
 
-                # 4. Save
+                # 4. GHI DỮ LIỆU 
                 if records:
+                    # BƯỚC A: Ghi CSV trước (Ưu tiên số 1)
+                    # Nếu ghi CSV lỗi -> Exception -> Loop thử lại.
                     with open(CSV_OUTPUT_FILE, 'a', newline='', encoding='utf-8') as f:
                         writer = csv.DictWriter(f, fieldnames=csv_headers, quoting=csv.QUOTE_ALL)
                         writer.writerows(records)
 
-                    if redis:
-                        pipe = redis.pipeline()
-                        for r in records:
-                            pipe.xadd(STREAM_KEY, {"data": json.dumps(r, ensure_ascii=False)})
-                        pipe.execute()
-                    
+                    # BƯỚC B: Đẩy Redis (Ưu tiên số 2)
+                    # Nếu Redis lỗi, ghi log nhưng KHÔNG crash, để code đi tiếp cập nhật State
+                    redis_status = "❌"
+                    if redis_client:
+                        try:
+                            pipe = redis_client.pipeline()
+                            for r in records:
+                                pipe.xadd(STREAM_KEY, {"data": json.dumps(r, ensure_ascii=False)})
+                            pipe.execute()
+                            redis_status = "✅"
+                        except Exception as e:
+                            logging.error(f"Redis Push Failed: {e}")
+                            # Thử kết nối lại cho lần sau
+                            try: redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+                            except: pass
+                    else:
+                        # Thử kết nối lại cho lần sau
+                        try: redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+                        except: pass
+
+                    # BƯỚC C: Cập nhật State (Chỉ khi CSV đã ghi thành công)
                     last_ts = batch_max
                     with open(STATE_FILE, 'w') as f: json.dump({"last_timestamp": last_ts}, f)
                     
                     total_collected += len(records)
-                    sys.stdout.write(f"\r📥 Total Collected: {total_collected} logs")
+                    sys.stdout.write(f"\r📥 Total Collected: {total_collected} logs | Redis: {redis_status}")
                     sys.stdout.flush()
+                    
                     if len(records) >= 5000: continue
-                
-                elif curr_max > last_ts:
-                    last_ts = curr_max
-                    with open(STATE_FILE, 'w') as f: json.dump({"last_timestamp": last_ts}, f)
 
         except Exception as e:
-            logging.error(f"Error: {e}"); time.sleep(5)
+            logging.error(f"Critical Error in main loop: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
     process_logs()

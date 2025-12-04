@@ -1,3 +1,4 @@
+// uba_frontend/src/pages/AnomalyTriage.jsx
 import React, { useState } from 'react'
 import { useAnomalyKpis, useAnomalyFacets, useAnomalySearch } from '@/api/queries'
 import { AnomalyDetailModal } from '@/components/AnomalyDetailModal'
