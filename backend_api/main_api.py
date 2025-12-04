@@ -124,14 +124,76 @@ def _apply_common_filters(q, user: Optional[str], anomaly_type: Optional[str],
     return q
 
 # --- Stats: đếm đúng 3 con số ---
-@app.get("/api/anomalies/stats", response_model=schemas.AnomalyStats, tags=["Anomalies"])
+@app.get("/api/anomalies/stats", response_model=Dict[str, Any], tags=["Anomalies"])
 def anomaly_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+    # 1. Giữ nguyên logic cũ: Đếm tổng
     event_count = db.query(func.count(models.Anomaly.id)).scalar() or 0
     agg_count   = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
+    total_anomalies = int(event_count + agg_count)
+
+    # 2. THÊM MỚI: Tính Critical Alerts (Ví dụ: những log có score >= 0.8)
+    # Backend tự lọc và đếm luôn, Frontend chỉ việc hiển thị số
+    crit_events = db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.score >= 0.8).scalar() or 0
+    crit_aggs   = db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.severity >= 0.8).scalar() or 0
+    critical_alerts = int(crit_events + crit_aggs)
+
+    # 3. THÊM MỚI: Tìm Riskiest User (User xuất hiện nhiều nhất trong bảng Anomaly)
+    # Dùng SQL sắp xếp giảm dần theo số lượng và lấy người đầu tiên (LIMIT 1)
+    top_user = (
+        db.query(models.Anomaly.user, func.count(models.Anomaly.id))
+        .filter(models.Anomaly.user.isnot(None))
+        .group_by(models.Anomaly.user)
+        .order_by(func.count(models.Anomaly.id).desc())
+        .first()
+    )
+    riskiest_user = top_user[0] if top_user else "N/A"
+
+    # 4. THÊM MỚI: Chart Data (Dữ liệu biểu đồ)
+    # Lấy timestamp của 1000 log gần nhất để phân bố vào các khung giờ
+    recent_logs = (
+        db.query(models.Anomaly.timestamp)
+        .order_by(models.Anomaly.timestamp.desc())
+        .limit(1000)
+        .all()
+    )
+    
+    # Tạo khung 24 giờ: {"0:00": 0, "1:00": 0, ...}
+    hours_count = {f"{i}:00": 0 for i in range(24)}
+    
+    for log in recent_logs:
+        if log.timestamp:
+            h = log.timestamp.hour # Lấy giờ (0-23)
+            hours_count[f"{h}:00"] += 1
+            
+    # Chuyển đổi sang format danh sách để Frontend dễ vẽ biểu đồ
+    chart_data = [{"name": k, "anomalies": v} for k, v in hours_count.items()]
+    # Sắp xếp lại từ 0h đến 23h
+    chart_data.sort(key=lambda x: int(x["name"].split(":")[0]))
+    
+    # 5. THÊM MỚI: Lấy 5 log mới nhất cho danh sách bên phải
+    latest_rows = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).limit(5).all()
+    
+    latest_logs = []
+    for r in latest_rows:
+        latest_logs.append({
+            "timestamp": r.timestamp,
+            "user": r.user,
+            "anomaly_type": r.anomaly_type,
+            "score": r.score
+        })
+
+    # Trả về kết quả đầy đủ cho Frontend
     return {
+        "totalAnomalies": total_anomalies, 
+        "criticalAlerts": critical_alerts, 
+        "riskiestUser": riskiest_user,      
+        "chartData": chart_data, 
+        "latestLogs": latest_logs,
+        
+        # Giữ lại các trường cũ (nếu có chỗ khác dùng thì không bị lỗi)
         "event_count": int(event_count),
         "aggregate_count": int(agg_count),
-        "total_count": int(event_count + agg_count),
+        "total_count": int(total_anomalies),
     }
 
 # NEW: /api/anomalies/type-stats
@@ -173,8 +235,9 @@ def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_
 
     k_late   = ev_count("late_night") + agg_count("late_night")
     k_dump   = ev_count(["dump", "large_dump"]) + agg_count(["dump", "large_dump"])
-    k_multi  = ev_count("multi_table") + agg_count("multi_table")
-    k_sens   = ev_count(["sensitive","sensitive_access"]) + agg_count(["sensitive","sensitive_access"])
+    k_multi  = ev_count(["multi_table", "multi_table_access"]) + agg_count(["multi_table", "multi_table_access"])
+    k_sens   = ev_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access"]) + \
+               agg_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access"])
     k_prof   = ev_count(["user_time","profile_deviation"]) + agg_count(["user_time","profile_deviation"])
 
     total = (db.query(func.count(models.Anomaly.id)).scalar() or 0) + \

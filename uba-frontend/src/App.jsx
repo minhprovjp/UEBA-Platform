@@ -1,4 +1,4 @@
-// src/App.jsx
+// uba_frontend/src/App.jsx
 import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import { Database, ShieldAlert, Settings, LayoutDashboard } from "lucide-react";
 
