@@ -1,6 +1,6 @@
 // uba_frontend/src/pages/AnomalyTriage.jsx
 import React, { useState } from 'react'
-import { useAnomalyKpis, useAnomalyFacets, useAnomalySearch } from '@/api/queries'
+import { useAnomalyKpis, useAnomalyFacets, useAnomalySearch, useAnalyzeMutation, useFeedbackMutation } from '@/api/queries'
 import { AnomalyDetailModal } from '@/components/AnomalyDetailModal'
 
 export default function AnomalyTriage() {
@@ -27,6 +27,9 @@ export default function AnomalyTriage() {
 
   const [selectedLog, setSelectedLog] = useState(null)
 
+  const analyzeMutation = useAnalyzeMutation();
+  const feedbackMutation = useFeedbackMutation();
+
   const toggleType = (t) =>
     setFilters(p => ({ ...p, anomaly_type: p.anomaly_type === t ? '' : t, pageIndex: 0 }))
 
@@ -44,16 +47,56 @@ export default function AnomalyTriage() {
     return s != null ? s.toFixed(2) : '—'
   }
 
+  // 3. Hàm xử lý khi bấm nút "Phân tích AI"
+  const handleAnalyze = () => {
+    if (!selectedLog) return;
+    
+    analyzeMutation.mutate(selectedLog, {
+      onSuccess: (res) => {
+        // Backend trả về: { first_analysis, final_analysis, ... }
+        // Ta cập nhật vào state đang mở để Modal hiển thị ngay lập tức
+        setSelectedLog(prev => ({
+          ...prev,
+          // Ưu tiên lấy final_analysis, nếu không có thì lấy toàn bộ res.data
+          aiAnalysis: res.data.final_analysis || res.data
+        }));
+      }
+    });
+  };
+
+  // 4. Hàm xử lý Feedback (Đánh dấu đúng/sai)
+  const handleFeedback = (label) => {
+    if (!selectedLog) return;
+    feedbackMutation.mutate(
+      { label, anomaly_data: selectedLog },
+      { onSuccess: () => setSelectedLog(null) } // Đóng modal sau khi feedback xong
+    );
+  };
+
   return (
     // min-h-0 để con có thể cuộn trong layout flex (không kéo cả trang)
     <div className="h-full min-h-0 flex flex-col gap-4 overflow-hidden">
       {/* KPI: bấm để lọc theo rule (bấm lần 2 để bỏ lọc) */}
-      <div className="grid grid-cols-6 gap-4 shrink-0">
+      <div className="grid grid-cols-8 gap-4 shrink-0">
         <KpiCard title="Late-night"        value={kpis?.late_night ?? '—'}       active={filters.anomaly_type==='late_night'} onClick={()=>toggleType('late_night')} />
         <KpiCard title="Large dump"        value={kpis?.large_dump ?? '—'}       active={filters.anomaly_type==='dump'}       onClick={()=>toggleType('dump')} />
-        <KpiCard title="Multi-table"       value={kpis?.multi_table ?? '—'}      active={filters.anomaly_type==='multi_table'}onClick={()=>toggleType('multi_table')} />
+        <KpiCard title="Machine Learning"       value={kpis?.multi_table ?? '—'}      active={filters.anomaly_type==='ml'}onClick={()=>toggleType('ml')} />
         <KpiCard title="Sensitive access"  value={kpis?.sensitive_access ?? '—'} active={filters.anomaly_type==='sensitive'}  onClick={()=>toggleType('sensitive')} />
         <KpiCard title="Profile deviation" value={kpis?.profile_deviation ?? '—'}active={filters.anomaly_type==='user_time'}  onClick={()=>toggleType('user_time')} />
+        <KpiCard 
+            title="SQL Injection" 
+            value={kpis?.sqli ?? '—'} 
+            active={filters.anomaly_type==='sqli'} 
+            onClick={()=>toggleType('sqli')} 
+            // (Tuỳ chọn) Thêm màu đỏ cảnh báo nếu muốn
+            className={filters.anomaly_type==='sqli' ? "border-red-500 bg-red-900/20" : ""}
+        />
+        <KpiCard 
+            title="Privilege Esc" 
+            value={kpis?.privilege ?? '—'} 
+            active={filters.anomaly_type==='privilege'} 
+            onClick={()=>toggleType('privilege')} 
+        />
         <KpiCard title="TOTAL"             value={kpis?.total ?? '—'}            active={!filters.anomaly_type}                onClick={()=>toggleType('')} />
       </div>
 
@@ -163,10 +206,10 @@ export default function AnomalyTriage() {
         isOpen={!!selectedLog}
         onClose={() => setSelectedLog(null)}
         log={selectedLog}
-        onAnalyze={() => {}}
-        onFeedback={() => {}}
-        isAiLoading={false}
-        isFeedbackLoading={false}
+        onAnalyze={handleAnalyze}       
+        onFeedback={handleFeedback}
+        isAiLoading={analyzeMutation.isPending}
+        isFeedbackLoading={feedbackMutation.isPending}
       />
     </div>
   )

@@ -54,7 +54,7 @@ class LLMProvider(ABC):
 class OllamaProvider(LLMProvider):
     """Ollama local LLM provider"""
     
-    def __init__(self, host: str = "http://localhost:11434", timeout: int = 3600):
+    def __init__(self, host: str = "http://100.92.147.73:11434", timeout: int = 3600):
         self.host = host
         self.timeout = timeout
         self.client = None
@@ -163,7 +163,7 @@ class OllamaProvider(LLMProvider):
         except Exception as e:
             return {"status": "error", "error": str(e)}
     
-    def analyze(self, prompt: str, model: str = "seneca:latest", **kwargs) -> Dict[str, Any]:
+    def analyze(self, prompt: str, model: str = "qwen2.5-coder:32b", **kwargs) -> Dict[str, Any]:
         """Send analysis request to Ollama"""
         if not self.client:
             raise ConnectionError("Ollama client not connected")
@@ -332,7 +332,7 @@ class LLMManager:
         if llm_config.get('enable_ollama', True):
             try:
                 ollama_provider = OllamaProvider(
-                    host=llm_config.get('ollama_host', 'http://localhost:11434'),
+                    host=llm_config.get('ollama_host', 'http://100.92.147.73:11434'),
                     timeout=llm_config.get('ollama_timeout', 3600)
                 )
                 self.providers.append(ollama_provider)

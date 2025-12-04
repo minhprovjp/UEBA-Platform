@@ -170,17 +170,56 @@ def anomaly_stats(db: Session = Depends(get_db), api_key: str = Security(get_api
     # Sắp xếp lại từ 0h đến 23h
     chart_data.sort(key=lambda x: int(x["name"].split(":")[0]))
     
-    # 5. THÊM MỚI: Lấy 5 log mới nhất cho danh sách bên phải
-    latest_rows = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).limit(5).all()
+    ml_types = ["user_time", "profile_deviation", "ml_anomaly","ml"]
+
+    # 5a. Lấy log từ bảng Events (nơi chứa user_time)
+    recent_events = (
+        db.query(models.Anomaly)
+        .filter(models.Anomaly.anomaly_type.in_(ml_types)) # <--- CHỈ LẤY ML
+        .order_by(models.Anomaly.timestamp.desc())
+        .limit(50) 
+        .all()
+    )
     
-    latest_logs = []
-    for r in latest_rows:
-        latest_logs.append({
+    # 5b. Lấy log từ bảng Aggregate (nơi chứa multi_table)
+    # Vì multi_table KHÔNG nằm trong danh sách ml_types, nó sẽ tự động bị loại bỏ
+    recent_aggs = (
+        db.query(models.AggregateAnomaly)
+        .filter(models.AggregateAnomaly.anomaly_type.in_(ml_types)) # <--- CHỈ LẤY ML
+        .order_by(models.AggregateAnomaly.created_at.desc())
+        .limit(50) 
+        .all()
+    )
+
+    # 5c. Hợp nhất (Logic giữ nguyên)
+    unified_logs = []
+    
+    for r in recent_events:
+        unified_logs.append({
+            "id": f"evt-{r.id}",
             "timestamp": r.timestamp,
             "user": r.user,
             "anomaly_type": r.anomaly_type,
-            "score": r.score
+            "score": r.score, 
+            "source": "event"
         })
+        
+    for r in recent_aggs:
+        ts = r.end_time or r.start_time or r.created_at
+        unified_logs.append({
+            "id": f"agg-{r.id}",
+            "timestamp": ts,
+            "user": r.user,
+            "anomaly_type": r.anomaly_type,
+            "score": r.severity,
+            "source": "aggregate"
+        })
+
+    # 5d. Sắp xếp lại theo thời gian giảm dần
+    unified_logs.sort(key=lambda x: x["timestamp"] if x["timestamp"] else datetime.min, reverse=True)
+
+    # 5e. Trả về kết quả
+    latest_logs = unified_logs[:50]
 
     # Trả về kết quả đầy đủ cho Frontend
     return {
@@ -236,9 +275,11 @@ def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_
     k_late   = ev_count("late_night") + agg_count("late_night")
     k_dump   = ev_count(["dump", "large_dump"]) + agg_count(["dump", "large_dump"])
     k_multi  = ev_count(["multi_table", "multi_table_access"]) + agg_count(["multi_table", "multi_table_access"])
-    k_sens   = ev_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access"]) + \
+    k_sens   = ev_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access", "analyze_sensitive_access"]) + \
                agg_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access"])
     k_prof   = ev_count(["user_time","profile_deviation"]) + agg_count(["user_time","profile_deviation"])
+    k_sqli   = ev_count(["sqli", "anomalies_sqli"]) 
+    k_priv   = ev_count(["privilege", "anomalies_privilege"])
 
     total = (db.query(func.count(models.Anomaly.id)).scalar() or 0) + \
             (db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0)
@@ -249,6 +290,8 @@ def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_
         "multi_table": int(k_multi),
         "sensitive_access": int(k_sens),
         "profile_deviation": int(k_prof),
+        "sqli": int(k_sqli),
+        "privilege": int(k_priv),
         "total": int(total),
     }
 

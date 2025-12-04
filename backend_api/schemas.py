@@ -40,7 +40,7 @@ class UnifiedAnomaly(BaseModel):
     details: Optional[Dict[str, Any]] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class AnomalyStats(BaseModel):
     event_count: int

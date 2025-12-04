@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD
+from config import MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, SENSITIVE_TABLES_DEFAULT, ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
 from engine.features import enhance_features_batch
-from utils import (
+from engine.utils import (
     is_late_night_query, is_potential_large_dump,
     analyze_sensitive_access, check_unusual_user_activity_time,
     is_suspicious_function_used, is_privilege_change, get_normalized_query
@@ -45,84 +45,6 @@ BUFFER_FILE_PATH = os.path.join(MODELS_DIR, "training_buffer_cache.parquet")
 CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib") 
 
 os.makedirs(MODELS_DIR, exist_ok=True)
-
-
-# ==============================================================================
-# HELPER FUNCTIONS FOR IMPROVED MULTI-TABLE RULE
-# ==============================================================================
-
-def _evaluate_multi_table_severity(
-    table_count, 
-    has_sensitive, 
-    user, 
-    client_ip,
-    timestamp,
-    min_threshold,
-    allowed_users,
-    exempt_ips,
-    safe_start,
-    safe_end,
-    safe_days
-):
-    """
-    Evaluate the severity of multi-table access based on context.
-    
-    Returns: (should_flag: bool, severity: str, reason: str)
-    """
-    # Skip if below minimum threshold
-    if table_count < min_threshold:
-        return False, None, None
-    
-    # Skip whitelisted IPs
-    if client_ip and client_ip in exempt_ips:
-        return False, None, None
-    
-    # Check if outside safe hours
-    is_outside_hours = not (safe_start <= timestamp.hour < safe_end and timestamp.weekday() in safe_days)
-    
-    # Check if user is authorized for sensitive data
-    user_is_allowed = user in allowed_users if allowed_users else False
-    
-    # Severity Logic
-    reasons = []
-    
-    # HIGH SEVERITY: Definite threat
-    if table_count >= 5 and has_sensitive and not user_is_allowed:
-        reasons.append(f"Accessed {table_count} tables including sensitive data")
-        reasons.append(f"User '{user}' not authorized for sensitive access")
-        return True, "HIGH", " | ".join(reasons)
-    
-    # HIGH SEVERITY: Many tables + outside hours
-    if table_count >= 5 and is_outside_hours:
-        reasons.append(f"Accessed {table_count} tables outside safe hours")
-        if has_sensitive:
-            reasons.append("Includes sensitive tables")
-        return True, "HIGH", " | ".join(reasons)
-    
-    # MEDIUM SEVERITY: Sensitive data access by unauthorized user
-    if has_sensitive and not user_is_allowed:
-        reasons.append(f"Accessed {table_count} tables including sensitive data")
-        reasons.append(f"User '{user}' not in authorized list")
-        return True, "MEDIUM", " | ".join(reasons)
-    
-    # MEDIUM SEVERITY: Multiple tables outside hours
-    if table_count >= min_threshold and is_outside_hours:
-        reasons.append(f"Accessed {table_count} tables outside safe hours ({timestamp.strftime('%H:%M')})")
-        return True, "MEDIUM", " | ".join(reasons)
-    
-    # LOW SEVERITY: Just above threshold, no other red flags
-    # BUT: Don't flag if user is authorized and it's during safe hours
-    if table_count >= min_threshold:
-        # Skip if authorized user during safe hours (even with sensitive tables)
-        if user_is_allowed and not is_outside_hours:
-            return False, None, None
-            
-        reasons.append(f"Accessed {table_count} distinct tables in short time window")
-        if has_sensitive:
-            reasons.append("Includes sensitive tables")
-        return True, "LOW", " | ".join(reasons)
-    
-    return False, None, None
 
 
 class ProductionUBAEngine:
@@ -468,8 +390,8 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     p_known_large_tables = rules_config.get('p_known_large_tables', [])
     p_time_window_minutes = int(rules_config.get('p_time_window_minutes', 5))
     p_min_distinct_tables = int(rules_config.get('p_min_distinct_tables', 3))
-    p_sensitive_tables = rules_config.get('p_sensitive_tables', [])
-    p_allowed_users_sensitive = rules_config.get('p_allowed_users_sensitive', [])
+    p_sensitive_tables = rules_config.get('p_sensitive_tables', []) or SENSITIVE_TABLES_DEFAULT
+    p_allowed_users_sensitive = rules_config.get('p_allowed_users_sensitive', []) or ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
     p_safe_hours_start = int(rules_config.get('p_safe_hours_start', 8))
     p_safe_hours_end = int(rules_config.get('p_safe_hours_end', 18))
     p_safe_weekdays = rules_config.get('p_safe_weekdays', [0, 1, 2, 3, 4])
@@ -489,111 +411,84 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     )
     anomalies_large_dump = df_logs[df_logs['is_potential_dump']].copy()
 
-    # Rule 3: Multi-table in short window (IMPROVED with context-awareness and whitelisting)
+    # ---------------------------------------------------------
+    # Rule 3: Multi-table in short window (ĐÃ SỬA LỖI ĐẾM KÝ TỰ)
+    # ---------------------------------------------------------
+    import ast
+
+    # Hàm biến chuỗi "['a', 'b']" thành list ['a', 'b']
+    def parse_list_safe(x):
+        if isinstance(x, list): return x
+        if isinstance(x, str):
+            try: return ast.literal_eval(x)
+            except: return []
+        return []
+
+    # Parse cột accessed_tables TRƯỚC khi xử lý
+    # Lưu ý: Đảm bảo cột accessed_tables tồn tại trong df_logs
+    df_logs['accessed_tables_parsed'] = df_logs['accessed_tables'].apply(parse_list_safe)
+
     anomalies_multiple_tables_list = []
     window = pd.Timedelta(minutes=p_time_window_minutes)
-    
-    # Get whitelist configuration
-    whitelists = rules_config.get('whitelists', {})
-    exempt_users = whitelists.get('multi_table_exempt_users', [])
-    exempt_ips = whitelists.get('multi_table_exempt_ips', [])
-    
+
     for user, group in df_logs.groupby('user', observed=False):
         if len(group) < 2: continue
-        
-        # Skip whitelisted users
-        if user in exempt_users:
-            continue
-            
         group = group.sort_values('timestamp').reset_index(drop=True)
+        
         session_tables = set()
         session_queries = []
         start_time = group.iloc[0]['timestamp']
-        session_has_sensitive = False
-        session_client_ip = None
 
         for _, row in group.iterrows():
-            tables = set(row.get('accessed_tables', []))
-            client_ip = row.get('client_ip')
+            # QUAN TRỌNG: Dùng cột đã parse
+            current_tables = row['accessed_tables_parsed']
+            if not current_tables: continue
             
-            # Track if any sensitive table is accessed
-            for table in tables:
-                table_name = table.split('.')[-1].lower()
-                if table_name in [st.lower() for st in p_sensitive_tables]:
-                    session_has_sensitive = True
-            
+            tables = set(current_tables)
+
             if (row['timestamp'] - start_time) > window:
-                # Only flag if it meets severity criteria
-                should_flag, severity, reason = _evaluate_multi_table_severity(
-                    len(session_tables), 
-                    session_has_sensitive,
-                    user,
-                    session_client_ip,
-                    start_time,
-                    p_min_distinct_tables,
-                    p_allowed_users_sensitive,
-                    exempt_ips,
-                    p_safe_hours_start,
-                    p_safe_hours_end,
-                    p_safe_weekdays
-                )
-                
-                if should_flag:
+                # Kiểm tra session cũ
+                if len(session_tables) >= p_min_distinct_tables:
                     anomalies_multiple_tables_list.append({
                         'user': user,
-                        'client_ip': session_client_ip,
                         'start_time': start_time,
                         'end_time': session_queries[-1]['timestamp'],
                         'distinct_tables_count': len(session_tables),
                         'tables_accessed_in_session': sorted(list(session_tables)),
-                        'has_sensitive_table': session_has_sensitive,
-                        'severity': severity,
-                        'reason': reason,
-                        'queries_details': session_queries
+                        'queries_details': session_queries,
+                        # Các trường bắt buộc cho AggregateAnomaly
+                        'anomaly_type': 'multi_table_access',
+                        'severity': 0.8,
+                        'reason': f"Accessed {len(session_tables)} distinct tables in short window",
+                        'scope': 'session',
+                        'database': row.get('database', 'unknown'),
+                        'details': {"tables": sorted(list(session_tables))}
                     })
-                    
-                # Reset session
+                # Reset
                 session_tables = tables
-                session_queries = [{'timestamp': row['timestamp'], 'query': row['query'], 'tables_touched': list(tables)}]
+                session_queries = [{'timestamp': row['timestamp'], 'query': row['query']}]
                 start_time = row['timestamp']
-                session_has_sensitive = any(t.split('.')[-1].lower() in [st.lower() for st in p_sensitive_tables] for t in tables)
-                session_client_ip = client_ip
             else:
                 session_tables.update(tables)
-                session_queries.append({'timestamp': row['timestamp'], 'query': row['query'], 'tables_touched': list(tables)})
-                if not session_client_ip:
-                    session_client_ip = client_ip
-                    
-        # Check final session
+                session_queries.append({'timestamp': row['timestamp'], 'query': row['query']})
+        
+        # Kiểm tra session cuối cùng
         if len(session_tables) >= p_min_distinct_tables:
-            should_flag, severity, reason = _evaluate_multi_table_severity(
-                len(session_tables), 
-                session_has_sensitive,
-                user,
-                session_client_ip,
-                start_time,
-                p_min_distinct_tables,
-                p_allowed_users_sensitive,
-                exempt_ips,
-                p_safe_hours_start,
-                p_safe_hours_end,
-                p_safe_weekdays
-            )
+            anomalies_multiple_tables_list.append({
+                'user': user,
+                'start_time': start_time,
+                'end_time': session_queries[-1]['timestamp'],
+                'distinct_tables_count': len(session_tables),
+                'tables_accessed_in_session': sorted(list(session_tables)),
+                'queries_details': session_queries,
+                'anomaly_type': 'multi_table_access',
+                'severity': 0.8,
+                'reason': f"Accessed {len(session_tables)} distinct tables in short window",
+                'scope': 'session',
+                'database': session_queries[0].get('database', 'unknown') if session_queries else 'unknown',
+                'details': {"tables": sorted(list(session_tables))}
+            })
             
-            if should_flag:
-                anomalies_multiple_tables_list.append({
-                    'user': user,
-                    'client_ip': session_client_ip,
-                    'start_time': start_time,
-                    'end_time': session_queries[-1]['timestamp'],
-                    'distinct_tables_count': len(session_tables),
-                    'tables_accessed_in_session': sorted(list(session_tables)),
-                    'has_sensitive_table': session_has_sensitive,
-                    'severity': severity,
-                    'reason': reason,
-                    'queries_details': session_queries
-                })
-                
     anomalies_multiple_tables_df = pd.DataFrame(anomalies_multiple_tables_list)
 
     # Rule 4: Sensitive access
@@ -633,50 +528,50 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     anomalies_privilege = df_logs[df_logs['is_privilege_change'] == True].copy()
 
 
-    # ========================================================
-    # CHUẨN BỊ DỮ LIỆU ACTIVE RESPONSE
-    # ========================================================
-    users_to_lock_list = []
-    # 1. Thu thập tất cả các vi phạm
-    list_of_violation_dfs = []
+    # # ========================================================
+    # # CHUẨN BỊ DỮ LIỆU ACTIVE RESPONSE
+    # # ========================================================
+    # users_to_lock_list = []
+    # # 1. Thu thập tất cả các vi phạm
+    # list_of_violation_dfs = []
 
-    # Các vi phạm dạng "point-in-time"
-    point_in_time_anomalies = [
-        anomalies_late_night, anomalies_large_dump, anomalies_sensitive_access,
-        anomalies_unusual_user_time
-    ]
-    for df in point_in_time_anomalies:
-        if not df.empty and 'user' in df.columns and 'client_ip' in df.columns:
-            list_of_violation_dfs.append(df[['user', 'client_ip']])
+    # # Các vi phạm dạng "point-in-time"
+    # point_in_time_anomalies = [
+    #     anomalies_late_night, anomalies_large_dump, anomalies_sensitive_access,
+    #     anomalies_unusual_user_time
+    # ]
+    # for df in point_in_time_anomalies:
+    #     if not df.empty and 'user' in df.columns and 'client_ip' in df.columns:
+    #         list_of_violation_dfs.append(df[['user', 'client_ip']])
 
-    # Các vi phạm dạng "session" (multi_table)
-    if not anomalies_multiple_tables_df.empty:
-        session_violations = []
-        for _, row in anomalies_multiple_tables_df.iterrows():
-            user = row['user']
-            if row['queries_details']:
-                client_ip = row['queries_details'][0].get('client_ip')
-                if user and client_ip:
-                    session_violations.append({'user': user, 'client_ip': client_ip})
+    # # Các vi phạm dạng "session" (multi_table)
+    # if not anomalies_multiple_tables_df.empty:
+    #     session_violations = []
+    #     for _, row in anomalies_multiple_tables_df.iterrows():
+    #         user = row['user']
+    #         if row['queries_details']:
+    #             client_ip = row['queries_details'][0].get('client_ip')
+    #             if user and client_ip:
+    #                 session_violations.append({'user': user, 'client_ip': client_ip})
 
-        if session_violations:
-            list_of_violation_dfs.append(pd.DataFrame(session_violations))
+    #     if session_violations:
+    #         list_of_violation_dfs.append(pd.DataFrame(session_violations))
 
-    # 2. Tổng hợp, đếm và lọc các user vượt ngưỡng
-    if list_of_violation_dfs:
-        all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
+    # # 2. Tổng hợp, đếm và lọc các user vượt ngưỡng
+    # if list_of_violation_dfs:
+    #     all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
 
-        # Tổng hợp vi phạm THEO USER
-        user_violation_counts = all_violations_df.groupby('user').size().reset_index(name='total_violation_count')
+    #     # Tổng hợp vi phạm THEO USER
+    #     user_violation_counts = all_violations_df.groupby('user').size().reset_index(name='total_violation_count')
 
-        # Lọc ra các user vượt ngưỡng TỔNG
-        offenders = user_violation_counts[
-            user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD
-            ]
-        # Chuyển thành list dictionary để truyền đi
-        if not offenders.empty:
-            users_to_lock_list = offenders.to_dict('records')
-    # =============================================================
+    #     # Lọc ra các user vượt ngưỡng TỔNG
+    #     offenders = user_violation_counts[
+    #         user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD
+    #         ]
+    #     # Chuyển thành list dictionary để truyền đi
+    #     if not offenders.empty:
+    #         users_to_lock_list = offenders.to_dict('records')
+    # # =============================================================
 
     # Normal activities
     anomalous_indices = set(anomalies_ml.index)
@@ -698,7 +593,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         "anomalies_sqli": anomalies_sqli,
         "anomalies_privilege": anomalies_privilege,
         "normal_activities": normal_activities,
-        "users_to_lock": users_to_lock_list  # List [{'user': 'abc', 'total_violation_count': 5}]
+        # "users_to_lock": users_to_lock_list  # List [{'user': 'abc', 'total_violation_count': 5}]
     }
 
     logging.info(f"Processing complete. Total anomalies: {len(anomalous_indices)} / {len(df_logs)}")

@@ -44,7 +44,6 @@ def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
 def is_potential_large_dump(row, large_tables_list, threshold=1000):
     """
     Phát hiện hành vi dump dữ liệu lớn
-    ĐÃ FIX HOÀN TOÀN lỗi Series ambiguous
     """
     # DÙNG .at ĐỂ LẤY GIÁ TRỊ SCALAR — AN TOÀN 100%
     try:
@@ -77,7 +76,6 @@ def is_potential_large_dump(row, large_tables_list, threshold=1000):
 def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     """
     Kiểm tra xem danh sách các bảng bị truy cập có chứa bất kỳ bảng nhạy cảm nào không.
-    Hỗ trợ cả tên bảng đơn giản (users) và tên đầy đủ (mydb.users)
     """
     # Trả về False nếu đầu vào không phải là một danh sách.
     if not isinstance(accessed_tables_list, list): 
@@ -139,10 +137,17 @@ def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
     accessed_tables = row.get('accessed_tables', [])
     user = row.get('user')
     timestamp = row.get('timestamp')
+
+    if accessed_tables is None:
+        accessed_tables = []
     
-    # Debug logging (comment out after testing)
-    # if accessed_tables:
-    #     logging.debug(f"Checking tables: {accessed_tables} against sensitive: {sensitive_tables_list}")
+    # Nếu accessed_tables là chuỗi (do đọc từ CSV/DB lên), cần eval lại
+    if isinstance(accessed_tables, str):
+        try:
+            import ast
+            accessed_tables = ast.literal_eval(accessed_tables)
+        except:
+            accessed_tables = []
 
     is_sensitive_hit, specific_sensitive_tables = is_sensitive_table_accessed(accessed_tables, sensitive_tables_list)
 
@@ -171,7 +176,7 @@ def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
         anomaly_reasons.append("Truy cập ngoài giờ làm việc an toàn.")
 
     return {
-        "violation_reason": " ".join(anomaly_reasons),
+        "reason": " ".join(anomaly_reasons) + f" [Tables: {', '.join(specific_sensitive_tables)}]",
         "accessed_sensitive_tables_list": specific_sensitive_tables
     }
 

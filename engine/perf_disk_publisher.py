@@ -76,7 +76,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
     sql = text("""
         SELECT * FROM uba_db.uba_persistent_log 
         WHERE id > :lid 
-          AND (PROCESSLIST_USER IS NULL OR PROCESSLIST_USER NOT IN ('uba_user'))
+          AND (PROCESSLIST_USER IS NULL OR PROCESSLIST_USER NOT IN ('uba_user', 'root'))
           AND (CURRENT_SCHEMA IS NULL OR CURRENT_SCHEMA != 'uba_db')
           AND SQL_TEXT IS NOT NULL
           AND e.SQL_TEXT NOT LIKE '%UBA_EVENT%'
