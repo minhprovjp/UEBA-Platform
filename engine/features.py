@@ -172,6 +172,18 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
               "is_select_star", "has_into_outfile", "has_load_data", "has_sleep_benchmark"]:
         f[k] = 0
     f["accessed_tables"] = []
+    
+    # Fallback: Extract table names using regex if parser fails
+    # This ensures accessed_tables is populated even when sqlglot can't parse
+    tables_from_regex = set()
+    # Match: FROM/JOIN table_name or db.table_name
+    for match in re.finditer(r'(?:FROM|JOIN)\s+(?:`?(\w+)`?\.)?`?(\w+)`?', query, re.IGNORECASE):
+        db_name = match.group(1)
+        table_name = match.group(2)
+        if db_name:
+            tables_from_regex.add(f"{db_name.lower()}.{table_name.lower()}")
+        else:
+            tables_from_regex.add(table_name.lower())
 
     if parsed:
         cmd = parsed.key.upper() if hasattr(parsed, "key") else "UNKNOWN"
@@ -198,12 +210,22 @@ def extract_query_features(row: pd.Series) -> Dict[str, Any]:
         f["subquery_depth"] = min(depth, 10)
 
         tables_found = _extract_tables(parsed)
+        # Merge with regex fallback
+        tables_found = tables_found.union(tables_from_regex)
+        
         for full in tables_found:
             t_name = full.split('.')[-1]
             if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES: f["is_sensitive_access"] = 1
             db_part = full.split('.')[0] if '.' in full else ''
             if db_part in SYSTEM_SCHEMAS: f["is_system_access"] = 1
         f["accessed_tables"] = list(tables_found)
+    else:
+        # Parser failed - use regex fallback only
+        f["accessed_tables"] = list(tables_from_regex)
+        # Check sensitive tables even with regex results
+        for full in tables_from_regex:
+            t_name = full.split('.')[-1]
+            if full in SENSITIVE_TABLES or t_name in SENSITIVE_TABLES: f["is_sensitive_access"] = 1
 
     # 4. Regex Heuristics (Luôn chạy để backup khi parser fail hoặc SQLi obfucated)
     if "--" in query or "/*" in query or "#" in query: f["has_comment"] = 1

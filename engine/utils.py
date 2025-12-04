@@ -77,6 +77,7 @@ def is_potential_large_dump(row, large_tables_list, threshold=1000):
 def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     """
     Kiểm tra xem danh sách các bảng bị truy cập có chứa bất kỳ bảng nhạy cảm nào không.
+    Hỗ trợ cả tên bảng đơn giản (users) và tên đầy đủ (mydb.users)
     """
     # Trả về False nếu đầu vào không phải là một danh sách.
     if not isinstance(accessed_tables_list, list): 
@@ -87,8 +88,19 @@ def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
     
     # Lặp qua các bảng đã bị truy cập.
     for table in accessed_tables_list:
-        if table.lower() in sensitive_tables_lower:
-            accessed_sensitive.append(table)
+        table_lower = table.lower()
+        # Lấy tên bảng (bỏ phần database nếu có)
+        table_name_only = table_lower.split('.')[-1]
+        
+        # Kiểm tra cả tên đầy đủ và tên bảng đơn giản
+        for sensitive in sensitive_tables_lower:
+            sensitive_name_only = sensitive.split('.')[-1]
+            # Match nếu:
+            # 1. Tên đầy đủ khớp (mydb.users == mydb.users)
+            # 2. Tên bảng khớp (users == users hoặc mydb.users ends with users)
+            if table_lower == sensitive or table_name_only == sensitive_name_only:
+                accessed_sensitive.append(table)
+                break
             
     # Trả về một tuple: (True/False, danh_sách_bảng_nhạy_cảm_bị_truy_cập).
     return bool(accessed_sensitive), accessed_sensitive
@@ -127,6 +139,10 @@ def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
     accessed_tables = row.get('accessed_tables', [])
     user = row.get('user')
     timestamp = row.get('timestamp')
+    
+    # Debug logging (comment out after testing)
+    # if accessed_tables:
+    #     logging.debug(f"Checking tables: {accessed_tables} against sensitive: {sensitive_tables_list}")
 
     is_sensitive_hit, specific_sensitive_tables = is_sensitive_table_accessed(accessed_tables, sensitive_tables_list)
 
