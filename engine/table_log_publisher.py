@@ -107,6 +107,8 @@ def monitor_log_table(poll_interval_sec: int = 1):
             
             AND user_host NOT LIKE 'uba_user[%' 
             
+            AND query_text NOT LIKE '%UBA_EVENT%'
+            
         ORDER BY 
             event_time ASC
         LIMIT 5000; 

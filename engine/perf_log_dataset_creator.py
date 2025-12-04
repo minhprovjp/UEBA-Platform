@@ -217,14 +217,10 @@ def process_logs():
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_END > :last_ts
             AND e.SQL_TEXT IS NOT NULL
-            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+            AND e.SQL_TEXT NOT LIKE '%UBA_EVENT%'
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
             AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
             AND e.SQL_TEXT LIKE '%SIM_META%' 
-            AND e.SQL_TEXT != 'rollback'
-            AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
-            AND e.SQL_TEXT != '%version_comment%'
-            AND e.SQL_TEXT != '%auto_commit%'
         ORDER BY e.TIMER_END ASC 
         LIMIT 5000
     """)

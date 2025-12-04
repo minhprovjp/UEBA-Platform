@@ -147,22 +147,17 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_START > :last_timer
             AND e.SQL_TEXT IS NOT NULL
-            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
             AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
             AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
-            AND e.SQL_TEXT NOT LIKE '%uba_persistent_log%'
-            AND e.SQL_TEXT != 'rollback'
-            AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
-            AND e.SQL_TEXT NOT LIKE '%version_comment%'
-            AND e.SQL_TEXT != '%auto_commit%'
+            AND SQL_TEXT NOT LIKE '%UBA_EVENT%'
         ORDER BY e.TIMER_START ASC
         LIMIT 5000
     """)
 
     # Query kiểm tra Max Timer
-    check_max_sql = text(f"SELECT MAX(TIMER_START) FROM {TABLE_NAME}")
+    check_max_sql = text(f"SELECT MAX(TIMER_START) FROM performance_schema.events_statements_history_long WHERE 'UBA_EVENT' = 'UBA_EVENT'")
     # Query Uptime
-    uptime_sql = text("SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='UPTIME'")
+    uptime_sql = text("SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='UPTIME' AND 'UBA_EVENT' = 'UBA_EVENT'")
 
     while is_running:
         batch_start = time.time()
@@ -180,7 +175,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                     logging.warning(f"⚠️ DB Restart Detected (DB: {curr_max_timer} < Local: {last_timer}). Resetting state.")
                     last_timer = 0
                     write_last_timer(0)
-                    time.sleep(1)
+                    time.sleep(5)
                     continue
                 
                 # Nếu không có log mới

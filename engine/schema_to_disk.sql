@@ -174,7 +174,7 @@ DELIMITER ;
 -- ============================================================
 SET GLOBAL event_scheduler = ON;
 
--- 4.1. Event Ingest Data (Chạy mỗi 5s)
+-- 4.1. Event Ingest Data (Chạy mỗi 2s)
 DROP EVENT IF EXISTS flush_perf_schema_to_disk;
 DELIMITER $$
 CREATE EVENT flush_perf_schema_to_disk
@@ -192,21 +192,33 @@ BEGIN
     SET v_start_time = CURRENT_TIMESTAMP(6);
 
     -- 1. Quản lý trạng thái Server (Detect Restart)
-    SELECT VARIABLE_VALUE INTO v_current_uptime FROM performance_schema.global_status WHERE VARIABLE_NAME = 'UPTIME';
-    SELECT boot_time_anchor, last_uptime INTO v_boot_anchor, v_last_uptime FROM uba_server_state WHERE id = 1;
+    -- Gắn tag AND 'UBA_EVENT' = 'UBA_EVENT' vào cuối mỗi lệnh
+    SELECT VARIABLE_VALUE INTO v_current_uptime 
+    FROM performance_schema.global_status 
+    WHERE VARIABLE_NAME = 'UPTIME' AND 'UBA_EVENT' = 'UBA_EVENT';
 
-    -- Nếu restart hoặc clock drift quá lớn -> Cập nhật Anchor
-    IF v_current_uptime < v_last_uptime OR ABS(TIMESTAMPDIFF(SECOND, DATE_SUB(UTC_TIMESTAMP(6), INTERVAL v_current_uptime SECOND), v_boot_anchor)) > 60 THEN
+    SELECT boot_time_anchor, last_uptime INTO v_boot_anchor, v_last_uptime 
+    FROM uba_server_state WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
+
+    IF v_current_uptime < v_last_uptime 
+       OR ABS(TIMESTAMPDIFF(
+                SECOND, 
+                DATE_SUB(UTC_TIMESTAMP(6), INTERVAL v_current_uptime SECOND), 
+                v_boot_anchor)) > 60 
+    THEN
         SET v_boot_anchor = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL v_current_uptime SECOND);
     END IF;
-    
-    UPDATE uba_server_state SET boot_time_anchor = v_boot_anchor, last_uptime = v_current_uptime WHERE id = 1;
 
-    -- 2. Lấy điểm cắt thời gian (Optimization)
-    SELECT COALESCE(MAX(event_ts), '1970-01-01 00:00:00') INTO v_max_ts FROM uba_persistent_log;
+    UPDATE uba_server_state SET boot_time_anchor = v_boot_anchor, last_uptime = v_current_uptime WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
     
-    -- Đếm sơ bộ để tính metrics
-    SELECT COUNT(*) INTO v_rows_before FROM uba_persistent_log WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND);
+    -- 2. Lấy điểm cắt thời gian
+    SELECT COALESCE(MAX(event_ts), '1970-01-01 00:00:00') 
+    INTO v_max_ts 
+    FROM uba_persistent_log WHERE 'UBA_EVENT' = 'UBA_EVENT';
+
+    SELECT COUNT(*) INTO v_rows_before 
+    FROM uba_persistent_log 
+    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND) AND 'UBA_EVENT' = 'UBA_EVENT';
 
     -- 3. Insert Ignore (Core Logic)
     INSERT IGNORE INTO uba_persistent_log (
@@ -223,45 +235,53 @@ BEGIN
         e.THREAD_ID,
         e.TIMER_START,
         v_boot_anchor,
-        -- Tính Event TS
         DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND),
-        
-        -- Fingerprint Bất Biến: SHA2(BootAnchor | ThreadID | EventID | TimerStart)
         SHA2(CONCAT(v_boot_anchor, '|', e.THREAD_ID, '|', e.EVENT_ID, '|', e.TIMER_START), 256),
-        
         t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.CONNECTION_TYPE, t.THREAD_OS_ID,
-        e.CURRENT_SCHEMA, e.SQL_TEXT, e.DIGEST, e.DIGEST_TEXT, e.EVENT_NAME,
-        e.TIMER_WAIT, e.TIMER_END, e.LOCK_TIME, e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
+        e.CURRENT_SCHEMA, 
+        e.SQL_TEXT,
+        e.DIGEST, e.DIGEST_TEXT, e.EVENT_NAME,
+        e.TIMER_WAIT, e.TIMER_END, e.LOCK_TIME, 
+        e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
         e.MYSQL_ERRNO, e.MESSAGE_TEXT, e.ERRORS, e.WARNINGS,
         e.CREATED_TMP_DISK_TABLES, e.CREATED_TMP_TABLES, e.SELECT_FULL_JOIN,
         e.SELECT_SCAN, e.SORT_MERGE_PASSES, e.NO_INDEX_USED, e.NO_GOOD_INDEX_USED
     FROM performance_schema.events_statements_history_long e
     LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
     WHERE e.SQL_TEXT IS NOT NULL
-            AND e.SQL_TEXT NOT LIKE '%performance_schema%'
-            AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
-            AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
-            AND e.SQL_TEXT != 'rollback'
-            AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
-            AND e.SQL_TEXT != '%version_comment%'
-            AND e.SQL_TEXT != '%auto_commit%'
-      -- Lọc chồng lấn 10s để đảm bảo không sót
-      AND DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND) > (v_max_ts - INTERVAL 10 SECOND);
+      AND e.SQL_TEXT NOT LIKE '%UBA_EVENT%'    -- tránh tự bắt chính mình
+--       AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+	  AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER NOT IN ('uba_user'))
+      AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
+--       AND e.SQL_TEXT NOT LIKE '%rollback%'
+--       AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
+--       AND e.SQL_TEXT != '%version_comment%'
+--       AND e.SQL_TEXT != '%auto_commit%'
+--       AND e.EVENT_NAME != 'statement/sql/rollback'
+      AND e.EVENT_NAME NOT IN ('statement/sql/rollback', 'statement/sql/commit', 'statement/sql/set_option', 'statement/sql/xa_rollback')
+--       AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
+      AND DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND) 
+            > (v_max_ts - INTERVAL 10 SECOND)
+      AND 'UBA_EVENT' = 'UBA_EVENT';
+      
+    -- 4. Ghi Metrics
+    SELECT COUNT(*) INTO v_rows_after 
+    FROM uba_persistent_log 
+    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND) AND 'UBA_EVENT' = 'UBA_EVENT';
 
-    -- 4. Ghi Metrics (Optional)
-    SELECT COUNT(*) INTO v_rows_after FROM uba_persistent_log WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND);
-    
-    INSERT INTO uba_ingest_metrics (duration_ms, rows_inserted, rows_ignored)
-    VALUES (
-        TIMESTAMPDIFF(MICROSECOND, v_start_time, CURRENT_TIMESTAMP(6)) / 1000,
-        (v_rows_after - v_rows_before), 
-        0 
-    );
+    INSERT INTO uba_ingest_metrics (duration_ms, rows_inserted, rows_ignored) 
+	SELECT 
+		TIMESTAMPDIFF(MICROSECOND, v_start_time, CURRENT_TIMESTAMP(6)) / 1000,
+		(v_rows_after - v_rows_before), 
+		0 
+	FROM DUAL 
+	WHERE 'UBA_EVENT' = 'UBA_EVENT';
 
 END$$
 DELIMITER ;
 
--- 4.2. Event Maintenance (Chạy hàng ngày để tạo/xóa Partition)
+
+-- 4.2. Event Maintenance
 DROP EVENT IF EXISTS partition_maintenance;
 DELIMITER $$
 CREATE EVENT partition_maintenance
@@ -271,14 +291,14 @@ DO
 BEGIN
     DECLARE i INT DEFAULT 0;
     DECLARE pdate DATE;
+
     -- Tạo trước partition cho 3 ngày tới
-    WHILE i < 3 DO
+    WHILE i < 3 AND 'UBA_EVENT' = 'UBA_EVENT' DO
         SET pdate = DATE_ADD(UTC_DATE(), INTERVAL i DAY);
         CALL proc_add_daily_partition(pdate);
         SET i = i + 1;
     END WHILE;
     
-    -- Xóa partition cũ hơn 30 ngày (Retention Policy)
-    CALL proc_drop_partition_by_date(DATE_SUB(UTC_DATE(), INTERVAL 30 DAY));
+    CALL proc_drop_partition_by_date(DATE_SUB(UTC_DATE(), INTERVAL 30 DAY)) /*+ UBA_EVENT */;
 END$$
 DELIMITER ;
