@@ -8,6 +8,7 @@ việc kết nối đến một máy chủ SMTP và gửi email thông báo khi 
 hành vi bất thường.
 """
 
+# Import các thư viện cần thiết
 import smtplib  # Thư viện chính của Python để làm việc với giao thức SMTP
 from email.mime.text import MIMEText  # Dùng để tạo phần thân (body) của email dưới dạng văn bản thuần
 from email.mime.multipart import MIMEMultipart  # Dùng để tạo một email có thể chứa nhiều phần (ví dụ: text, file đính kèm)
@@ -65,10 +66,9 @@ def send_email_alert(subject,
         msg['From'] = formataddr(("ueba_system-noreply", sender_email))
         # Chỉ thêm trường 'To' vào header của email nếu có người nhận chính.
         if to_recipients:
-            msg['To'] = ', '.join(
-                to_recipients)
+            msg['To'] = ', '.join(to_recipients)  # Nối các địa chỉ email trong danh sách thành một chuỗi duy nhất, phân tách bằng dấu phẩy.
 
-        msg['Subject'] = subject
+        msg['Subject'] = subject  # Thiết lập tiêu đề cho email.
 
         # 1. Attach phần Text thuần (Fallback)
         part1 = MIMEText(text_content, 'plain')
@@ -77,7 +77,8 @@ def send_email_alert(subject,
         if html_content:
             part2 = MIMEText(html_content, 'html')
             msg.attach(part2)
-        # 3: Gửi email qua SMTP ---
+
+        # Bước 3: Gửi email qua SMTP
 
         # Kết hợp cả danh sách người nhận 'To' và 'BCC' lại với nhau.
         # Đây là danh sách đầy đủ mà hàm `send_message` sẽ gửi đến.
@@ -98,6 +99,7 @@ def send_email_alert(subject,
             # Header của email (msg['To']) sẽ chỉ hiển thị những người nhận chính.
             server.send_message(msg, to_addrs=all_recipients)
 
+        # Nếu tất cả các bước trên thành công, trả về True.
         return True
 
     # --- Bước 4: Xử lý các ngoại lệ (lỗi) có thể xảy ra ---

@@ -441,43 +441,6 @@ def update_config_file(new_configs: dict):
         return False, f"Lỗi khi lưu cấu hình: {e}"
 
 
-# ============================================================
-# ACTIVE RESPONSE AUDIT LOGGER
-# ============================================================
-
-# Cấu hình một logger riêng cho audit
-audit_logger = logging.getLogger('ActiveResponseAudit')
-audit_logger.setLevel(logging.INFO)
-audit_logger.propagate = False
-
-# Chỉ thêm handler nếu nó chưa có để tránh log lặp lại
-if not audit_logger.hasHandlers():
-    try:
-        # Sử dụng 'a' để ghi nối tiếp, 'utf-8'
-        file_handler = logging.FileHandler(ACTIVE_RESPONSE_AUDIT_LOG_PATH, mode='a', encoding='utf-8')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-        audit_logger.addHandler(file_handler)
-    except Exception as e:
-        print(f"LỖI: Không thể tạo file audit log tại {ACTIVE_RESPONSE_AUDIT_LOG_PATH}: {e}")
-
-def log_active_response_action(action: str, target: str, reason: str):
-    """
-    Ghi lại một hành động phản ứng chủ động vào file audit log.
-
-    Args:
-        action (str): Loại hành động (ví dụ: "LOCK_ACCOUNT", "KILL_SESSION").
-        target (str): Đối tượng bị tác động (ví dụ: "user@host", "Session 123").
-        reason (str): Lý do thực hiện.
-    """
-    try:
-        message = f"ACTION: {action} | TARGET: {target} | REASON: {reason}"
-        audit_logger.info(message)
-        for handler in audit_logger.handlers:
-            handler.flush()
-    except Exception as e:
-        print(f"[Active Response] Lỗi khi ghi audit log: {e}")
-
-
 def save_logs_to_parquet(records: list, source_dbms: str) -> int:
     if not records:
         return 0
@@ -519,3 +482,138 @@ def is_late_night(ts):
     if isinstance(ts, str):
         ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     return ts.hour <= 5 or ts.hour >= 23
+
+
+# ============================================================
+# ACTIVE RESPONSE AUDIT LOGGER
+# ============================================================
+
+# Cấu hình logger
+audit_logger = logging.getLogger('ActiveResponseAudit')
+audit_logger.setLevel(logging.INFO)
+audit_logger.propagate = False
+
+# Chỉ thêm handler nếu nó chưa có để tránh log lặp lại
+if not audit_logger.hasHandlers():
+    try:
+        # Sử dụng 'a' để ghi nối tiếp, 'utf-8'
+        file_handler = logging.FileHandler(ACTIVE_RESPONSE_AUDIT_LOG_PATH, mode='a', encoding='utf-8')
+        # Định dạng log: thời gian và nội dung
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+        audit_logger.addHandler(file_handler)
+    except Exception as e:
+        print(f"LỖI: Không thể tạo file audit log tại {ACTIVE_RESPONSE_AUDIT_LOG_PATH}: {e}")
+
+def log_active_response_action(action: str, target: str, reason: str):
+    """
+    Ghi lại một hành động phản ứng chủ động vào file audit log.
+
+    Args:
+        action (str): Loại hành động (ví dụ: "LOCK_ACCOUNT", "KILL_SESSION").
+        target (str): Đối tượng bị tác động (ví dụ: "user@host", "Session 123").
+        reason (str): Lý do thực hiện.
+    """
+    try:
+        message = f"ACTION: {action} | TARGET: {target} | REASON: {reason}"
+        audit_logger.info(message)
+        for handler in audit_logger.handlers:
+            handler.flush()
+    except Exception as e:
+        print(f"[Active Response] Lỗi khi ghi audit log: {e}")
+
+def generate_html_alert(violation_summary: list):
+    """
+    Tạo nội dung HTML cho email cảnh báo.
+    Args:
+        violation_summary: List các dict [{'title': 'Giờ Khuya', 'count': 4, 'time': '...', 'desc': '...'}]
+    """
+
+    # CSS Inline
+    html_template = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max_width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9; }}
+            .header {{ background-color: #d32f2f; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+            .alert-box {{ background-color: #fff; padding: 20px; border: 1px solid #ddd; border-top: none; border-radius: 0 0 5px 5px; }}
+            .stat-box {{ background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 15px; margin-bottom: 20px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            th {{ background-color: #f2f2f2; text-align: left; padding: 10px; border-bottom: 2px solid #ddd; font-size: 12px; text-transform: uppercase; color: #555; }}
+            td {{ padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 14px; }}
+            .severity-high {{ color: #d32f2f; font-weight: bold; }}
+            .footer {{ text-align: center; font-size: 12px; color: #777; margin-top: 20px; }}
+            .btn {{ display: inline-block; background-color: #d32f2f; color: white; padding: 10px 20px; text-decoration: none; border-radius: 3px; margin-top: 20px; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h2 style="margin:0;">🚨 Security Alert Triggered</h2>
+                <p style="margin:5px 0 0 0; font-size: 14px;">UEBA Detection System</p>
+            </div>
+
+            <div class="alert-box">
+                <p>The UEBA system has detected abnormal behaviors that require your attention.</p>
+
+                <div class="stat-box">
+                    <strong>Overview:</strong> Detected <strong>{len(violation_summary)}</strong> type/s of anomalies in the latest scan.
+                </div>
+
+                <table width="100%">
+                    <thead>
+                        <tr>
+                            <th>Anomaly Type</th>
+                            <th style="text-align: center;">Count</th>
+                            <th>Entity (User@IP)</th>
+                            <th>Occurrence (First - Last)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+
+    # Loop để tạo các dòng trong bảng
+    for item in violation_summary:
+        html_template += f"""
+            <tr>
+                <td>
+                    <span class="severity-high">{item['title']}</span><br>
+                    <span style="font-size: 11px; color: #777;">{item['desc']}</span>
+                </td>
+                <td style="text-align: center;"><strong>{item['count']}</strong></td>
+                <td style="font-size: 13px; color: #333;">
+                    {item['target_str']}
+                </td>
+                <td style="font-size: 13px; white-space: nowrap;">
+                    {item['time_range']}
+                </td>
+            </tr>
+        """
+    html_template += """
+                    </tbody>
+                </table>
+
+            </div>
+
+            <div class="footer" style="
+                margin-top: 25px;
+                text-align: center;
+                background: #f5f5f5;
+                padding: 15px 10px;
+                border-top: 2px solid #d0d0d0;
+                font-size: 12px;
+                font-style: italic;
+                color: #555;
+            ">
+                <p>
+                    This is an automated email from the UEBA Platform system.<br>
+                    Please do not reply to this email.
+                </p>
+            </div>
+
+        </div>
+    </body>
+    </html>
+    """
+    return html_template
