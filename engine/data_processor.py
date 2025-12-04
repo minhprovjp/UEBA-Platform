@@ -47,6 +47,84 @@ CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 
+# ==============================================================================
+# HELPER FUNCTIONS FOR IMPROVED MULTI-TABLE RULE
+# ==============================================================================
+
+def _evaluate_multi_table_severity(
+    table_count, 
+    has_sensitive, 
+    user, 
+    client_ip,
+    timestamp,
+    min_threshold,
+    allowed_users,
+    exempt_ips,
+    safe_start,
+    safe_end,
+    safe_days
+):
+    """
+    Evaluate the severity of multi-table access based on context.
+    
+    Returns: (should_flag: bool, severity: str, reason: str)
+    """
+    # Skip if below minimum threshold
+    if table_count < min_threshold:
+        return False, None, None
+    
+    # Skip whitelisted IPs
+    if client_ip and client_ip in exempt_ips:
+        return False, None, None
+    
+    # Check if outside safe hours
+    is_outside_hours = not (safe_start <= timestamp.hour < safe_end and timestamp.weekday() in safe_days)
+    
+    # Check if user is authorized for sensitive data
+    user_is_allowed = user in allowed_users if allowed_users else False
+    
+    # Severity Logic
+    reasons = []
+    
+    # HIGH SEVERITY: Definite threat
+    if table_count >= 5 and has_sensitive and not user_is_allowed:
+        reasons.append(f"Accessed {table_count} tables including sensitive data")
+        reasons.append(f"User '{user}' not authorized for sensitive access")
+        return True, "HIGH", " | ".join(reasons)
+    
+    # HIGH SEVERITY: Many tables + outside hours
+    if table_count >= 5 and is_outside_hours:
+        reasons.append(f"Accessed {table_count} tables outside safe hours")
+        if has_sensitive:
+            reasons.append("Includes sensitive tables")
+        return True, "HIGH", " | ".join(reasons)
+    
+    # MEDIUM SEVERITY: Sensitive data access by unauthorized user
+    if has_sensitive and not user_is_allowed:
+        reasons.append(f"Accessed {table_count} tables including sensitive data")
+        reasons.append(f"User '{user}' not in authorized list")
+        return True, "MEDIUM", " | ".join(reasons)
+    
+    # MEDIUM SEVERITY: Multiple tables outside hours
+    if table_count >= min_threshold and is_outside_hours:
+        reasons.append(f"Accessed {table_count} tables outside safe hours ({timestamp.strftime('%H:%M')})")
+        return True, "MEDIUM", " | ".join(reasons)
+    
+    # LOW SEVERITY: Just above threshold, no other red flags
+    # BUT: Don't flag if user is authorized and it's during safe hours
+    if table_count >= min_threshold:
+        # Skip if authorized user during safe hours (even with sensitive tables)
+        if user_is_allowed and not is_outside_hours:
+            return False, None, None
+            
+        reasons.append(f"Accessed {table_count} distinct tables in short time window")
+        if has_sensitive:
+            reasons.append("Includes sensitive tables")
+        return True, "LOW", " | ".join(reasons)
+    
+    return False, None, None
+
+
 class ProductionUBAEngine:
     def __init__(self):
         self.model = None
@@ -411,43 +489,111 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     )
     anomalies_large_dump = df_logs[df_logs['is_potential_dump']].copy()
 
-    # Rule 3: Multi-table in short window (dùng accessed_tables từ feature mới)
+    # Rule 3: Multi-table in short window (IMPROVED with context-awareness and whitelisting)
     anomalies_multiple_tables_list = []
     window = pd.Timedelta(minutes=p_time_window_minutes)
+    
+    # Get whitelist configuration
+    whitelists = rules_config.get('whitelists', {})
+    exempt_users = whitelists.get('multi_table_exempt_users', [])
+    exempt_ips = whitelists.get('multi_table_exempt_ips', [])
+    
     for user, group in df_logs.groupby('user', observed=False):
         if len(group) < 2: continue
+        
+        # Skip whitelisted users
+        if user in exempt_users:
+            continue
+            
         group = group.sort_values('timestamp').reset_index(drop=True)
         session_tables = set()
         session_queries = []
         start_time = group.iloc[0]['timestamp']
+        session_has_sensitive = False
+        session_client_ip = None
 
         for _, row in group.iterrows():
             tables = set(row.get('accessed_tables', []))
+            client_ip = row.get('client_ip')
+            
+            # Track if any sensitive table is accessed
+            for table in tables:
+                table_name = table.split('.')[-1].lower()
+                if table_name in [st.lower() for st in p_sensitive_tables]:
+                    session_has_sensitive = True
+            
             if (row['timestamp'] - start_time) > window:
-                if len(session_tables) >= p_min_distinct_tables:
+                # Only flag if it meets severity criteria
+                should_flag, severity, reason = _evaluate_multi_table_severity(
+                    len(session_tables), 
+                    session_has_sensitive,
+                    user,
+                    session_client_ip,
+                    start_time,
+                    p_min_distinct_tables,
+                    p_allowed_users_sensitive,
+                    exempt_ips,
+                    p_safe_hours_start,
+                    p_safe_hours_end,
+                    p_safe_weekdays
+                )
+                
+                if should_flag:
                     anomalies_multiple_tables_list.append({
                         'user': user,
+                        'client_ip': session_client_ip,
                         'start_time': start_time,
                         'end_time': session_queries[-1]['timestamp'],
                         'distinct_tables_count': len(session_tables),
                         'tables_accessed_in_session': sorted(list(session_tables)),
+                        'has_sensitive_table': session_has_sensitive,
+                        'severity': severity,
+                        'reason': reason,
                         'queries_details': session_queries
                     })
+                    
+                # Reset session
                 session_tables = tables
                 session_queries = [{'timestamp': row['timestamp'], 'query': row['query'], 'tables_touched': list(tables)}]
                 start_time = row['timestamp']
+                session_has_sensitive = any(t.split('.')[-1].lower() in [st.lower() for st in p_sensitive_tables] for t in tables)
+                session_client_ip = client_ip
             else:
                 session_tables.update(tables)
                 session_queries.append({'timestamp': row['timestamp'], 'query': row['query'], 'tables_touched': list(tables)})
+                if not session_client_ip:
+                    session_client_ip = client_ip
+                    
+        # Check final session
         if len(session_tables) >= p_min_distinct_tables:
-            anomalies_multiple_tables_list.append({
-                'user': user,
-                'start_time': start_time,
-                'end_time': session_queries[-1]['timestamp'],
-                'distinct_tables_count': len(session_tables),
-                'tables_accessed_in_session': sorted(list(session_tables)),
-                'queries_details': session_queries
-            })
+            should_flag, severity, reason = _evaluate_multi_table_severity(
+                len(session_tables), 
+                session_has_sensitive,
+                user,
+                session_client_ip,
+                start_time,
+                p_min_distinct_tables,
+                p_allowed_users_sensitive,
+                exempt_ips,
+                p_safe_hours_start,
+                p_safe_hours_end,
+                p_safe_weekdays
+            )
+            
+            if should_flag:
+                anomalies_multiple_tables_list.append({
+                    'user': user,
+                    'client_ip': session_client_ip,
+                    'start_time': start_time,
+                    'end_time': session_queries[-1]['timestamp'],
+                    'distinct_tables_count': len(session_tables),
+                    'tables_accessed_in_session': sorted(list(session_tables)),
+                    'has_sensitive_table': session_has_sensitive,
+                    'severity': severity,
+                    'reason': reason,
+                    'queries_details': session_queries
+                })
+                
     anomalies_multiple_tables_df = pd.DataFrame(anomalies_multiple_tables_list)
 
     # Rule 4: Sensitive access
