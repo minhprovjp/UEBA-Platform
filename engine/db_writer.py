@@ -8,6 +8,7 @@ import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 import json
 import numpy as np
+import uuid
 
 # Đảm bảo import backend_api khi chạy từ project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,6 +26,34 @@ if not log.hasHandlers():
     handler.setFormatter(formatter)
     log.addHandler(handler)
 log.setLevel(logging.INFO)
+
+# Parquet output directory
+PARQUET_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
+os.makedirs(PARQUET_OUTPUT_DIR, exist_ok=True)
+
+# ========= PARQUET EXPORT HELPER =========
+
+def save_to_parquet(df: pd.DataFrame, prefix: str):
+    """Save DataFrame to Parquet file with timestamp and unique ID"""
+    if df is None or df.empty:
+        return
+    
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        unique_id = str(uuid.uuid4())[:8]
+        filename = f"{prefix}_{timestamp}_{unique_id}.parquet"
+        filepath = os.path.join(PARQUET_OUTPUT_DIR, filename)
+        
+        # Convert timestamp columns to string for Parquet compatibility
+        df_export = df.copy()
+        for col in df_export.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_export[col]):
+                df_export[col] = df_export[col].astype(str)
+        
+        df_export.to_parquet(filepath, engine='pyarrow', compression='snappy', index=False)
+        log.info(f"💾 Saved {len(df)} records to {filename}")
+    except Exception as e:
+        log.error(f"Failed to save Parquet file {prefix}: {e}")
 
 # ========= SAFE CONVERSION HELPERS =========
 
@@ -239,6 +268,9 @@ def save_results_to_db(results: Dict[str, Any]):
         records.append(rec)
 
     if records:
+        # Save to Parquet before PostgreSQL
+        save_to_parquet(pd.DataFrame(records), "AllLogs")
+        
         try:
             with SessionLocal() as db:
                 db.bulk_insert_mappings(AllLogs, records)
@@ -286,6 +318,9 @@ def save_results_to_db(results: Dict[str, Any]):
                 anomaly_records.append(rec)
 
         if anomaly_records:
+            # Save to Parquet before PostgreSQL
+            save_to_parquet(pd.DataFrame(anomaly_records), "Anomalies")
+            
             try:
                 with SessionLocal() as db:
                     db.bulk_insert_mappings(Anomaly, anomaly_records)
@@ -318,6 +353,9 @@ def save_results_to_db(results: Dict[str, Any]):
                 })
 
             if agg_records:
+                # Save to Parquet before PostgreSQL
+                save_to_parquet(pd.DataFrame(agg_records), "AggregateAnomalies")
+                
                 try:
                     with SessionLocal() as db:
                         db.bulk_insert_mappings(AggregateAnomaly, agg_records)

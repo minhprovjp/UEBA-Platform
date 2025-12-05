@@ -275,7 +275,7 @@ def start_engine():
                 consumername=REDIS_CONSUMER_NAME,
                 streams=STREAMS,
                 count=10000,
-                block=5000
+                block=50000
             )
 
             if not msgs:
