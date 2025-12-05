@@ -1,9 +1,9 @@
 # engine/realtime_engine.py
-import os, json, logging, sys
+import os, json, logging, sys, signal
 import time
 import threading
 import pandas as pd
-from redis import Redis, ResponseError
+from redis import Redis, ResponseError, ConnectionError as RedisConnectionError, RedisError
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.config_manager import load_config
@@ -18,19 +18,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [R
 # Cấu hình logging
 logger = logging.getLogger("ResponseHandler")
 
+# Flag để điều khiển vòng lặp
+is_running = True
+
+def handle_shutdown(signum, frame):
+    """Xử lý tín hiệu tắt (Ctrl+C) để dừng vòng lặp"""
+    global is_running
+    logging.info(f"🛑 Nhận tín hiệu dừng. Đang tắt Publisher...")
+    is_running = False
     
-# --- HÀM KẾT NỐI REDIS TIN CẬY ---
+# Đăng ký signal
+signal.signal(signal.SIGINT, handle_shutdown)
+signal.signal(signal.SIGTERM, handle_shutdown)
+    
+# --- HÀM KẾT NỐI REDIS ---
+            
 def connect_redis():
-    """Kết nối đến Redis với cơ chế thử lại vô hạn."""
-    while True:
+    while is_running:
         try:
-            r = Redis.from_url(REDIS_URL, decode_responses=True)
+            r = Redis.from_url(
+                REDIS_URL, 
+                decode_responses=True,
+                socket_keepalive=True,
+                socket_keepalive_options={},
+                health_check_interval=30,
+                retry_on_timeout=True,
+                socket_connect_timeout=5
+            )
             r.ping()
-            logging.info("Kết nối Redis (Engine) thành công.")
+            logging.info("✅ Kết nối Redis thành công.")
             return r
-        except ConnectionError as e:
-            logging.error(f"Kết nối Redis (Engine) thất bại: {e}. Thử lại sau 5 giây...")
+        except Exception as e:
+            logging.error(f"❌ Lỗi kết nối Redis: {e}. Thử lại sau 5s...")
             time.sleep(5)
+    return None
 
 def ensure_group(r: Redis, stream: str, group: str):
     """Đảm bảo Consumer Group tồn tại"""
@@ -228,6 +249,8 @@ def handle_active_responses(results: dict):
 
 
 def start_engine():
+    global is_running
+    
     r = connect_redis()
     
     logging.info(f"Initializing Consumer Group: {REDIS_GROUP_ENGINE}")
@@ -237,8 +260,16 @@ def start_engine():
     ensure_group(r, "uba:logs:mysql", REDIS_GROUP_ENGINE)
     logging.info("Realtime UBA Engine STARTED — Monitoring MySQL Performance Schema")
 
-    while True:
+    while is_running:
         try:
+            # Check if Redis connection is still valid
+            if not r:
+                logging.warning("⚠️ Redis connection is None, reconnecting...")
+                r = connect_redis()
+                if not r:
+                    time.sleep(5)
+                    continue
+            
             msgs = r.xreadgroup(
                 groupname=REDIS_GROUP_ENGINE,
                 consumername=REDIS_CONSUMER_NAME,
@@ -284,8 +315,47 @@ def start_engine():
         except KeyboardInterrupt:
             logging.info("Engine stopped by user")
             break
+        
+        except ResponseError as e:
+            # Redis stream/group errors (NOGROUP, etc.) - recreate consumer groups
+            if "NOGROUP" in str(e):
+                logging.warning(f"Consumer group missing: {e}")
+                logging.info("🔄 Recreating consumer groups...")
+                try:
+                    for stream in STREAMS.values():
+                        ensure_group(r, stream, REDIS_GROUP_ENGINE)
+                    ensure_group(r, "uba:logs:mysql", REDIS_GROUP_ENGINE)
+                    logging.info("✅ Consumer groups recreated")
+                except Exception as group_error:
+                    logging.error(f"Failed to recreate groups: {group_error}")
+                    time.sleep(2)
+            else:
+                logging.error(f"Redis response error: {e}")
+                time.sleep(1)
+        
+        except (RedisConnectionError, ConnectionResetError, BrokenPipeError) as e:
+            # Redis connection errors - attempt reconnection
+            logging.error(f"Redis connection error: {e}")
+            logging.info("🔄 Attempting to reconnect to Redis...")
+            time.sleep(3)
+            try:
+                if r:
+                    r.close()  # Close the broken connection
+                r = connect_redis()
+                if r:
+                    logging.info("✅ Redis reconnection successful")
+                    # Re-ensure consumer groups after reconnection
+                    for stream in STREAMS.values():
+                        ensure_group(r, stream, REDIS_GROUP_ENGINE)
+                    ensure_group(r, "uba:logs:mysql", REDIS_GROUP_ENGINE)
+                else:
+                    logging.error("❌ Redis reconnection failed, will retry...")
+            except Exception as reconnect_error:
+                logging.error(f"Redis reconnect error: {reconnect_error}")
+        
         except Exception as e:
-            logging.error(f"Engine error: {e}", exc_info=True)
+            # Other unexpected errors
+            logging.error(f"Unexpected engine error: {e}", exc_info=True)
             time.sleep(1)
 
 if __name__ == "__main__":

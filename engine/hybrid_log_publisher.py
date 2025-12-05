@@ -1,8 +1,9 @@
 # engine/perf_log_publisher.py
 import os, json, logging, sys, time, signal
 import pandas as pd
-from redis import Redis
+from redis import Redis, ConnectionError as RedisConnectionError, RedisError
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError, DBAPIError
 from datetime import datetime, timedelta, timezone
 import math
 from collections import Counter
@@ -55,8 +56,19 @@ def save_state(timer_start, boot_sig, event_ts):
 def connect_db():
     try:
         url = MYSQL_LOG_DATABASE_URL.replace("/mysql", "/uba_db") if "/mysql" in MYSQL_LOG_DATABASE_URL else MYSQL_LOG_DATABASE_URL
-        engine = create_engine(url)
-        with engine.connect() as conn: conn.execute(text("SELECT 1"))
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,  # Test connections before using them
+            pool_recycle=3600,   # Recycle connections after 1 hour
+            pool_size=5,
+            max_overflow=10,
+            connect_args={
+                'connect_timeout': 10,
+                'autocommit': True
+            }
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         return engine
     except Exception as e:
         logging.error(f"DB Connect failed: {e}")
@@ -64,8 +76,20 @@ def connect_db():
 
 def connect_redis():
     try:
-        return Redis.from_url(REDIS_URL, decode_responses=True)
-    except: return None
+        r = Redis.from_url(
+            REDIS_URL, 
+            decode_responses=True,
+            socket_keepalive=True,
+            socket_keepalive_options={},
+            health_check_interval=30,
+            retry_on_timeout=True,
+            socket_connect_timeout=5
+        )
+        r.ping()
+        return r
+    except Exception as e:
+        logging.error(f"Redis connection failed: {e}")
+        return None
 
 # === 3. Helpers ===
 def calculate_entropy(text):
@@ -192,10 +216,21 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             continue
 
     if new_records:
-        pipe = redis_client.pipeline()
-        for rec in new_records:
-            pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, default=str)})
-        pipe.execute()
+        try:
+            pipe = redis_client.pipeline()
+            for rec in new_records:
+                pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, default=str)})
+            pipe.execute()
+        except (RedisConnectionError, ConnectionResetError, BrokenPipeError) as e:
+            logging.error(f"Redis connection error while pushing logs: {e}")
+            # Continue to save to parquet even if Redis fails
+        except RedisError as e:
+            logging.error(f"Redis error while pushing logs: {e}")
+            # Continue to save to parquet even if Redis fails
+        except Exception as e:
+            logging.error(f"Unexpected error while pushing to Redis: {e}")
+            # Continue to save to parquet even if Redis fails
+        
         save_logs_to_parquet(new_records, source_dbms="MySQL")
     
     return len(new_records), max_timer_in_batch, max_ts_in_batch
@@ -258,6 +293,21 @@ def monitor_hybrid():
 
     while is_running:
         try:
+            # Check if engine is valid before attempting connection
+            if not engine:
+                logging.warning("⚠️ Engine is None, attempting to reconnect...")
+                engine = connect_db()
+                if not engine:
+                    time.sleep(5)
+                    continue
+            
+            # Check if Redis is valid
+            if not redis:
+                logging.warning("⚠️ Redis is None, attempting to reconnect...")
+                redis = connect_redis()
+                if not redis:
+                    logging.error("❌ Redis reconnection failed, continuing without Redis...")
+            
             with engine.connect() as conn:
                 # 1. Boot Check
                 uptime = float(conn.execute(sql_uptime).scalar() or 0)
@@ -342,11 +392,45 @@ def monitor_hybrid():
                         last_timer = max_timer_ram
                         save_state(last_timer, curr_boot, last_ts)
 
-        except Exception as e:
-            logging.error(f"Loop Error: {e}", exc_info=True)
+        except (OperationalError, DBAPIError) as e:
+            # Database connection errors - attempt reconnection
+            logging.error(f"Database connection error: {e}")
+            logging.info("🔄 Attempting to reconnect to MySQL...")
             time.sleep(5)
-            try: engine = connect_db(); redis = connect_redis()
-            except: pass
+            try:
+                if engine:
+                    engine.dispose()  # Close all connections in the pool
+                engine = connect_db()
+                redis = connect_redis()
+                if engine and redis:
+                    logging.info("✅ MySQL & Redis reconnection successful")
+                elif engine:
+                    logging.info("✅ MySQL reconnection successful (Redis failed)")
+                else:
+                    logging.error("❌ MySQL reconnection failed, will retry...")
+            except Exception as reconnect_error:
+                logging.error(f"Reconnect error: {reconnect_error}")
+        
+        except (RedisConnectionError, ConnectionResetError, BrokenPipeError) as e:
+            # Redis connection errors - attempt reconnection
+            logging.error(f"Redis connection error: {e}")
+            logging.info("🔄 Attempting to reconnect to Redis...")
+            time.sleep(3)
+            try:
+                if redis:
+                    redis.close()
+                redis = connect_redis()
+                if redis:
+                    logging.info("✅ Redis reconnection successful")
+                else:
+                    logging.error("❌ Redis reconnection failed, will retry...")
+            except Exception as reconnect_error:
+                logging.error(f"Redis reconnect error: {reconnect_error}")
+        
+        except Exception as e:
+            # Other unexpected errors - log but continue
+            logging.error(f"Unexpected error: {e}", exc_info=True)
+            time.sleep(2)
         
         time.sleep(1)
 
