@@ -1,11 +1,12 @@
+# UBA-PLATFORM/engine/data_processor.py
 """
 ================================================================================
 MODULE XỬ LÝ DỮ LIỆU CHÍNH
 ================================================================================
 Tích hợp:
-- Feature engineering cấp nghiên cứu (sqlglot + behavioral z-score + entropy)
-- Semi-supervised ML: Isolation Forest → pseudo-label → LightGBM (self-training)
-- Persistent Buffering: Lưu cache training xuống đĩa để không mất dữ liệu khi restart
+- Feature engineering
+- Semi-supervised ML: AutoEncoder (PyOD) → LightGBM
+- Background Training: Huấn luyện chạy ngầm không chặn luồng chính
 """
 
 import os
@@ -15,40 +16,72 @@ import joblib
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
-from sklearn.ensemble import IsolationForest
-from datetime import datetime
-import hashlib
-from pathlib import Path
 import time
+import hashlib
+import threading  # <--- [QUAN TRỌNG] Thêm thư viện threading
+from datetime import datetime
+from pathlib import Path
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [DataProcessor-PROD] - %(message)s')
-logger = logging.getLogger(__name__)
+# --- Import PyOD ---
+try:
+    from pyod.models.auto_encoder import AutoEncoder
+except ImportError as e:
+    logging.warning(f"DEBUG ERROR: {e}")
+    logging.warning("PyOD/AutoEncoder not found. Install via 'pip install pyod tensorflow torch'.")
+    AutoEncoder = None
+
+from sklearn.preprocessing import StandardScaler
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, SENSITIVE_TABLES_DEFAULT, ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
+from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, SENSITIVE_TABLES_DEFAULT, ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
 from engine.features import enhance_features_batch
-from engine.utils import (
+from utils import (
     is_late_night_query, is_potential_large_dump,
     analyze_sensitive_access, check_unusual_user_activity_time,
     is_suspicious_function_used, is_privilege_change, get_normalized_query
 )
 
+# --- Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [DataProcessor] - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Production model paths
+# --- Constants & Configs ---
 PROD_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_production.joblib")
 FALLBACK_MODEL_PATH = os.path.join(MODELS_DIR, "lgb_uba_fallback.joblib")
 BUFFER_FILE_PATH = os.path.join(MODELS_DIR, "training_buffer_cache.parquet")
-
-# File để lưu danh sách category lúc train
 CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib") 
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+# Cấu hình tham số
+DEFAULT_ML_CONFIG = {
+    "min_train_size": 50,          
+    "max_buffer_size": 5000,
+    "save_interval_sec": 60,
+    
+    # AutoEncoder
+    "ae_contamination": 0.05,
+    "ae_epochs": 20,
+    "ae_batch_size": 32,
+    "ae_hidden_neurons": [64, 32, 32, 64],
+    "ae_verbose": 0,
+
+    # LightGBM
+    "lgb_n_estimators": 150,
+    "lgb_learning_rate": 0.05,
+    "lgb_num_leaves": 31,
+    "lgb_max_depth": -1,
+    "lgb_scale_pos_weight": 10,
+    
+    "inference_quantile_threshold": 0.99,
+    "inference_min_threshold": 0.75 
+}
 
 class ProductionUBAEngine:
-    def __init__(self):
+    def __init__(self, config=None):
+        self.config = config if config else DEFAULT_ML_CONFIG
+        
         self.model = None
         self.fallback_model = None
         self.features = None
@@ -56,38 +89,37 @@ class ProductionUBAEngine:
         self.last_trained = None
         self.cat_mapping = {}
         
-        # Cấu hình Training
-        self.MIN_TRAIN_SIZE = 1      # Train ngay khi có 1 dòng
-        self.MAX_BUFFER_SIZE = 5000   # Giữ tối đa 5000 dòng để train (Sliding Window)
+        self.MIN_TRAIN_SIZE = self.config["min_train_size"]
+        self.MAX_BUFFER_SIZE = self.config["max_buffer_size"]
+        self.SAVE_INTERVAL_SEC = self.config["save_interval_sec"]
         
-        # Biến để kiểm soát tần suất ghi đĩa
         self.last_save_time = time.time()
-        self.SAVE_INTERVAL_SEC = 60 # Chỉ ghi xuống đĩa mỗi 60s hoặc khi buffer đầy
         
-        # Khởi tạo Buffer từ đĩa (Persistence)
+        # [NEW] Khóa luồng (Thread Lock) để tránh train chồng chéo
+        self.train_lock = threading.Lock()
+        self.is_training = False
+        
+        # Khởi tạo Buffer
         self.training_buffer = self._load_buffer_from_disk()
         self.load_models()
 
     def _load_buffer_from_disk(self) -> pd.DataFrame:
-        """Load dữ liệu cũ từ đĩa lên RAM khi khởi động lại"""
         if os.path.exists(BUFFER_FILE_PATH):
             try:
+                # Cần cài pyarrow: pip install pyarrow
                 df = pd.read_parquet(BUFFER_FILE_PATH)
-                logger.info(f"🔄 Restored training buffer from disk: {len(df)} rows.")
+                logger.info(f"🔄 Restored training buffer: {len(df)} rows.")
                 return df
             except Exception as e:
-                logger.error(f"Failed to load buffer file: {e}")
+                logger.error(f"Failed to load buffer: {e}")
         return pd.DataFrame()
 
     def _save_buffer_to_disk(self, force=False):
-        """Lưu Buffer xuống đĩa với cơ chế Rate Limit"""
         now = time.time()
-        # Chỉ ghi nếu force=True HOẶC đã quá 60s HOẶC buffer > 1000 dòng mới
         if not force and (now - self.last_save_time < self.SAVE_INTERVAL_SEC):
             return
 
         try:
-            # Ép kiểu các cột string dễ gây lỗi trước khi lưu
             str_cols = ['error_message', 'query', 'normalized_query', 'query_digest', 
                         'user', 'database', 'client_ip', 'connection_type', 'command_type', 
                         'event_name', 'suspicious_func_name', 'privilege_cmd_name', 
@@ -98,15 +130,12 @@ class ProductionUBAEngine:
                 if col in df_to_save.columns:
                     df_to_save[col] = df_to_save[col].astype(str)
             
-            # Parquet ghi rất nhanh
             df_to_save.to_parquet(BUFFER_FILE_PATH, index=False)
             self.last_save_time = now
-            # logging.info("Persistent buffer saved to disk.")
         except Exception as e:
-            logger.error(f"Failed to persist buffer to disk: {e}")
+            logger.error(f"Failed to persist buffer: {e}")
             
     def load_models(self):
-        """Load production → fallback → train new"""
         if os.path.exists(PROD_MODEL_PATH):
             try:
                 data = joblib.load(PROD_MODEL_PATH)
@@ -115,40 +144,21 @@ class ProductionUBAEngine:
                 if os.path.exists(CAT_MAP_PATH):
                     self.cat_mapping = joblib.load(CAT_MAP_PATH)
                 self.model_version = data.get('version', 'v0')
-                self.last_trained = data.get('trained_at', 'unknown')
-                logger.info(f"Loaded PRODUCTION model v{self.model_version} (trained: {self.last_trained})")
+                logger.info(f"Loaded PRODUCTION model v{self.model_version}")
                 return
             except Exception as e:
-                logger.error(f"Failed to load production model: {e}")
+                logger.error(f"Failed load prod model: {e}")
 
-        if os.path.exists(FALLBACK_MODEL_PATH):
-            try:
-                data = joblib.load(FALLBACK_MODEL_PATH)
-                self.model = data['model']
-                self.features = data['features']
-                logger.warning("Loaded FALLBACK model")
-                return
-            except Exception as e:
-                logger.error(f"Failed to load fallback: {e}")
-
-        logger.warning("No model found.")
-        # Nếu không có model nhưng có buffer cũ -> Train ngay lập tức
+        # Fallback logic nếu cần...
         if not self.training_buffer.empty and len(self.training_buffer) >= self.MIN_TRAIN_SIZE:
-            logger.info("No model found but buffer exists. Training immediately...")
-            self._train_core()
+            logger.info("No model found. Triggering initial background training...")
+            # Kích hoạt thread train ngay khi khởi động nếu đủ data
+            self.train_and_update(pd.DataFrame()) 
 
     def save_production_model(self, model, features):
-        """Atomic save with versioning"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         version_hash = hashlib.md5(str(features).encode()).hexdigest()[:8]
-        
-        # Tự động tăng version dựa trên số file hiện có
-        try:
-            existing = [f for f in os.listdir(MODELS_DIR) if f.startswith('lgb_uba_')]
-            ver_num = len(existing)
-        except: ver_num = 0
-            
-        version = f"v{ver_num}_{version_hash}"
+        version = f"v{timestamp}_{version_hash}"
 
         data = {
             'model': model,
@@ -157,149 +167,133 @@ class ProductionUBAEngine:
             'trained_at': datetime.now().isoformat(),
             'feature_count': len(features)
         }
-
-        # Save new production
         joblib.dump(data, PROD_MODEL_PATH)
-        # Luôn cập nhật fallback để an toàn
         joblib.dump(data, FALLBACK_MODEL_PATH)
         logger.info(f"✅ New PRODUCTION model saved: {version}")
 
+    def _train_thread_target(self):
+        """Hàm worker chạy trong thread riêng để huấn luyện model"""
+        with self.train_lock:
+            self.is_training = True
+            try:
+                logger.info(f"🏋️ Background Training Started... Buffer size: {len(self.training_buffer)}")
+                self._train_core()
+                logger.info("🎉 Background Training Finished.")
+            except Exception as e:
+                logger.error(f"⚠️ Background Training Failed: {e}", exc_info=True)
+            finally:
+                self.is_training = False
+
     def _train_core(self):
-        """Hàm train nội bộ - Tách ra để tái sử dụng"""
+        """Logic huấn luyện chính (Nặng CPU)"""
         if len(self.training_buffer) < self.MIN_TRAIN_SIZE:
             return False
         
-        # Danh sách các cột KHÔNG dùng cho Machine Learning
+        if AutoEncoder is None:
+            return False
+
+        # 1. Feature Selection
         exclude_cols = [
-            # 1. Định danh & Thời gian (Metadata)
-            'timestamp', 
-            'event_id', 
-            'thread_os_id',
-            'source_dbms',      # Hằng số (luôn là MySQL)
-            'client_port',      # Port client thay đổi ngẫu nhiên (Ephemeral port)
-            
-            # 2. Văn bản thô (Raw Text) - Model không hiểu được
-            'query', 
-            'normalized_query', 
-            'error_message',    # Nội dung lỗi biến thiên quá nhiều
-            'query_digest',     # Hash chuỗi (Cardinallity quá cao, dễ gây overfit nếu data ít)
-            
-            # 3. Kết quả đầu ra (Label Leakage) - Cấm kỵ đưa vào input
-            'is_anomaly', 
-            'ml_anomaly_score', 
-            'unusual_activity_reason',
-            'analysis_type',
-            
-            # 4. Các cột phụ trợ / JSON
-            'accessed_tables', 
-            'sensitive_access_info', 
-            'tables_touched',
-            'suspicious_func_name', 
-            'privilege_cmd_name',
-            
-            # 5. Mã lỗi cụ thể (Optional)
-            # Nên bỏ error_code vì nó là dạng Category có quá nhiều giá trị (null, 1064, 1146...)
-            # Ta đã có 'has_error' và 'error_count' đại diện tốt hơn.
-            'error_code' 
+            'timestamp', 'event_id', 'thread_os_id', 'source_dbms', 'client_port', 
+            'query', 'normalized_query', 'error_message', 'query_digest', 
+            'is_anomaly', 'ml_anomaly_score', 'unusual_activity_reason', 'analysis_type',
+            'accessed_tables', 'sensitive_access_info', 'tables_touched',
+            'suspicious_func_name', 'privilege_cmd_name', 'error_code' 
         ]
 
-        # Nếu chưa có feature list, tự động chọn
-        if not self.features:
-            # Lấy tất cả cột số và category
-            potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
-            
-            # Lọc bỏ các cột trong blacklist
-            self.features = [f for f in potential_feats if f not in exclude_cols]
-            
-            # Log ra để kiểm tra xem Model đang dùng feature gì
-            logger.info(f"🚀 Model Features ({len(self.features)}): {self.features}")
+        # Refresh features list based on current buffer
+        potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
+        self.features = [f for f in potential_feats if f not in exclude_cols]
 
-        # Tạo X cho LightGBM (giữ nguyên category)
         X = self.training_buffer[self.features].copy()
         
-        # Chuẩn hóa Category khi Train
+        # 2. Categorical Handling
         cat_cols = ['user', 'client_ip', 'database', 'command_type']
         current_mapping = {}
         
-        # Xử lý NaN và kiểu dữ liệu cho X
         for col in X.columns:
             if col in cat_cols or X[col].dtype == 'object':
                 X[col] = X[col].astype(str).astype('category')
-                # Lưu lại danh sách category đã biết
                 current_mapping[col] = X[col].cat.categories.tolist()
             else:
-                X[col] = X[col].fillna(0)
+                X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
         
-        # Lưu mapping
         self.cat_mapping = current_mapping
         joblib.dump(self.cat_mapping, CAT_MAP_PATH)
 
         try:
-            # Tạo bản sao X_iso được mã hóa số học cho Isolation Forest
-            X_iso = X.copy()
-            for col in X_iso.columns:
-                if X_iso[col].dtype.name == 'category':
-                    # Chuyển chuỗi thành số (0, 1, 2...)
-                    X_iso[col] = X_iso[col].cat.codes
-
-            # 1. Pipeline: Isolation Forest (Dùng X_iso toàn số)
-            iso = IsolationForest(contamination=0.05, random_state=42, n_jobs=-1)
-            iso.fit(X_iso)
-            high_conf_anoms_mask = (iso.predict(X_iso) == -1)
+            # 3. AutoEncoder (Teacher)
+            X_ae = X.copy()
+            for col in X_ae.columns:
+                if X_ae[col].dtype.name == 'category':
+                    X_ae[col] = X_ae[col].cat.codes
             
-            # 2. Tạo tập train cho Supervised Model (LightGBM)
-            # Dùng X gốc (có category) vì LightGBM xử lý tốt hơn
-            X_train = pd.concat([X, X[high_conf_anoms_mask]])
-            y_train = np.concatenate([np.zeros(len(X)), np.ones(sum(high_conf_anoms_mask))])
+            scaler = StandardScaler()
+            X_ae_scaled = scaler.fit_transform(X_ae)
 
-            # 3. Train LightGBM
-            new_model = lgb.LGBMClassifier(
-                n_estimators=100,
-                learning_rate=0.05,
-                max_depth=5,
-                num_leaves=31,
-                scale_pos_weight=10,
+            # 1. Khởi tạo Model (Chỉ cấu trúc mạng)
+            ae = AutoEncoder(
+                hidden_neuron_list=self.config["ae_hidden_neurons"],
+                epoch_num=self.config["ae_epochs"],
+                batch_size=self.config["ae_batch_size"],
+                contamination=self.config["ae_contamination"],
+                verbose=0,
+                random_state=42
+            )
+            
+            # 2. Truyền tham số train vào hàm fit()
+            ae.fit(X_ae_scaled)
+            pseudo_labels = ae.labels_ 
+            
+            # 4. LightGBM (Student)
+            lgb_model = lgb.LGBMClassifier(
+                n_estimators=self.config["lgb_n_estimators"],
+                learning_rate=self.config["lgb_learning_rate"],
+                num_leaves=self.config["lgb_num_leaves"],
+                scale_pos_weight=self.config["lgb_scale_pos_weight"],
                 random_state=42,
                 n_jobs=-1,
                 verbose=-1
             )
 
-            cat_cols = [c for c in ['user', 'client_ip', 'database', 'command_type'] if c in X.columns]
-            new_model.fit(X_train, y_train, categorical_feature=cat_cols)
+            lgb_cat_cols = [c for c in cat_cols if c in X.columns]
+            lgb_model.fit(X, pseudo_labels, categorical_feature=lgb_cat_cols)
 
-            self.save_production_model(new_model, self.features)
-            self.model = new_model
+            self.save_production_model(lgb_model, self.features)
+            self.model = lgb_model
             return True
             
         except Exception as e:
-            logger.error(f"Training core failed: {e}", exc_info=True)
+            logger.error(f"Training core failed: {e}")
             return False
 
     def train_and_update(self, df_enhanced):
         """
-        Public method gọi khi có dữ liệu mới: Tích lũy -> Lưu -> Train
+        Cập nhật buffer và kích hoạt thread train nếu cần.
+        Hàm này trả về NGAY LẬP TỨC, không chờ train xong.
         """
-        if df_enhanced.empty:
-            return False
+        if not df_enhanced.empty:
+            self.training_buffer = pd.concat([self.training_buffer, df_enhanced], ignore_index=True)
+            
+            if len(self.training_buffer) > self.MAX_BUFFER_SIZE:
+                self.training_buffer = self.training_buffer.iloc[-self.MAX_BUFFER_SIZE:]
 
-        # 1. Cộng dồn vào RAM
-        self.training_buffer = pd.concat([self.training_buffer, df_enhanced], ignore_index=True)
-        
-        # 2. Cắt bớt nếu quá lớn (Sliding Window)
-        if len(self.training_buffer) > self.MAX_BUFFER_SIZE:
-            self.training_buffer = self.training_buffer.iloc[-self.MAX_BUFFER_SIZE:]
+            self._save_buffer_to_disk(force=False)
 
-        # 3. Lưu ngay xuống đĩa (Persistence)
-        self._save_buffer_to_disk(force=False)
+        # Kích hoạt train nếu đủ dữ liệu và chưa có thread nào đang chạy
+        if len(self.training_buffer) >= self.MIN_TRAIN_SIZE:
+            if not self.is_training:
+                # Tạo thread chạy ngầm
+                t = threading.Thread(target=self._train_thread_target, daemon=True)
+                t.start()
+                return True
+            else:
+                # logger.debug("Skipping trigger: Training already in progress.")
+                pass
+        return False
 
-        # 4. Train ngay lập tức nếu đủ dữ liệu
-        logger.info(f"Training triggered. Buffer size: {len(self.training_buffer)}")
-        return self._train_core()
-
-
-# Global engine instance
+# Global instance
 uba_engine = ProductionUBAEngine()
-
 
 def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     global uba_engine
@@ -314,40 +308,31 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         if col not in df_logs.columns:
             df_logs[col] = 0
         df_logs[col] = df_logs[col].fillna(0)
-
     df_logs['timestamp'] = pd.to_datetime(df_logs['timestamp'], errors='coerce', utc=True)
     df_logs = df_logs.dropna(subset=['timestamp']).reset_index(drop=True)
     df_logs['query'] = df_logs['query'].astype(str)
-    
     df_logs['normalized_query'] = df_logs['query'].apply(get_normalized_query)
     df_logs['query_length'] = df_logs['normalized_query'].str.len()
+    if df_logs.empty: return {"all_logs": df_logs}
 
-    if df_logs.empty:
-        return {"all_logs": df_logs}
-
-    # ADVANCED FEATURES (Features.py enhancement)
+    # Feature Extraction
     df_enhanced, ML_FEATURES = enhance_features_batch(df_logs.copy())
     df_logs = df_enhanced
 
-    # [UPDATE] Always update buffer and attempt training
-    # Không cần chờ 10000 dòng nữa, buffer sẽ tự lo
-    try:
-        uba_engine.train_and_update(df_logs)
-    except Exception as e:
-        logger.error(f"Auto-retrain trigger failed: {e}")
+    # [NON-BLOCKING] Trigger background training
+    uba_engine.train_and_update(df_logs)
 
-    # ML Scoring
+    # ML Inference (Scoring) using CURRENT model
+    anomalies_ml = pd.DataFrame()
     if uba_engine.model and uba_engine.features:
         try:
-            # 1. Chuẩn bị X với đúng các cột features mô hình cần
             X = df_logs.copy()
+            # Ensure columns exist
             for f in uba_engine.features:
-                if f not in X.columns:
-                    X[f] = 0
+                if f not in X.columns: X[f] = 0
             X = X[uba_engine.features]
 
-            # 2. [FIX] Ép kiểu Category tường minh cho giống lúc Train
-            cat_cols = ['user', 'client_ip', 'database', 'command_type']
+            # Categorical casting
             for col in X.columns:
                 if col in uba_engine.cat_mapping:
                     # Ép kiểu về Category với đúng danh sách đã học
@@ -360,30 +345,25 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                         # Fallback về category đầu tiên nếu không có unknown
                         X[col] = X[col].fillna(known_cats[0])
                 else:
-                    # Các cột số thì ép về float/int và điền 0
                     X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
 
-            # 3. Dự đoán
             scores = uba_engine.model.predict_proba(X)[:, 1]
             df_logs['ml_anomaly_score'] = scores
             
-            # Ngưỡng động: Lấy top 1% hoặc > 0.75
-            threshold = max(np.quantile(scores, 0.99), 0.75)
-            anomalies_ml = df_logs[scores >= threshold].copy()
+            q_thresh = DEFAULT_ML_CONFIG["inference_quantile_threshold"]
+            min_thresh = DEFAULT_ML_CONFIG["inference_min_threshold"]
+            threshold = max(np.quantile(scores, q_thresh), min_thresh) if len(scores) > 0 else min_thresh
             
+            anomalies_ml = df_logs[scores >= threshold].copy()
         except Exception as e:
-            logger.error(f"ML inference failed: {e}. Using rule-only mode.")
+            logger.error(f"Inference failed: {e}")
             df_logs['ml_anomaly_score'] = 0.0
-            anomalies_ml = pd.DataFrame()
     else:
         df_logs['ml_anomaly_score'] = 0.0
-        anomalies_ml = pd.DataFrame()
 
-    # === 4. RULE-BASED DETECTION (giữ nguyên + mạnh hơn) ===
+    # === RULE-BASED DETECTION ===
     logging.info("Running rule-based detection...")
     rules_config = config_params or {}
-
-    # Lấy cấu hình rule
     from datetime import time as dt_time
     p_late_night_start_time = dt_time.fromisoformat(rules_config.get('p_late_night_start_time', '00:00:00'))
     p_late_night_end_time = dt_time.fromisoformat(rules_config.get('p_late_night_end_time', '05:00:00'))
@@ -411,9 +391,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     )
     anomalies_large_dump = df_logs[df_logs['is_potential_dump']].copy()
 
-    # ---------------------------------------------------------
-    # Rule 3: Multi-table in short window (ĐÃ SỬA LỖI ĐẾM KÝ TỰ)
-    # ---------------------------------------------------------
+    # Rule 3: Multi-table in short window
     import ast
 
     # Hàm biến chuỗi "['a', 'b']" thành list ['a', 'b']
