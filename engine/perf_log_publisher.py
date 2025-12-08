@@ -125,6 +125,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             e.CURRENT_SCHEMA,
             e.TIMER_WAIT,
             e.LOCK_TIME,
+            e.CPU_TIME,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = 'program_name' LIMIT 1) AS program_name,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_os' LIMIT 1) AS client_os,
             e.ROWS_SENT,
             e.ROWS_EXAMINED,
             e.ROWS_AFFECTED,
@@ -147,7 +152,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_START > :last_timer
             AND e.SQL_TEXT IS NOT NULL
-            AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
+            AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER NOT IN ('uba_user'))
             AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
             AND SQL_TEXT NOT LIKE '%UBA_EVENT%'
         ORDER BY e.TIMER_START ASC
@@ -221,6 +226,12 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         except: pass
                     else: client_ip = host_str
                     
+                    cpu_ms = float(g('CPU_TIME') or g('cpu_time') or 0) / 1000000.0 # Pico -> ms
+        
+                    # Client Info
+                    prog_name = str(g('program_name') or 'unknown')
+                    cl_os = str(g('client_os') or 'unknown')
+                    
                     # Build Record
                     record = {
                         "timestamp": ts_iso,
@@ -240,10 +251,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "is_admin_command": 1 if any(k in sql_upper for k in ['GRANT','REVOKE','CREATE USER']) else 0,
                         "is_risky_command": 1 if any(k in sql_upper for k in ['DROP','TRUNCATE']) else 0,
                         "has_comment": 1 if ('--' in sql_text or '/*' in sql_text or '#' in sql_text) else 0,
-                        # Metrics (Pico -> ms)
                         "execution_time_ms": float(row_dict['TIMER_WAIT'] or 0) / 1e6, 
                         "lock_time_ms": float(row_dict['LOCK_TIME'] or 0) / 1e6,
-                        
+                        "cpu_time_ms": cpu_ms,
+                        "program_name": prog_name,
+                        "client_os": cl_os,
                         "rows_returned": int(row_dict['ROWS_SENT'] or 0),
                         "rows_examined": int(row_dict['ROWS_EXAMINED'] or 0),
                         "rows_affected": int(row_dict['ROWS_AFFECTED'] or 0),

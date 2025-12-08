@@ -60,6 +60,10 @@ CREATE TABLE uba_persistent_log (
     connection_type VARCHAR(32),
     thread_os_id BIGINT UNSIGNED,
     current_schema VARCHAR(64),
+    cpu_time BIGINT UNSIGNED,
+    program_name VARCHAR(128),
+    client_os VARCHAR(128),
+    
     
     -- Content
     sql_text LONGTEXT,
@@ -177,6 +181,10 @@ SET GLOBAL event_scheduler = ON;
 -- 4.1. Event Ingest Data (Chạy mỗi 2s)
 DROP EVENT IF EXISTS flush_perf_schema_to_disk;
 DELIMITER $$
+
+-- Xóa event cũ để tạo lại cho sạch
+DROP EVENT IF EXISTS flush_perf_schema_to_disk;
+
 CREATE EVENT flush_perf_schema_to_disk
 ON SCHEDULE EVERY 2 SECOND
 DO
@@ -224,7 +232,9 @@ BEGIN
     INSERT IGNORE INTO uba_persistent_log (
         event_id, thread_id, timer_start, server_boot_time, event_ts, fingerprint,
         processlist_user, processlist_host, connection_type, thread_os_id,
-        current_schema, sql_text, digest, digest_text, event_name,
+        
+        current_schema, cpu_time, program_name, client_os, 
+        sql_text, digest, digest_text, event_name,
         timer_wait, timer_end, lock_time, rows_sent, rows_examined, rows_affected,
         mysql_errno, message_text, errors, warnings,
         created_tmp_disk_tables, created_tmp_tables, select_full_join,
@@ -239,8 +249,21 @@ BEGIN
         SHA2(CONCAT(v_boot_anchor, '|', e.THREAD_ID, '|', e.EVENT_ID, '|', e.TIMER_START), 256),
         t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.CONNECTION_TYPE, t.THREAD_OS_ID,
         e.CURRENT_SCHEMA, 
-        e.SQL_TEXT,
-        e.DIGEST, e.DIGEST_TEXT, e.EVENT_NAME,
+        e.CPU_TIME,
+        -- Lấy Program Name (Client App)
+        -- Subquery tìm attribute 'program_name' ứng với processlist_id của thread
+        (SELECT ATTR_VALUE 
+         FROM performance_schema.session_connect_attrs attrs 
+         WHERE attrs.PROCESSLIST_ID = t.PROCESSLIST_ID 
+           AND attrs.ATTR_NAME = 'program_name' LIMIT 1),
+           
+        -- Lấy OS của Client
+        (SELECT ATTR_VALUE 
+         FROM performance_schema.session_connect_attrs attrs 
+         WHERE attrs.PROCESSLIST_ID = t.PROCESSLIST_ID 
+           AND attrs.ATTR_NAME = '_os' LIMIT 1),
+        
+        e.SQL_TEXT, e.DIGEST, e.DIGEST_TEXT, e.EVENT_NAME,
         e.TIMER_WAIT, e.TIMER_END, e.LOCK_TIME, 
         e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
         e.MYSQL_ERRNO, e.MESSAGE_TEXT, e.ERRORS, e.WARNINGS,
@@ -250,15 +273,18 @@ BEGIN
     LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
     WHERE e.SQL_TEXT IS NOT NULL
       AND e.SQL_TEXT NOT LIKE '%UBA_EVENT%'    -- tránh tự bắt chính mình
---       AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+      AND e.SQL_TEXT NOT LIKE '%performance_schema%'
+      AND e.SQL_TEXT NOT LIKE '%uba_persistent_log%'
+      AND e.SQL_TEXT NOT LIKE '%uba_db%'
 	  AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER NOT IN ('uba_user'))
       AND (e.CURRENT_SCHEMA IS NULL OR e.CURRENT_SCHEMA != 'uba_db')
+      
 --       AND e.SQL_TEXT NOT LIKE '%rollback%'
 --       AND e.SQL_TEXT != 'FLUSH PRIVILEGES'
 --       AND e.SQL_TEXT != '%version_comment%'
 --       AND e.SQL_TEXT != '%auto_commit%'
 --       AND e.EVENT_NAME != 'statement/sql/rollback'
-      AND e.EVENT_NAME NOT IN ('statement/sql/rollback', 'statement/sql/commit', 'statement/sql/set_option', 'statement/sql/xa_rollback')
+--      AND e.EVENT_NAME NOT IN ('statement/sql/rollback', 'statement/sql/commit', 'statement/sql/set_option', 'statement/sql/xa_rollback')
 --       AND (t.PROCESSLIST_USER IS NULL OR t.PROCESSLIST_USER != 'uba_user')
       AND DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND) 
             > (v_max_ts - INTERVAL 10 SECOND)
