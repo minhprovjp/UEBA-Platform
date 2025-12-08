@@ -199,14 +199,15 @@ BEGIN
 
     SET v_start_time = CURRENT_TIMESTAMP(6);
 
-    -- 1. Detect restart
+    -- 1. Quản lý trạng thái Server (Detect Restart)
+    -- Gắn tag AND 'UBA_EVENT' = 'UBA_EVENT' vào cuối mỗi lệnh
     SELECT VARIABLE_VALUE INTO v_current_uptime 
     FROM performance_schema.global_status 
-    WHERE VARIABLE_NAME = 'UPTIME';
+    WHERE VARIABLE_NAME = 'UPTIME' AND 'UBA_EVENT' = 'UBA_EVENT';
 
     SELECT boot_time_anchor, last_uptime 
-    INTO v_boot_anchor, v_last_uptime
-    FROM uba_server_state WHERE id = 1;
+    INTO v_boot_anchor, v_last_uptime 
+    FROM uba_server_state WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
 
     IF v_current_uptime < v_last_uptime 
        OR ABS(TIMESTAMPDIFF(
@@ -219,16 +220,16 @@ BEGIN
 
     UPDATE uba_server_state 
     SET boot_time_anchor = v_boot_anchor, last_uptime = v_current_uptime 
-    WHERE id = 1;
+    WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
 
     -- 2. Max timestamp
     SELECT COALESCE(MAX(event_ts), '1970-01-01 00:00:00') 
     INTO v_max_ts 
-    FROM uba_persistent_log;
+    FROM uba_persistent_log WHERE 'UBA_EVENT' = 'UBA_EVENT';
 
     SELECT COUNT(*) INTO v_rows_before
     FROM uba_persistent_log
-    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND);
+    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND) AND 'UBA_EVENT' = 'UBA_EVENT';
 
     -- 3. Insert rows
     INSERT IGNORE INTO uba_persistent_log (
