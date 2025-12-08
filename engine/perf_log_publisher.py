@@ -226,11 +226,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         except: pass
                     else: client_ip = host_str
                     
-                    cpu_ms = float(g('CPU_TIME') or g('cpu_time') or 0) / 1000000.0 # Pico -> ms
+                    cpu_ms = float(row_dict['CPU_TIME'] or 0) / 1000000.0 # Pico -> ms
         
                     # Client Info
-                    prog_name = str(g('program_name') or 'unknown')
-                    cl_os = str(g('client_os') or 'unknown')
+                    prog_name = str(row_dict['program_name'] or 'unknown')
+                    cl_os = str(row_dict['client_os'] or 'unknown')
                     
                     # Build Record
                     record = {
