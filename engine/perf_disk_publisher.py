@@ -167,7 +167,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         "lock_time_ms": lock_ms,
                         "cpu_time_ms": float(r['CPU_TIME'] or 0) / 1000000.0, # Pico -> ms
                         "program_name": str(r['program_name'] or 'unknown'),
-                        "connector_name": str(r['_connector_name'] or 'unknown'),
+                        "connector_name": str(r['connector_name'] or 'unknown'),
                         "client_os": str(r['client_os'] or 'unknown'),
                         "source_host": str(r['source_host'] or 'unknown'),
                         "rows_returned": rows_sent,

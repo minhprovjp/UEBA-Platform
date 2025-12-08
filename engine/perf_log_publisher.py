@@ -253,7 +253,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "lock_time_ms": float(row_dict['LOCK_TIME'] or 0) / 1e6,
                         "cpu_time_ms": float(row_dict['CPU_TIME'] or 0) / 1000000.0, # Pico -> ms
                         "program_name": str(row_dict['program_name'] or 'unknown'),
-                        "connector_name": str(row_dict['_connector_name'] or 'unknown'),
+                        "connector_name": str(row_dict['connector_name'] or 'unknown'),
                         "client_os": str(row_dict['client_os'] or 'unknown'),
                         "source_host": str(row_dict['source_host'] or 'unknown'),
                         "rows_returned": int(row_dict['ROWS_SENT'] or 0),

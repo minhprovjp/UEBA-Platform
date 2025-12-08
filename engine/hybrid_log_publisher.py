@@ -191,7 +191,7 @@ def process_and_push(rows, redis_client, source_type="RAM"):
                 "lock_time_ms": lock_ms,
                 "cpu_time_ms": float(g('CPU_TIME') or g('cput_time') or 0) / 1000000.0, # Pico -> ms
                 "program_name": str(g('program_name') or (g('PROGRAM_NAME')) or 'unknown'),
-                "connector_name": str(g('_connector_name') or g('_CONNECTOR_NAME') or 'unknown'),
+                "connector_name": str(g('connector_name') or g('CONNECTOR_NAME') or 'unknown'),
                 "client_os": str(g('client_os') or g('CLIENT_OS') or 'unknown'),
                 "source_host": str(g('source_host') or g('SOURCE_HOST') or 'unknown'),
                 "rows_returned": rows_sent,
