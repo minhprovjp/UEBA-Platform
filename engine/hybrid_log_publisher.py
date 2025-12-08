@@ -163,12 +163,6 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             db_name = str(g('CURRENT_SCHEMA') or g('current_schema') or 'unknown').lower()
             host_str = str(g('PROCESSLIST_HOST') or g('processlist_host') or 'unknown')
             client_ip = get_client_ip_safe(host_str)
-            
-            cpu_ms = float(g('CPU_TIME') or g('cpu_time') or 0) / 1000000.0 # Pico -> ms
-        
-            # Client Info
-            prog_name = str(g('program_name') or (g('PROGRAM_NAME')) or 'unknown')
-            cl_os = str(g('client_os') or g('CLIENT_OS') or 'unknown')
 
             record = {
                 "timestamp": ts_iso,
@@ -195,9 +189,11 @@ def process_and_push(rows, redis_client, source_type="RAM"):
                 
                 "execution_time_ms": exec_ms,
                 "lock_time_ms": lock_ms,
-                "cpu_time_ms": cpu_ms,
-                "program_name": prog_name,
-                "client_os": cl_os,
+                "cpu_time_ms": float(g('CPU_TIME') or g('cput_time') or 0) / 1000000.0, # Pico -> ms
+                "program_name": str(g('program_name') or (g('PROGRAM_NAME')) or 'unknown'),
+                "connector_name": str(g('_connector_name') or g('_CONNECTOR_NAME') or 'unknown'),
+                "client_os": str(g('client_os') or g('CLIENT_OS') or 'unknown'),
+                "source_host": str(g('source_host') or g('SOURCE_HOST') or 'unknown'),
                 "rows_returned": rows_sent,
                 "rows_examined": rows_exam,
                 "rows_affected": int(g('ROWS_AFFECTED') or g('rows_affected') or 0),
@@ -268,7 +264,11 @@ def monitor_hybrid():
             (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
             WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = 'program_name' LIMIT 1) AS program_name,
             (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_connector_name' LIMIT 1) AS connector_name,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
             WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_os' LIMIT 1) AS client_os,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_source_host' LIMIT 1) AS source_host,
             e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
             e.MYSQL_ERRNO, e.MESSAGE_TEXT, e.ERRORS, e.WARNINGS,
             e.CREATED_TMP_DISK_TABLES, e.CREATED_TMP_TABLES, e.SELECT_FULL_JOIN, e.SELECT_SCAN, e.NO_INDEX_USED,

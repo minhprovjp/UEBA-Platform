@@ -129,7 +129,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
             WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = 'program_name' LIMIT 1) AS program_name,
             (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_connector_name' LIMIT 1) AS connector_name,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
             WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_os' LIMIT 1) AS client_os,
+            (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
+            WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = '_source_host' LIMIT 1) AS source_host,
             e.ROWS_SENT,
             e.ROWS_EXAMINED,
             e.ROWS_AFFECTED,
@@ -226,12 +230,6 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         except: pass
                     else: client_ip = host_str
                     
-                    cpu_ms = float(g('CPU_TIME') or g('cpu_time') or 0) / 1000000.0 # Pico -> ms
-        
-                    # Client Info
-                    prog_name = str(g('program_name') or 'unknown')
-                    cl_os = str(g('client_os') or 'unknown')
-                    
                     # Build Record
                     record = {
                         "timestamp": ts_iso,
@@ -253,9 +251,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "has_comment": 1 if ('--' in sql_text or '/*' in sql_text or '#' in sql_text) else 0,
                         "execution_time_ms": float(row_dict['TIMER_WAIT'] or 0) / 1e6, 
                         "lock_time_ms": float(row_dict['LOCK_TIME'] or 0) / 1e6,
-                        "cpu_time_ms": cpu_ms,
-                        "program_name": prog_name,
-                        "client_os": cl_os,
+                        "cpu_time_ms": float(row_dict['CPU_TIME'] or 0) / 1000000.0, # Pico -> ms
+                        "program_name": str(row_dict['program_name'] or 'unknown'),
+                        "connector_name": str(row_dict['_connector_name'] or 'unknown'),
+                        "client_os": str(row_dict['client_os'] or 'unknown'),
+                        "source_host": str(row_dict['source_host'] or 'unknown'),
                         "rows_returned": int(row_dict['ROWS_SENT'] or 0),
                         "rows_examined": int(row_dict['ROWS_EXAMINED'] or 0),
                         "rows_affected": int(row_dict['ROWS_AFFECTED'] or 0),

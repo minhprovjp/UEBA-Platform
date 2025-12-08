@@ -62,7 +62,9 @@ CREATE TABLE uba_persistent_log (
     current_schema VARCHAR(64),
     cpu_time BIGINT UNSIGNED,
     program_name VARCHAR(128),
+    connector_name VARCHAR(128),
     client_os VARCHAR(128),
+    source_host VARCHAR(128),
     
     
     -- Content
@@ -178,12 +180,10 @@ DELIMITER ;
 -- ============================================================
 SET GLOBAL event_scheduler = ON;
 
--- 4.1. Event Ingest Data (Chạy mỗi 2s)
-DROP EVENT IF EXISTS flush_perf_schema_to_disk;
 DELIMITER $$
 
--- Xóa event cũ để tạo lại cho sạch
-DROP EVENT IF EXISTS flush_perf_schema_to_disk;
+-- Xóa event cũ
+DROP EVENT IF EXISTS flush_perf_schema_to_disk$$
 
 CREATE EVENT flush_perf_schema_to_disk
 ON SCHEDULE EVERY 2 SECOND
@@ -199,14 +199,14 @@ BEGIN
 
     SET v_start_time = CURRENT_TIMESTAMP(6);
 
-    -- 1. Quản lý trạng thái Server (Detect Restart)
-    -- Gắn tag AND 'UBA_EVENT' = 'UBA_EVENT' vào cuối mỗi lệnh
+    -- 1. Detect restart
     SELECT VARIABLE_VALUE INTO v_current_uptime 
     FROM performance_schema.global_status 
-    WHERE VARIABLE_NAME = 'UPTIME' AND 'UBA_EVENT' = 'UBA_EVENT';
+    WHERE VARIABLE_NAME = 'UPTIME';
 
-    SELECT boot_time_anchor, last_uptime INTO v_boot_anchor, v_last_uptime 
-    FROM uba_server_state WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
+    SELECT boot_time_anchor, last_uptime 
+    INTO v_boot_anchor, v_last_uptime
+    FROM uba_server_state WHERE id = 1;
 
     IF v_current_uptime < v_last_uptime 
        OR ABS(TIMESTAMPDIFF(
@@ -217,23 +217,24 @@ BEGIN
         SET v_boot_anchor = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL v_current_uptime SECOND);
     END IF;
 
-    UPDATE uba_server_state SET boot_time_anchor = v_boot_anchor, last_uptime = v_current_uptime WHERE id = 1 AND 'UBA_EVENT' = 'UBA_EVENT';
-    
-    -- 2. Lấy điểm cắt thời gian
+    UPDATE uba_server_state 
+    SET boot_time_anchor = v_boot_anchor, last_uptime = v_current_uptime 
+    WHERE id = 1;
+
+    -- 2. Max timestamp
     SELECT COALESCE(MAX(event_ts), '1970-01-01 00:00:00') 
     INTO v_max_ts 
-    FROM uba_persistent_log WHERE 'UBA_EVENT' = 'UBA_EVENT';
+    FROM uba_persistent_log;
 
-    SELECT COUNT(*) INTO v_rows_before 
-    FROM uba_persistent_log 
-    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND) AND 'UBA_EVENT' = 'UBA_EVENT';
+    SELECT COUNT(*) INTO v_rows_before
+    FROM uba_persistent_log
+    WHERE event_ts > (v_max_ts - INTERVAL 10 SECOND);
 
-    -- 3. Insert Ignore (Core Logic)
+    -- 3. Insert rows
     INSERT IGNORE INTO uba_persistent_log (
         event_id, thread_id, timer_start, server_boot_time, event_ts, fingerprint,
         processlist_user, processlist_host, connection_type, thread_os_id,
-        
-        current_schema, cpu_time, program_name, client_os, 
+        current_schema, cpu_time, program_name, connector_name, client_os, source_host,
         sql_text, digest, digest_text, event_name,
         timer_wait, timer_end, lock_time, rows_sent, rows_examined, rows_affected,
         mysql_errno, message_text, errors, warnings,
@@ -248,23 +249,19 @@ BEGIN
         DATE_ADD(v_boot_anchor, INTERVAL (e.TIMER_START DIV 1000000) MICROSECOND),
         SHA2(CONCAT(v_boot_anchor, '|', e.THREAD_ID, '|', e.EVENT_ID, '|', e.TIMER_START), 256),
         t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.CONNECTION_TYPE, t.THREAD_OS_ID,
-        e.CURRENT_SCHEMA, 
+        e.CURRENT_SCHEMA,
         e.CPU_TIME,
-        -- Lấy Program Name (Client App)
-        -- Subquery tìm attribute 'program_name' ứng với processlist_id của thread
-        (SELECT ATTR_VALUE 
-         FROM performance_schema.session_connect_attrs attrs 
-         WHERE attrs.PROCESSLIST_ID = t.PROCESSLIST_ID 
-           AND attrs.ATTR_NAME = 'program_name' LIMIT 1),
-           
-        -- Lấy OS của Client
-        (SELECT ATTR_VALUE 
-         FROM performance_schema.session_connect_attrs attrs 
-         WHERE attrs.PROCESSLIST_ID = t.PROCESSLIST_ID 
-           AND attrs.ATTR_NAME = '_os' LIMIT 1),
-        
+        (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs 
+         WHERE PROCESSLIST_ID = t.PROCESSLIST_ID AND ATTR_NAME='program_name' LIMIT 1),
+        (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs
+         WHERE PROCESSLIST_ID = t.PROCESSLIST_ID AND ATTR_NAME='_connector_name' LIMIT 1),
+        (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs
+         WHERE PROCESSLIST_ID = t.PROCESSLIST_ID AND ATTR_NAME='_os' LIMIT 1),
+        (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs
+         WHERE PROCESSLIST_ID = t.PROCESSLIST_ID AND ATTR_NAME='_source_host' LIMIT 1),
+
         e.SQL_TEXT, e.DIGEST, e.DIGEST_TEXT, e.EVENT_NAME,
-        e.TIMER_WAIT, e.TIMER_END, e.LOCK_TIME, 
+        e.TIMER_WAIT, e.TIMER_END, e.LOCK_TIME,
         e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
         e.MYSQL_ERRNO, e.MESSAGE_TEXT, e.ERRORS, e.WARNINGS,
         e.CREATED_TMP_DISK_TABLES, e.CREATED_TMP_TABLES, e.SELECT_FULL_JOIN,
