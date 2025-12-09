@@ -1,12 +1,13 @@
 # UBA-PLATFORM/engine/data_processor.py
 """
 ================================================================================
-MODULE XỬ LÝ DỮ LIỆU CHÍNH
+MODULE XỬ LÝ DỮ LIỆU CHÍNH (REFACTORED FOR CASCADING LOGIC)
 ================================================================================
-Tích hợp:
-- Feature engineering
-- Semi-supervised ML: AutoEncoder (PyOD) → LightGBM
-- Background Training: Huấn luyện chạy ngầm không chặn luồng chính
+Luồng xử lý:
+1. Feature Engineering
+2. Rule-Based Detection (Lọc)
+3. ML Detection (Chạy trên log sạch)
+4. Active Response (Tổng hợp vi phạm & Đề xuất khóa user)
 """
 
 import os
@@ -18,9 +19,13 @@ import numpy as np
 import lightgbm as lgb
 import time
 import hashlib
-import threading  # <--- [QUAN TRỌNG] Thêm thư viện threading
+import json
+import threading
 from datetime import datetime
 from pathlib import Path
+
+# --- Tắt log rác của thư viện parser SQL ---
+logging.getLogger('sqlglot').setLevel(logging.ERROR)
 
 # --- Import PyOD ---
 try:
@@ -34,12 +39,12 @@ from sklearn.preprocessing import StandardScaler
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, SENSITIVE_TABLES_DEFAULT, ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
+from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD
 from engine.features import enhance_features_batch
 from utils import (
-    is_late_night_query, is_potential_large_dump,
-    analyze_sensitive_access, check_unusual_user_activity_time,
-    is_suspicious_function_used, is_privilege_change, get_normalized_query
+    check_unusual_user_activity_time, get_normalized_query,
+    check_access_anomalies, check_insider_threats, check_technical_attacks, 
+    check_data_destruction, check_multi_table_anomalies
 )
 
 # --- Logging ---
@@ -54,7 +59,7 @@ CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib")
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# Cấu hình tham số
+# Cấu hình tham số ML mặc định
 DEFAULT_ML_CONFIG = {
     "min_train_size": 50,          
     "max_buffer_size": 5000,
@@ -95,7 +100,7 @@ class ProductionUBAEngine:
         
         self.last_save_time = time.time()
         
-        # [NEW] Khóa luồng (Thread Lock) để tránh train chồng chéo
+        # Khóa luồng (Thread Lock)
         self.train_lock = threading.Lock()
         self.is_training = False
         
@@ -106,7 +111,6 @@ class ProductionUBAEngine:
     def _load_buffer_from_disk(self) -> pd.DataFrame:
         if os.path.exists(BUFFER_FILE_PATH):
             try:
-                # Cần cài pyarrow: pip install pyarrow
                 df = pd.read_parquet(BUFFER_FILE_PATH)
                 logger.info(f"🔄 Restored training buffer: {len(df)} rows.")
                 return df
@@ -149,10 +153,8 @@ class ProductionUBAEngine:
             except Exception as e:
                 logger.error(f"Failed load prod model: {e}")
 
-        # Fallback logic nếu cần...
         if not self.training_buffer.empty and len(self.training_buffer) >= self.MIN_TRAIN_SIZE:
             logger.info("No model found. Triggering initial background training...")
-            # Kích hoạt thread train ngay khi khởi động nếu đủ data
             self.train_and_update(pd.DataFrame()) 
 
     def save_production_model(self, model, features):
@@ -172,7 +174,6 @@ class ProductionUBAEngine:
         logger.info(f"✅ New PRODUCTION model saved: {version}")
 
     def _train_thread_target(self):
-        """Hàm worker chạy trong thread riêng để huấn luyện model"""
         with self.train_lock:
             self.is_training = True
             try:
@@ -185,29 +186,25 @@ class ProductionUBAEngine:
                 self.is_training = False
 
     def _train_core(self):
-        """Logic huấn luyện chính (Nặng CPU)"""
         if len(self.training_buffer) < self.MIN_TRAIN_SIZE:
             return False
         
         if AutoEncoder is None:
             return False
 
-        # 1. Feature Selection
         exclude_cols = [
             'timestamp', 'event_id', 'thread_os_id', 'source_dbms', 'client_port', 
             'query', 'normalized_query', 'error_message', 'query_digest', 
             'is_anomaly', 'ml_anomaly_score', 'unusual_activity_reason', 'analysis_type',
             'accessed_tables', 'sensitive_access_info', 'tables_touched',
-            'suspicious_func_name', 'privilege_cmd_name', 'error_code' 
+            'suspicious_func_name', 'privilege_cmd_name', 'error_code', 'behavior_group'
         ]
 
-        # Refresh features list based on current buffer
         potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
         self.features = [f for f in potential_feats if f not in exclude_cols]
 
         X = self.training_buffer[self.features].copy()
         
-        # 2. Categorical Handling
         cat_cols = ['user', 'client_ip', 'database', 'command_type']
         current_mapping = {}
         
@@ -222,7 +219,6 @@ class ProductionUBAEngine:
         joblib.dump(self.cat_mapping, CAT_MAP_PATH)
 
         try:
-            # 3. AutoEncoder (Teacher)
             X_ae = X.copy()
             for col in X_ae.columns:
                 if X_ae[col].dtype.name == 'category':
@@ -231,7 +227,6 @@ class ProductionUBAEngine:
             scaler = StandardScaler()
             X_ae_scaled = scaler.fit_transform(X_ae)
 
-            # 1. Khởi tạo Model (Chỉ cấu trúc mạng)
             ae = AutoEncoder(
                 hidden_neuron_list=self.config["ae_hidden_neurons"],
                 epoch_num=self.config["ae_epochs"],
@@ -241,11 +236,9 @@ class ProductionUBAEngine:
                 random_state=42
             )
             
-            # 2. Truyền tham số train vào hàm fit()
             ae.fit(X_ae_scaled)
             pseudo_labels = ae.labels_ 
             
-            # 4. LightGBM (Student)
             lgb_model = lgb.LGBMClassifier(
                 n_estimators=self.config["lgb_n_estimators"],
                 learning_rate=self.config["lgb_learning_rate"],
@@ -268,10 +261,6 @@ class ProductionUBAEngine:
             return False
 
     def train_and_update(self, df_enhanced):
-        """
-        Cập nhật buffer và kích hoạt thread train nếu cần.
-        Hàm này trả về NGAY LẬP TỨC, không chờ train xong.
-        """
         if not df_enhanced.empty:
             self.training_buffer = pd.concat([self.training_buffer, df_enhanced], ignore_index=True)
             
@@ -280,30 +269,131 @@ class ProductionUBAEngine:
 
             self._save_buffer_to_disk(force=False)
 
-        # Kích hoạt train nếu đủ dữ liệu và chưa có thread nào đang chạy
         if len(self.training_buffer) >= self.MIN_TRAIN_SIZE:
             if not self.is_training:
-                # Tạo thread chạy ngầm
                 t = threading.Thread(target=self._train_thread_target, daemon=True)
                 t.start()
                 return True
-            else:
-                # logger.debug("Skipping trigger: Training already in progress.")
-                pass
         return False
 
 # Global instance
 uba_engine = ProductionUBAEngine()
 
+def process_rule_results(df_logs, anomalies_dict, group_name):
+    """
+    Chuyển đổi Dict {RuleName: [indexes]} thành DataFrame.
+    Gán cột 'specific_rule' để biết chính xác lỗi gì.
+    """
+    if not anomalies_dict:
+        return pd.DataFrame()
+    
+    all_indices = set()
+    for indices in anomalies_dict.values():
+        all_indices.update(indices)
+        
+    if not all_indices:
+        return pd.DataFrame()
+    
+    # Lấy các dòng vi phạm
+    df_result = df_logs.loc[list(all_indices)].copy()
+    
+    # Gán nhãn nhóm
+    df_result['behavior_group'] = group_name
+    df_result['specific_rule'] = ''
+    
+    # Gán nhãn chi tiết (nối chuỗi nếu dính nhiều rule)
+    for rule_name, indices in anomalies_dict.items():
+        mask = df_result.index.isin(indices)
+        # Nếu đã có text rồi thì thêm dấu chấm phẩy
+        df_result.loc[mask & (df_result['specific_rule'] != ''), 'specific_rule'] += f"; {rule_name}"
+        # Nếu chưa có thì gán mới
+        df_result.loc[mask & (df_result['specific_rule'] == ''), 'specific_rule'] = rule_name
+        
+    return df_result
+
+# Hàm đọc config động
+def load_engine_config_dynamic():
+    try:
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'engine_config.json')
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def _aggregate_multi_table_alerts(df_rule_multi):
+    """
+    Hàm hỗ trợ: Gom nhóm các log vi phạm Multi-table thành các Session cảnh báo.
+    Input: DataFrame chứa các log vi phạm (df_rule_multi)
+    Output: DataFrame chứa thông tin tổng hợp (Session level)
+    """
+    if df_rule_multi.empty:
+        return pd.DataFrame()
+
+    aggregated_data = []
+    
+    # Gom nhóm theo User và cửa sổ thời gian (ví dụ: mỗi 5 phút là 1 session tấn công)
+    # Lưu ý: Cần sort trước khi group
+    df_sorted = df_rule_multi.sort_values('timestamp')
+    
+    # Sử dụng Grouper 5 phút để tách các đợt tấn công khác nhau của cùng 1 user
+    grouped = df_sorted.groupby(['user', pd.Grouper(key='timestamp', freq='5Min')], observed=False)
+
+    for (user, time_window), group in grouped:
+        # Nếu nhóm này ít hơn 2 bảng thì có thể không đáng gọi là session tấn công lớn (tùy logic)
+        # Nhưng vì rule gốc đã lọc rồi, nên ta cứ aggregate hết.
+        
+        # Lấy danh sách bảng bị truy cập trong session này
+        # (Cần trích xuất lại tên bảng từ query vì trong df_rule_multi có thể chưa có cột clean list)
+        from engine.utils import get_tables_with_sqlglot # Import hàm này
+        
+        all_tables = set()
+        queries_details = []
+        
+        for _, row in group.iterrows():
+            # Lấy tên bảng (Dùng lại hàm utils hoặc regex đơn giản để tối ưu tốc độ)
+            tbls = get_tables_with_sqlglot(row['query'])
+            all_tables.update(tbls)
+            
+            queries_details.append({
+                "timestamp": row['timestamp'].isoformat() if pd.notna(row['timestamp']) else "",
+                "query": row['query']
+            })
+            
+        if not all_tables:
+            continue
+
+        aggregated_data.append({
+            "user": user,
+            "start_time": group['timestamp'].min(),
+            "end_time": group['timestamp'].max(),
+            "tables_accessed_in_session": list(all_tables),
+            "distinct_tables_count": len(all_tables),
+            "queries_details": queries_details,
+            "anomaly_type": "multi_table_access",
+            "behavior_group": "MULTI_TABLE_ACCESS"
+        })
+
+    return pd.DataFrame(aggregated_data)
+
 def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
+    """
+    Hàm xử lý chính: RULES -> FILTER -> ML
+    """
     global uba_engine
 
     if input_df is None or input_df.empty:
         return {"all_logs": pd.DataFrame(), "anomalies_ml": pd.DataFrame()}
+    
+    # 1. LOAD CONFIG (NGAY ĐẦU HÀM ĐỂ TRÁNH LỖI VARIABLE SCOPE)
+    full_config = load_engine_config_dynamic()
+    rules_json_config = full_config.get('security_rules', {})
+    
+    # Merge config params (Ưu tiên config từ file JSON)
+    combined_rules_config = {**(config_params or {}), **rules_json_config}
 
     df_logs = input_df.copy()
 
-    # Basic cleanup
+    # 2. PREPROCESSING & FEATURES (Làm trên toàn bộ batch để đảm bảo tính nhất quán)
     for col in ['rows_returned', 'rows_affected', 'execution_time_ms']:
         if col not in df_logs.columns:
             df_logs[col] = 0
@@ -313,270 +403,188 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs['query'] = df_logs['query'].astype(str)
     df_logs['normalized_query'] = df_logs['query'].apply(get_normalized_query)
     df_logs['query_length'] = df_logs['normalized_query'].str.len()
+    
     if df_logs.empty: return {"all_logs": df_logs}
 
     # Feature Extraction
     df_enhanced, ML_FEATURES = enhance_features_batch(df_logs.copy())
     df_logs = df_enhanced
 
-    # [NON-BLOCKING] Trigger background training
-    uba_engine.train_and_update(df_logs)
-
-    # ML Inference (Scoring) using CURRENT model
-    anomalies_ml = pd.DataFrame()
-    if uba_engine.model and uba_engine.features:
-        try:
-            X = df_logs.copy()
-            # Ensure columns exist
-            for f in uba_engine.features:
-                if f not in X.columns: X[f] = 0
-            X = X[uba_engine.features]
-
-            # Categorical casting
-            for col in X.columns:
-                if col in uba_engine.cat_mapping:
-                    # Ép kiểu về Category với đúng danh sách đã học
-                    known_cats = uba_engine.cat_mapping[col]
-                    X[col] = X[col].astype(str).astype(pd.CategoricalDtype(categories=known_cats))
-                    # Các giá trị lạ sẽ tự động thành NaN -> Fill 'unknown' nếu 'unknown' có trong list, ko thì fill mode
-                    if 'unknown' in known_cats:
-                        X[col] = X[col].fillna('unknown')
-                    else:
-                        # Fallback về category đầu tiên nếu không có unknown
-                        X[col] = X[col].fillna(known_cats[0])
-                else:
-                    X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
-
-            scores = uba_engine.model.predict_proba(X)[:, 1]
-            df_logs['ml_anomaly_score'] = scores
-            
-            q_thresh = DEFAULT_ML_CONFIG["inference_quantile_threshold"]
-            min_thresh = DEFAULT_ML_CONFIG["inference_min_threshold"]
-            threshold = max(np.quantile(scores, q_thresh), min_thresh) if len(scores) > 0 else min_thresh
-            
-            anomalies_ml = df_logs[scores >= threshold].copy()
-        except Exception as e:
-            logger.error(f"Inference failed: {e}")
-            df_logs['ml_anomaly_score'] = 0.0
-    else:
-        df_logs['ml_anomaly_score'] = 0.0
-
-    # === RULE-BASED DETECTION ===
-    logging.info("Running rule-based detection...")
-    rules_config = config_params or {}
-    from datetime import time as dt_time
-    p_late_night_start_time = dt_time.fromisoformat(rules_config.get('p_late_night_start_time', '00:00:00'))
-    p_late_night_end_time = dt_time.fromisoformat(rules_config.get('p_late_night_end_time', '05:00:00'))
-    p_known_large_tables = rules_config.get('p_known_large_tables', [])
-    p_time_window_minutes = int(rules_config.get('p_time_window_minutes', 5))
-    p_min_distinct_tables = int(rules_config.get('p_min_distinct_tables', 3))
-    p_sensitive_tables = rules_config.get('p_sensitive_tables', []) or SENSITIVE_TABLES_DEFAULT
-    p_allowed_users_sensitive = rules_config.get('p_allowed_users_sensitive', []) or ALLOWED_USERS_FOR_SENSITIVE_DEFAULT
-    p_safe_hours_start = int(rules_config.get('p_safe_hours_start', 8))
-    p_safe_hours_end = int(rules_config.get('p_safe_hours_end', 18))
-    p_safe_weekdays = rules_config.get('p_safe_weekdays', [0, 1, 2, 3, 4])
-    p_min_queries_for_profile = int(rules_config.get('p_min_queries_for_profile', 10))
-    p_quantile_start = float(rules_config.get('p_quantile_start', 0.15))
-    p_quantile_end = float(rules_config.get('p_quantile_end', 0.85))
-
-    # Rule 1: Late night
-    df_logs['is_late_night'] = df_logs['timestamp'].apply(
-        lambda ts: is_late_night_query(ts, p_late_night_start_time, p_late_night_end_time)
-    )
-    anomalies_late_night = df_logs[df_logs['is_late_night']].copy()
-
-    # Rule 2: Large dump
-    df_logs['is_potential_dump'] = df_logs.apply(
-        lambda row: is_potential_large_dump(row, p_known_large_tables), axis=1
-    )
-    anomalies_large_dump = df_logs[df_logs['is_potential_dump']].copy()
-
-    # Rule 3: Multi-table in short window
-    import ast
-
-    # Hàm biến chuỗi "['a', 'b']" thành list ['a', 'b']
-    def parse_list_safe(x):
-        if isinstance(x, list): return x
-        if isinstance(x, str):
-            try: return ast.literal_eval(x)
-            except: return []
-        return []
-
-    # Parse cột accessed_tables TRƯỚC khi xử lý
-    # Lưu ý: Đảm bảo cột accessed_tables tồn tại trong df_logs
-    df_logs['accessed_tables_parsed'] = df_logs['accessed_tables'].apply(parse_list_safe)
-
-    anomalies_multiple_tables_list = []
-    window = pd.Timedelta(minutes=p_time_window_minutes)
-
-    for user, group in df_logs.groupby('user', observed=False):
-        if len(group) < 2: continue
-        group = group.sort_values('timestamp').reset_index(drop=True)
+    # ==========================================================================
+    # 3. RULE-BASED DETECTION (CHẠY TRƯỚC ĐỂ LỌC)
+    # ==========================================================================
+    logging.info("--- Phase 1: Running Rules ---")
+    
+    # --- A. Các Rule Mới (Advanced) ---
+    try:
+        dict_access = check_access_anomalies(df_logs, combined_rules_config)
+        dict_insider = check_insider_threats(df_logs, combined_rules_config)
+        dict_technical = check_technical_attacks(df_logs, combined_rules_config)
+        dict_destruction = check_data_destruction(df_logs, combined_rules_config)
+        dict_multi_table = check_multi_table_anomalies(df_logs, combined_rules_config)
         
-        session_tables = set()
-        session_queries = []
-        start_time = group.iloc[0]['timestamp']
-
-        for _, row in group.iterrows():
-            # QUAN TRỌNG: Dùng cột đã parse
-            current_tables = row['accessed_tables_parsed']
-            if not current_tables: continue
-            
-            tables = set(current_tables)
-
-            if (row['timestamp'] - start_time) > window:
-                # Kiểm tra session cũ
-                if len(session_tables) >= p_min_distinct_tables:
-                    anomalies_multiple_tables_list.append({
-                        'user': user,
-                        'start_time': start_time,
-                        'end_time': session_queries[-1]['timestamp'],
-                        'distinct_tables_count': len(session_tables),
-                        'tables_accessed_in_session': sorted(list(session_tables)),
-                        'queries_details': session_queries,
-                        # Các trường bắt buộc cho AggregateAnomaly
-                        'anomaly_type': 'multi_table_access',
-                        'severity': 0.8,
-                        'reason': f"Accessed {len(session_tables)} distinct tables in short window",
-                        'scope': 'session',
-                        'database': row.get('database', 'unknown'),
-                        'details': {"tables": sorted(list(session_tables))}
-                    })
-                # Reset
-                session_tables = tables
-                session_queries = [{'timestamp': row['timestamp'], 'query': row['query']}]
-                start_time = row['timestamp']
-            else:
-                session_tables.update(tables)
-                session_queries.append({'timestamp': row['timestamp'], 'query': row['query']})
-        
-        # Kiểm tra session cuối cùng
-        if len(session_tables) >= p_min_distinct_tables:
-            anomalies_multiple_tables_list.append({
-                'user': user,
-                'start_time': start_time,
-                'end_time': session_queries[-1]['timestamp'],
-                'distinct_tables_count': len(session_tables),
-                'tables_accessed_in_session': sorted(list(session_tables)),
-                'queries_details': session_queries,
-                'anomaly_type': 'multi_table_access',
-                'severity': 0.8,
-                'reason': f"Accessed {len(session_tables)} distinct tables in short window",
-                'scope': 'session',
-                'database': session_queries[0].get('database', 'unknown') if session_queries else 'unknown',
-                'details': {"tables": sorted(list(session_tables))}
-            })
-            
-    anomalies_multiple_tables_df = pd.DataFrame(anomalies_multiple_tables_list)
-
-    # Rule 4: Sensitive access
-    df_logs['sensitive_access_info'] = df_logs.apply(
-        lambda row: analyze_sensitive_access(row, p_sensitive_tables, p_allowed_users_sensitive,
-                                             p_safe_hours_start, p_safe_hours_end, p_safe_weekdays),
-        axis=1
-    )
-    anomalies_sensitive_access = df_logs[df_logs['sensitive_access_info'].notna()].copy()
-    if not anomalies_sensitive_access.empty:
-        expanded = anomalies_sensitive_access['sensitive_access_info'].apply(pd.Series)
-        anomalies_sensitive_access = pd.concat([anomalies_sensitive_access.drop(columns=['sensitive_access_info'], errors='ignore'), expanded], axis=1)
-
-    # Rule 5: Unusual user time
+        # Chuyển Dict thành DataFrame (Gán nhãn specific_rule)
+        df_rule_access = process_rule_results(df_logs, dict_access, 'ACCESS_ANOMALY')
+        df_rule_insider = process_rule_results(df_logs, dict_insider, 'INSIDER_THREAT')
+        df_rule_technical = process_rule_results(df_logs, dict_technical, 'TECHNICAL_ATTACK')
+        df_rule_destruction = process_rule_results(df_logs, dict_destruction, 'DATA_DESTRUCTION')
+        df_rule_multi = process_rule_results(df_logs, dict_multi_table, 'MULTI_TABLE_ACCESS')
+    except Exception as e:
+        logging.error(f"Rule Engine Error: {e}", exc_info=True)
+        df_rule_access = df_rule_insider = df_rule_technical = df_rule_destruction = df_rule_multi = pd.DataFrame()
+    
+    p_min_queries = 10
+    anomalies_user_time = pd.DataFrame()
+    # Tính profile đơn giản
     user_profiles = {}
     for user, g in df_logs.groupby('user', observed=False):
-        if len(g) >= p_min_queries_for_profile:
+        if len(g) >= p_min_queries:
             hours = g['timestamp'].dt.hour
             user_profiles[user] = {
-                'active_start': int(hours.quantile(p_quantile_start)),
-                'active_end': int(hours.quantile(p_quantile_end))
+                'active_start': int(hours.quantile(0.15)),
+                'active_end': int(hours.quantile(0.85))
             }
-    df_logs['unusual_activity_reason'] = df_logs.apply(
-        lambda row: check_unusual_user_activity_time(row, user_profiles), axis=1
+    if user_profiles:
+        df_logs['unusual_activity_reason'] = df_logs.apply(
+            lambda row: check_unusual_user_activity_time(row, user_profiles), axis=1
+        )
+        anomalies_user_time = df_logs[df_logs['unusual_activity_reason'].notna()].copy()
+        if not anomalies_user_time.empty:
+            anomalies_user_time['behavior_group'] = 'UNUSUAL_BEHAVIOR'
+            anomalies_user_time['specific_rule'] = 'Unusual Login Time'
+
+    # GOM TẤT CẢ LOG VI PHẠM
+    rule_caught_indices = set(
+        df_rule_access.index.tolist() +
+        df_rule_insider.index.tolist() +
+        df_rule_technical.index.tolist() +
+        df_rule_destruction.index.tolist() +
+        df_rule_multi.index.tolist() +
+        anomalies_user_time.index.tolist()
     )
-    anomalies_unusual_user_time = df_logs[df_logs['unusual_activity_reason'].notna()].copy()
 
-    # Rule 6 & 7: SQLi + Privilege
-    sqli_res = df_logs['query'].apply(is_suspicious_function_used).apply(pd.Series)
-    sqli_res.columns = ['is_suspicious_func', 'suspicious_func_name']
-    df_logs = pd.concat([df_logs, sqli_res], axis=1)
-    anomalies_sqli = df_logs[df_logs['is_suspicious_func'] == True].copy()
+    logging.info(f"Phase 1 Complete. Rules caught {len(rule_caught_indices)} logs.")
 
-    priv_res = df_logs['query'].apply(is_privilege_change).apply(pd.Series)
-    priv_res.columns = ['is_privilege_change', 'privilege_cmd_name']
-    df_logs = pd.concat([df_logs, priv_res], axis=1)
-    anomalies_privilege = df_logs[df_logs['is_privilege_change'] == True].copy()
+    # ==========================================================================
+    # 4. FILTERING & ML DETECTION (CHẠY TRÊN LOG SẠCH)
+    # ==========================================================================
+    
+    # Lọc bỏ log đã bị Rule bắt
+    df_for_ml = df_logs[~df_logs.index.isin(rule_caught_indices)].copy()
+    anomalies_ml = pd.DataFrame()
 
+    if not df_for_ml.empty:
+        logging.info(f"--- Phase 2: Running ML on {len(df_for_ml)} clean logs ---")
+        
+        # 1. Train Background (Chỉ học trên log sạch -> Model chuẩn hơn)
+        uba_engine.train_and_update(df_for_ml)
 
-    # # ========================================================
-    # # CHUẨN BỊ DỮ LIỆU ACTIVE RESPONSE
-    # # ========================================================
+        # 2. Predict (Tìm unknown anomalies)
+        if uba_engine.model and uba_engine.features:
+            try:
+                X = df_for_ml.copy()
+                for f in uba_engine.features:
+                    if f not in X.columns: X[f] = 0
+                X = X[uba_engine.features]
+
+                # Categorical handling
+                for col in X.columns:
+                    if col in uba_engine.cat_mapping:
+                        known_cats = uba_engine.cat_mapping[col]
+                        X[col] = X[col].astype(str).astype(pd.CategoricalDtype(categories=known_cats))
+                        if 'unknown' in known_cats: X[col] = X[col].fillna('unknown')
+                        else: X[col] = X[col].fillna(known_cats[0])
+                    else:
+                        X[col] = pd.to_numeric(X[col], errors='coerce').fillna(0)
+
+                scores = uba_engine.model.predict_proba(X)[:, 1]
+                df_for_ml['ml_anomaly_score'] = scores
+                
+                # Ngưỡng động
+                q_thresh = DEFAULT_ML_CONFIG["inference_quantile_threshold"]
+                min_thresh = DEFAULT_ML_CONFIG["inference_min_threshold"]
+                threshold = max(np.quantile(scores, q_thresh), min_thresh) if len(scores) > 0 else min_thresh
+                
+                # Chỉ lấy những cái vượt ngưỡng
+                anomalies_ml = df_for_ml[scores >= threshold].copy()
+                if not anomalies_ml.empty:
+                    anomalies_ml['behavior_group'] = 'ML_DETECTED'
+            except Exception as e:
+                logger.error(f"Inference failed: {e}")
+                df_logs['ml_anomaly_score'] = 0.0
+    else:
+        logging.info("All logs caught by Rules. Skipping ML.")
+
+    # ==========================================================================
+    # 5. ACTIVE RESPONSE
+    # ==========================================================================
     # users_to_lock_list = []
-    # # 1. Thu thập tất cả các vi phạm
-    # list_of_violation_dfs = []
-
-    # # Các vi phạm dạng "point-in-time"
-    # point_in_time_anomalies = [
-    #     anomalies_late_night, anomalies_large_dump, anomalies_sensitive_access,
-    #     anomalies_unusual_user_time
+    # # Thu thập tất cả vi phạm từ MỌI NGUỒN (Rule Mới + Rule Cũ + ML)
+    # violation_dfs = [
+    #     df_rule_access, df_rule_insider, df_rule_technical, df_rule_destruction, df_rule_multi,
+    #     anomalies_user_time, anomalies_ml
     # ]
-    # for df in point_in_time_anomalies:
-    #     if not df.empty and 'user' in df.columns and 'client_ip' in df.columns:
-    #         list_of_violation_dfs.append(df[['user', 'client_ip']])
-
-    # # Các vi phạm dạng "session" (multi_table)
-    # if not anomalies_multiple_tables_df.empty:
-    #     session_violations = []
-    #     for _, row in anomalies_multiple_tables_df.iterrows():
-    #         user = row['user']
-    #         if row['queries_details']:
-    #             client_ip = row['queries_details'][0].get('client_ip')
-    #             if user and client_ip:
-    #                 session_violations.append({'user': user, 'client_ip': client_ip})
-
-    #     if session_violations:
-    #         list_of_violation_dfs.append(pd.DataFrame(session_violations))
-
-    # # 2. Tổng hợp, đếm và lọc các user vượt ngưỡng
+    
+    # list_of_violation_dfs = []
+    # for df in violation_dfs:
+    #     if not df.empty and 'user' in df.columns:
+    #         # Lấy user và ip (nếu có)
+    #         cols = ['user', 'client_ip'] if 'client_ip' in df.columns else ['user']
+    #         temp = df[cols].copy()
+    #         if 'client_ip' not in temp.columns: temp['client_ip'] = 'unknown'
+    #         list_of_violation_dfs.append(temp)
+            
     # if list_of_violation_dfs:
-    #     all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
-
-    #     # Tổng hợp vi phạm THEO USER
-    #     user_violation_counts = all_violations_df.groupby('user').size().reset_index(name='total_violation_count')
-
-    #     # Lọc ra các user vượt ngưỡng TỔNG
+    #     all_violations = pd.concat(list_of_violation_dfs, ignore_index=True)
+    #     # Đếm số lần vi phạm theo User
+    #     user_violation_counts = all_violations.groupby('user').size().reset_index(name='total_violation_count')
+        
+    #     # Kiểm tra ngưỡng (Lấy từ config.py)
     #     offenders = user_violation_counts[
     #         user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD
-    #         ]
-    #     # Chuyển thành list dictionary để truyền đi
+    #     ]
+        
     #     if not offenders.empty:
     #         users_to_lock_list = offenders.to_dict('records')
-    # # =============================================================
+    #         logging.warning(f"ACTIVE RESPONSE TRIGGERED: {len(users_to_lock_list)} users marked for locking.")
 
-    # Normal activities
-    anomalous_indices = set(anomalies_ml.index)
-    for df_anom in [anomalies_late_night, anomalies_large_dump, anomalies_sensitive_access,
-                    anomalies_unusual_user_time, anomalies_sqli, anomalies_privilege]:
-        if not df_anom.empty:
-            anomalous_indices.update(df_anom.index)
-    normal_activities = df_logs[~df_logs.index.isin(anomalous_indices)].copy()
+    # ==========================================================================
+    # 6. TỔNG HỢP KẾT QUẢ CUỐI CÙNG
+    # ==========================================================================
+    
+    anomalies_multi_table_agg = _aggregate_multi_table_alerts(df_rule_multi)
+    
+    # Tổng hợp toàn bộ index bất thường (Rule + ML)
+    all_anomalous_indices = rule_caught_indices.union(set(anomalies_ml.index.tolist()))
+    
+    # Log bình thường = Không dính Rule VÀ Không dính ML
+    normal_activities = df_logs[~df_logs.index.isin(all_anomalous_indices)].copy()
 
-    # === KẾT QUẢ ===
+    # Mapping kết quả trả về
     results = {
         "all_logs": df_logs,
+        
+        # ML
         "anomalies_ml": anomalies_ml,
-        "anomalies_late_night": anomalies_late_night,
-        "anomalies_dump": anomalies_large_dump,
-        "anomalies_multi_table": anomalies_multiple_tables_df,
-        "anomalies_sensitive": anomalies_sensitive_access,
-        "anomalies_user_time": anomalies_unusual_user_time,
-        "anomalies_sqli": anomalies_sqli,
-        "anomalies_privilege": anomalies_privilege,
+        
+        # Rule
+        "rule_access": df_rule_access,
+        "rule_insider": df_rule_insider,
+        "rule_technical": df_rule_technical,
+        "rule_destruction": df_rule_destruction,
+        "rule_behavior_profile": anomalies_user_time,
+        
+        # Rule (Session Level) 
+        "rule_multi_table": anomalies_multi_table_agg,
+        
+        # Active Response
+        # "users_to_lock": users_to_lock_list,
+        
         "normal_activities": normal_activities,
-        # "users_to_lock": users_to_lock_list  # List [{'user': 'abc', 'total_violation_count': 5}]
     }
 
-    logging.info(f"Processing complete. Total anomalies: {len(anomalous_indices)} / {len(df_logs)}")
+    logging.info(f"Processing complete. Rules: {len(rule_caught_indices)}, ML: {len(anomalies_ml)}")
     return results
-
 
 # --------------------------- Model I/O ---------------------------
 def save_model_and_scaler(model, scaler, path):

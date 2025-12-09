@@ -12,6 +12,7 @@ class AnomalyBase(BaseModel):
     database: Optional[str] = None
     query: str
     anomaly_type: str
+    behavior_group: Optional[str] = None
     score: Optional[float] = None
     reason: Optional[str] = None
     status: str
@@ -30,6 +31,7 @@ class UnifiedAnomaly(BaseModel):
     id: str
     source: Literal["event", "aggregate"]
     anomaly_type: Optional[str] = None
+    behavior_group: Optional[str] = None
     timestamp: Optional[datetime] = None
     user: Optional[str] = None
     database: Optional[str] = None
@@ -71,6 +73,8 @@ class AllLogsBase(BaseModel):
     query: str
     is_anomaly: bool
     analysis_type: Optional[str] = None
+    behavior_group: Optional[str] = None
+    specific_rule: Optional[str] = None
 
 # --- Schema để trả về cho người dùng (Thêm 'id') ---
 class AllLogs(AllLogsBase):
@@ -81,11 +85,13 @@ class AllLogs(AllLogsBase):
         # orm_mode = True # Dùng nếu bạn ở Pydantic v1
 
 class AnomalyKpis(BaseModel):
-    late_night: int
-    large_dump: int
-    multi_table: int
-    sensitive_access: int
-    profile_deviation: int
+    access_anomaly: int
+    insider_threat: int
+    technical_attack: int
+    data_destruction: int
+    ml_detected: int
+    multi_table: int  
+    behavioral_profile: int 
     total: int
 
 class AnomalyFacetResponse(BaseModel):

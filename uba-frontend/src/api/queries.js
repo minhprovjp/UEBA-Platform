@@ -18,12 +18,14 @@ export const useAnomalyKpis = () =>
   });
 
 // Facets (users, types)
-export const useAnomalyFacets = () =>
+export const useAnomalyFacets = (behavior_group) =>
   useQuery({
-    queryKey: ['anomalyFacets'],
+    queryKey: ['anomalyFacets', behavior_group], // Thêm vào key để auto-refetch khi đổi nhóm
     queryFn: async () => {
-      const { data } = await apiClient.get('/api/anomalies/facets');
-      return data; // {users:[], types:[]}
+      const { data } = await apiClient.get('/api/anomalies/facets', {
+        params: cleanParams({ behavior_group }) // Gửi params
+      });
+      return data; 
     },
     staleTime: 60_000,
     refetchInterval: 1000,
@@ -41,6 +43,7 @@ export const useAnomalySearch = (filters) =>
           search: filters.search,
           user: filters.user,
           anomaly_type: filters.anomaly_type,
+          behavior_group: filters.behavior_group,
           date_from: filters.date_from,
           date_to: filters.date_to,
         }),
@@ -57,17 +60,20 @@ export const useLogs = (filters) => {
   return useQuery({
     queryKey: ['logs', filters], // Key sẽ thay đổi khi filter thay đổi
     queryFn: async () => {
-      // params sẽ tự động loại bỏ các giá trị null/undefined
-      const { data } = await apiClient.get('/api/logs/', { 
-        params: {
-          skip: filters.pageIndex * filters.pageSize,
-          limit: filters.pageSize,
-          search: filters.search, // Cần backend hỗ trợ
-          user: filters.user,     // Cần backend hỗ trợ
-          date_from: filters.date_from, // Cần backend hỗ trợ
-          date_to: filters.date_to,   // Cần backend hỗ trợ
-        } 
+      const params = cleanParams({
+        skip: filters.pageIndex * filters.pageSize,
+        limit: filters.pageSize,
+        search: filters.search,
+        user: filters.user,
+        // Backend mong đợi YYYY-MM-DDTHH:MM:SS, nếu input type="datetime-local" trả về YYYY-MM-DDTHH:MM
+        // thì vẫn ổn, nhưng quan trọng là không được gửi chuỗi rỗng.
+        date_from: filters.date_from, 
+        date_to: filters.date_to,
+        // Nếu bạn muốn hỗ trợ lọc theo anomaly only ở server-side sau này:
+        // is_anomaly: filters.is_anomaly 
       });
+      // params sẽ tự động loại bỏ các giá trị null/undefined
+      const { data } = await apiClient.get('/api/logs/', {params});
       // API của bạn không trả về totalCount, nên ta sẽ tự đoán
       // Nếu số log trả về < pageSize, nghĩa là đã hết
       const hasMore = data.length === filters.pageSize;
@@ -77,12 +83,14 @@ export const useLogs = (filters) => {
 };
 
 // Hook để lấy TẤT CẢ anomalies (có phân trang và bộ lọc)
-export const useAnomalyStats = () =>
+export const useAnomalyStats = (timeRange = '24h') => // <--- Nhận tham số
   useQuery({
-    queryKey: ['anomalyStats'],
+    queryKey: ['anomalyStats', timeRange], // <--- Thêm vào key để auto refetch
     queryFn: async () => {
-      const { data } = await apiClient.get('/api/anomalies/stats');
-      return data; // { event_count, aggregate_count, total_count }
+      const { data } = await apiClient.get('/api/anomalies/stats', {
+        params: { time_range: timeRange } // <--- Gửi params lên server
+      });
+      return data;
     },
     staleTime: 0,            // Dữ liệu luôn được coi là "cũ" ngay lập tức để chấp nhận cái mới
     refetchInterval: 1000,   // Tự động gọi lại API mỗi 5000ms (5 giây)
