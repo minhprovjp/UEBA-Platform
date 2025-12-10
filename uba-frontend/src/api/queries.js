@@ -14,7 +14,7 @@ export const useAnomalyKpis = () =>
       return data; // {late_night, large_dump, multi_table, sensitive_access, profile_deviation, total}
     },
     staleTime: 30_000,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 // Facets (users, types)
@@ -28,7 +28,7 @@ export const useAnomalyFacets = (behavior_group) =>
       return data; 
     },
     staleTime: 60_000,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 // Search hợp nhất (server-side)
@@ -52,7 +52,7 @@ export const useAnomalySearch = (filters) =>
     },
     keepPreviousData: true,
     staleTime: 0,           
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 // Hook để lấy TẤT CẢ logs (có phân trang và bộ lọc)
@@ -93,7 +93,7 @@ export const useAnomalyStats = (timeRange = '24h') => // <--- Nhận tham số
       return data;
     },
     staleTime: 0,            // Dữ liệu luôn được coi là "cũ" ngay lập tức để chấp nhận cái mới
-    refetchInterval: 1000,   // Tự động gọi lại API mỗi 5000ms (5 giây)
+    refetchInterval: 2000,   // Tự động gọi lại API mỗi 5000ms (5 giây)
   });
 
 export const useEventAnomalies = (filters) =>
@@ -115,7 +115,7 @@ export const useEventAnomalies = (filters) =>
     },
     keepPreviousData: true,
     staleTime: 0,          
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 export const useAggregateAnomalies = (filters) =>
@@ -137,7 +137,7 @@ export const useAggregateAnomalies = (filters) =>
     },
     keepPreviousData: true,
     staleTime: 0,         
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 // (tuỳ chọn) dữ liệu để vẽ biểu đồ theo giờ từ Event anomalies
@@ -145,7 +145,7 @@ export const useEventAnomalyHistogram = () =>
   useQuery({
     queryKey: ['eventAnomalyHistogram'],
     queryFn: async () => {
-      const { data } = await apiClient.get('/api/anomalies/events', { params: { skip: 0, limit: 10000 } });
+      const { data } = await apiClient.get('/api/anomalies/events', { params: { skip: 0, limit: 100000 } });
       // sửa spread: ...a (không phải .a)
       const hours = Array.from({ length: 24 }, (_, i) => ({ name: `${i}:00`, count: 0 }));
       for (const a of data.map((a) => ({ ...a, hour: new Date(a.timestamp).getHours() }))) {
@@ -154,7 +154,7 @@ export const useEventAnomalyHistogram = () =>
       return hours;
     },
     staleTime: 30_000,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 export const useAnomalyTypeStats = () =>
@@ -165,7 +165,7 @@ export const useAnomalyTypeStats = () =>
       return data; // { by_type: {late_night, dump, multi_table, sensitive, user_time, ml}, total }
     },
     staleTime: 30_000,
-    refetchInterval: 1000,
+    refetchInterval: 2000,
   });
 
 

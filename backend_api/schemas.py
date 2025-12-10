@@ -34,12 +34,14 @@ class UnifiedAnomaly(BaseModel):
     behavior_group: Optional[str] = None
     timestamp: Optional[datetime] = None
     user: Optional[str] = None
+    client_ip: Optional[str] = None
     database: Optional[str] = None
     query: Optional[str] = None          # chỉ event mới có
     reason: Optional[str] = None
     score: Optional[float] = None        # event: score | aggregate: severity
     scope: Optional[str] = None          # aggregate: 'session' | 'user' | ...
     details: Optional[Dict[str, Any]] = None
+    ai_analysis: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -52,12 +54,16 @@ class AnomalyStats(BaseModel):
 # --- Schema cho Yêu cầu Phân tích của LLM ---
 # Định nghĩa cấu trúc dữ liệu mà frontend PHẢI gửi lên khi yêu cầu phân tích.
 class AnomalyAnalysisRequest(BaseModel):
-    timestamp: str
-    user: str
-    query: str
+    id: str
+    timestamp: datetime 
+    user: Optional[str] = None
+    # Đổi thành Optional vì Session Anomaly không có single query
+    query: Optional[str] = None 
     anomaly_type: str
     score: Optional[float] = None
     reason: Optional[str] = None
+    # Thêm trường này để Backend biết xử lý kiểu event hay session
+    details: Optional[Dict[str, Any]] = None
     
 # === THÊM SCHEMA MỚI CHO FEEDBACK ===
 class FeedbackCreate(BaseModel):
@@ -110,3 +116,7 @@ class AnomalySearchItem(BaseModel):
 class AnomalySearchResponse(BaseModel):
     total: int
     items: List[AnomalySearchItem]
+    
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str

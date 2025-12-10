@@ -238,56 +238,72 @@ export default function AnomalyTriage() {
       </div>
 
       {/* --- BẢNG DỮ LIỆU --- */}
-      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border flex flex-col">
-        {/* Header */}
-        <div className="bg-zinc-900 px-4 py-2 grid grid-cols-[14rem,9rem,8rem,1fr,1fr,6rem] text-sm text-muted-foreground font-medium border-b border-zinc-800">
-          <div>Time</div><div>User</div><div>Specific Rule</div><div>Query / Content</div><div>Reason</div><div className="text-center">Score</div>
-        </div>
+      <div className="flex-1 min-h-0 rounded-lg border border-zinc-800 flex flex-col bg-zinc-950/30 overflow-hidden">
+        
+        {/* Đưa Header vào trong scroll container để đồng bộ kích thước */}
+        <div className="flex-1 overflow-auto custom-scrollbar relative">
+          
+          {/* Header (Sticky) - [FIX] Tinh chỉnh lại grid-cols cho cân đối */}
+          <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur border-b border-zinc-800 px-4 py-2 grid grid-cols-[11rem,8rem,10rem,2fr,1fr,5rem] gap-3 text-xs font-bold text-zinc-500 uppercase tracking-wider">
+            <div>Time</div>
+            <div>User</div>
+            <div>Specific Rule</div>
+            <div>Query / Content</div>
+            <div>Reason</div>
+            <div className="text-center">Score</div>
+          </div>
 
-        {/* Body (Scrollable) */}
-        <div className="flex-1 overflow-auto custom-scrollbar">
+          {/* Body */}
           {rows.length === 0 && (
              <div className="text-center py-20 text-zinc-500 italic">No anomalies found matching your filters.</div>
           )}
-          {rows.map((r) => (
-            <div
-              key={r.id}
-              className="px-4 py-3 grid grid-cols-[14rem,9rem,8rem,1fr,1fr,6rem] gap-3 border-b border-zinc-800/50 hover:bg-zinc-900 cursor-pointer items-start transition-colors"
-              onClick={() => setSelectedLog(r)}
-            >
-              {/* Cột Time: Có icon phân loại */}
-              <div className="flex items-center gap-2 truncate text-sm text-zinc-300">
-                 {r.source === 'aggregate' 
-                    ? <Activity className="w-4 h-4 text-orange-500 shrink-0"/> 
-                    : <FileText className="w-4 h-4 text-blue-500 shrink-0"/>
-                 }
-                 {new Date(r.timestamp).toLocaleString()}
+          
+          <div className="pb-2">
+            {rows.map((r) => (
+              <div
+                key={r.id}
+                // [FIX] Grid cols phải khớp hoàn toàn với Header ở trên
+                className="px-4 py-3 grid grid-cols-[11rem,8rem,10rem,2fr,1fr,5rem] gap-3 border-b border-zinc-800/50 hover:bg-zinc-900/80 cursor-pointer items-start transition-colors group"
+                onClick={() => setSelectedLog(r)}
+              >
+                {/* 1. Cột Time */}
+                <div className="flex items-center gap-2 truncate text-xs text-zinc-300 font-mono mt-0.5">
+                   {r.source === 'aggregate' 
+                      ? <Layers className="w-3.5 h-3.5 text-orange-500 shrink-0"/> 
+                      : <Activity className="w-3.5 h-3.5 text-blue-500 shrink-0"/>
+                   }
+                   {new Date(r.timestamp).toLocaleString()}
+                </div>
+
+                {/* 2. Cột User */}
+                <div className="truncate text-sm font-medium text-zinc-200" title={r.user}>
+                    {r.user ?? '—'}
+                </div>
+
+                {/* 3. Cột Rule (Đã mở rộng width) */}
+                <div>
+                  <span className="px-2 py-0.5 text-[13px] rounded-sm border truncate block w-fit max-w-full bg-zinc-800/80 border-zinc-700 text-zinc-300 font-mono" title={r.anomaly_type}>
+                    {r.anomaly_type}
+                  </span>
+                </div>
+
+                {/* 4. Cột Nội dung */}
+                <div className="h-14 overflow-hidden text-xs text-zinc-400 font-mono bg-zinc-950/50 p-1.5 rounded border border-zinc-800/50 group-hover:border-zinc-700 transition-colors">
+                  {renderContent(r)}
+                </div>
+
+                {/* 5. Cột Lý do */}
+                <div className="text-xs text-zinc-500 h-14 overflow-hidden line-clamp-3 leading-relaxed">
+                  {r.reason || '—'}
+                </div>
+
+                {/* 6. Cột Điểm số */}
+                <div className={`text-center font-bold text-sm mt-0.5 ${scoreOf(r) >= 0.8 ? 'text-red-500' : 'text-zinc-400'}`}>
+                    {scoreOf(r)}
+                </div>
               </div>
-
-              {/* Cột User */}
-              <div className="truncate text-sm font-medium text-zinc-200">{r.user ?? '—'}</div>
-
-              {/* Cột Rule cụ thể */}
-              <div>
-                <span className={`px-2 py-0.5 text-xs rounded-full border truncate block w-fit max-w-full bg-zinc-800 border-zinc-700 text-zinc-400`} title={r.anomaly_type}>
-                  {r.anomaly_type}
-                </span>
-              </div>
-
-              {/* Cột Nội dung (Xử lý Aggregate/Event) */}
-              <div className="h-16">
-                {renderContent(r)}
-              </div>
-
-              {/* Cột Lý do */}
-              <div className="text-sm text-zinc-400 whitespace-pre-wrap h-16 overflow-y-auto custom-scrollbar">
-                {r.reason || '—'}
-              </div>
-
-              {/* Cột Điểm số */}
-              <div className="text-center font-bold text-zinc-300 text-sm mt-1">{scoreOf(r)}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 
