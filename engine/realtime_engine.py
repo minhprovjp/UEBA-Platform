@@ -73,70 +73,89 @@ def ensure_group(r: Redis, stream: str, group: str):
 
 
 
+# Trong realtime_engine.py
+
 def handle_email_alerts_async(results: dict):
     """
-    Xử lý gửi email với cơ chế:
-    1. Aggregation: Gom các bất thường lại.
-    2. Throttling: Chỉ gửi nếu đã qua thời gian cooldown.
-    3. Async: Gửi bằng thread riêng.
+    Xử lý gửi email:
+    1. Duyệt qua các nhóm Rule (Access, Technical, Insider...).
+    2. Group by 'specific_rule' để tách riêng từng loại tấn công (VD: SQLi, Bruteforce).
+    3. Throttling & Async Send.
     """
     global LAST_EMAIL_SENT_TIME, PENDING_VIOLATIONS
 
     # 1. Thu thập dữ liệu tóm tắt từ batch hiện tại
     current_batch_summary = []
-    def add_violation(df, title, description):
-        if df is not None and not df.empty:
-            # Trích xuất User/IP ---
-            # Group by User & IP để lấy danh sách đối tượng
-            if 'user' in df.columns and 'client_ip' in df.columns:
-                users_ips = df.groupby(['user', 'client_ip'], observed=True).size().reset_index().apply(
+
+    # Danh sách các key mới từ data_processor
+    result_keys = [
+        'rule_access', 'rule_insider', 'rule_technical', 
+        'rule_destruction', 'rule_multi_table', 'rule_behavior_profile',
+        'anomalies_ml' # ML vẫn giữ nguyên logic cũ hoặc xử lý riêng
+    ]
+
+    for key in result_keys:
+        df = results.get(key)
+        if df is None or df.empty:
+            continue
+
+        # Nếu là ML anomalies, gán nhãn thủ công nếu chưa có
+        if key == 'anomalies_ml':
+            if 'specific_rule' not in df.columns:
+                df['specific_rule'] = 'ML Anomaly Detection'
+        
+        # Đảm bảo có cột specific_rule
+        if 'specific_rule' not in df.columns:
+            df['specific_rule'] = 'Unknown Rule'
+
+        # Group theo loại vi phạm cụ thể (VD: SQL Injection, Brute-force, ...)
+        # Để email báo rõ ràng từng loại lỗi
+        for rule_name, group in df.groupby('specific_rule'):
+            if group.empty: continue
+            
+            # Trích xuất User/IP
+            if 'user' in group.columns and 'client_ip' in group.columns:
+                users_ips = group.groupby(['user', 'client_ip'], observed=True).size().reset_index().apply(
                     lambda x: f"{x['user']}@{x['client_ip']}", axis=1
                 ).unique().tolist()
-            elif 'user' in df.columns:
-                users_ips = df['user'].unique().tolist()
+            elif 'user' in group.columns:
+                users_ips = group['user'].unique().tolist()
             else:
                 users_ips = ["Unknown"]
 
-            time_col = 'start_time' if 'start_time' in df.columns else 'timestamp'
+            time_col = 'start_time' if 'start_time' in group.columns else 'timestamp'
+            
+            # Mô tả (Có thể map rule_name sang description dài hơn nếu muốn)
+            description = f"Detected {len(group)} events violating rule: {rule_name}"
 
-            # Đẩy object vào buffer
             current_batch_summary.append({
-                'title': title,
-                'count': len(df),
-                'first_time': df[time_col].min(),  # Giữ dạng datetime để sort/min/max
-                'last_time': df[time_col].max(),
+                'title': rule_name, # VD: "SQL Injection", "Late Night Query"
+                'count': len(group),
+                'first_time': group[time_col].min(),
+                'last_time': group[time_col].max(),
                 'desc': description,
-                'targets': users_ips  # List các user liên quan
+                'targets': users_ips
             })
-    # Trích xuất dữ liệu
-    add_violation(results.get("anomalies_late_night"), "Late-Night Access", "Queries executed outside the allowed time window")
-    add_violation(results.get("anomalies_dump"), "Large Data Dump", "Queries without a WHERE clause or with always-true conditions, ...")
-    add_violation(results.get("anomalies_multi_table"), "Multi-Table Access", "A session scanning many different tables")
-    add_violation(results.get("anomalies_sensitive"), "Sensitive Data", "Unauthorized access to protected tables")
-    add_violation(results.get("anomalies_user_time"), "Abnormal Profile", "Activity different from the user’s normal behavior.")
 
     # Nếu có vi phạm mới, thêm vào buffer chung
     if current_batch_summary:
         PENDING_VIOLATIONS.extend(current_batch_summary)
 
     # 2. Kiểm tra Cooldown (Throttling)
-    # Chỉ gửi khi: (Có dữ liệu trong buffer) VÀ (Đã qua thời gian cooldown)
     now = datetime.now()
     time_since_last = (now - LAST_EMAIL_SENT_TIME).total_seconds()
 
     if PENDING_VIOLATIONS and (time_since_last > EMAIL_COOLDOWN_SECONDS):
-        # Sao chép buffer để gửi và xóa buffer gốc (tránh race condition)
         data_to_send = PENDING_VIOLATIONS.copy()
         PENDING_VIOLATIONS.clear()
         LAST_EMAIL_SENT_TIME = now
-
 
         # 3. Gửi Async bằng Thread
         email_thread = threading.Thread(
             target=send_email_thread_worker,
             args=(data_to_send,)
         )
-        email_thread.daemon = True  # Thread sẽ tự tắt khi chương trình chính tắt
+        email_thread.daemon = True
         email_thread.start()
 
 def aggregate_violations(violation_list):

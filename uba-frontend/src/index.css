@@ -72,3 +72,27 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Áp dụng cho TOÀN BỘ phần tử có thanh cuộn trong trang */
+::-webkit-scrollbar {
+  width: 8px;   /* Chiều rộng thanh dọc */
+  height: 8px;  /* Chiều cao thanh ngang */
+}
+
+::-webkit-scrollbar-track {
+  background: #09090b; /* Màu nền (zinc-950) */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a; /* Màu thanh kéo (zinc-800) */
+  border-radius: 4px;
+  border: 1px solid #09090b; /* Viền nhẹ để tách biệt */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46; /* Màu khi di chuột (zinc-700) */
+}
+
+::-webkit-scrollbar-corner {
+  background: #09090b;
+}

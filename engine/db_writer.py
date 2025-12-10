@@ -281,31 +281,69 @@ def save_results_to_db(results: Dict[str, Any]):
 
     # === 2. Save Event-Level Anomalies ===
     anomaly_frames = []
-    for key, df in results.items():
-        if not key.startswith("anomalies_") or df is None or df.empty:
+    
+    # Map tên key trả về từ data_processor sang Behavior Group tương ứng
+    # (Để đề phòng trường hợp cột behavior_group bị thiếu trong DF)
+    key_to_group_map = {
+        'rule_access': 'ACCESS_ANOMALY',
+        'rule_insider': 'INSIDER_THREAT',
+        'rule_technical': 'TECHNICAL_ATTACK',
+        'rule_destruction': 'DATA_DESTRUCTION',
+        'rule_behavior_profile': 'UNUSUAL_BEHAVIOR',
+        'anomalies_ml': 'ML_DETECTED'
+    }
+
+    detection_keys = list(key_to_group_map.keys())
+
+    for key in detection_keys:
+        df = results.get(key)
+        if df is None or df.empty:
             continue
+            
         df_anom = df.copy()
-        df_anom['anomaly_type'] = key.replace("anomalies_", "")
-        df_anom['score'] = df_anom.get('ml_anomaly_score', 1.0)
-        df_anom['reason'] = df_anom.get('unusual_activity_reason', f"Rule: {key}")
+        
+        # 1. Lấy anomaly_type từ specific_rule
+        if 'specific_rule' in df_anom.columns:
+            df_anom['anomaly_type'] = df_anom['specific_rule']
+        else:
+            df_anom['anomaly_type'] = key  # Fallback
+            
+        # 2. Lấy behavior_group [QUAN TRỌNG]
+        # Ưu tiên lấy từ cột có sẵn trong DF (do data_processor tạo ra)
+        if 'behavior_group' not in df_anom.columns or df_anom['behavior_group'].isnull().all():
+             df_anom['behavior_group'] = key_to_group_map.get(key, 'UNKNOWN')
+
+        # ... (giữ nguyên logic score/reason cũ) ...
+        if 'ml_anomaly_score' not in df_anom.columns:
+            df_anom['ml_anomaly_score'] = 1.0
+        if 'unusual_activity_reason' not in df_anom.columns:
+             df_anom['unusual_activity_reason'] = f"Detected by {key}"
+
+        df_anom['score'] = df_anom['ml_anomaly_score']
+        df_anom['reason'] = df_anom['unusual_activity_reason']
+        
         anomaly_frames.append(df_anom)
 
     if anomaly_frames:
         df_anomalies = pd.concat(anomaly_frames, ignore_index=True)
-        
-        # Fix timestamp
+        # ... xử lý timestamp ...
         if 'timestamp' in df_anomalies.columns:
             df_anomalies['timestamp'] = pd.to_datetime(df_anomalies['timestamp'], utc=True).dt.tz_localize(None)
 
         anomaly_records = []
         for _, row in df_anomalies.iterrows():
             rec = {
+                # ... các trường cũ ...
                 'timestamp': row.get('timestamp'),
                 'user': row.get('user'),
                 'client_ip': row.get('client_ip'),
                 'database': row.get('database'),
                 'query': str(row.get('query', '')),
-                'anomaly_type': row.get('anomaly_type', 'unknown'),
+                'anomaly_type': str(row.get('anomaly_type', 'unknown'))[:100],
+                
+                # === [THÊM MỚI] Lưu Behavior Group ===
+                'behavior_group': str(row.get('behavior_group', 'UNKNOWN')),
+                
                 'score': _safe_float(row.get('score')),
                 'reason': str(row.get('reason', ''))[:500],
                 'status': 'new',
@@ -313,7 +351,6 @@ def save_results_to_db(results: Dict[str, Any]):
                 'rows_returned': _safe_int(row.get('rows_returned')),
                 'rows_affected': _safe_int(row.get('rows_affected')),
             }
-            # Loại bỏ các bản ghi không có timestamp
             if pd.notna(rec['timestamp']):
                 anomaly_records.append(rec)
 
@@ -330,14 +367,15 @@ def save_results_to_db(results: Dict[str, Any]):
                 log.error(f"Failed to save Anomalies: {e}", exc_info=True)
 
     # === 3. Save Session-Level (Aggregate) Anomalies ===
-    if "anomalies_multi_table" in results:
-        df_agg = results["anomalies_multi_table"]
+    if "rule_multi_table" in results:
+        df_agg = results["rule_multi_table"]
         if not df_agg.empty:
             agg_records = []
             for _, row in df_agg.iterrows():
                 details = {
                     "tables": row.get("tables_accessed_in_session", []),
                     "query_count": len(row.get("queries_details", [])),
+                    "evidence_queries": row.get("queries_details", []),
                     "duration_sec": (row['end_time'] - row['start_time']).total_seconds() if pd.notna(row['start_time']) and pd.notna(row['end_time']) else 0
                 }
                 agg_records.append({

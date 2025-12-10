@@ -4,7 +4,7 @@ from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import func, or_, text, cast, Text
 
 # Import các thành phần từ các file trong cùng thư mục
@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from engine.config_manager import load_config, save_config
     from engine.utils import save_feedback_to_csv
-    from engine.llm_analyzer import analyze_query_with_llm, analyze_session_with_llm
+    from engine.llm_analyzer_dual import analyze_query_with_llm, analyze_session_with_llm
 except ImportError as e:
     print("="*50)
     print(f"LỖI IMPORT NGHIÊM TRỌNG: {e}")
@@ -123,191 +123,301 @@ def _apply_common_filters(q, user: Optional[str], anomaly_type: Optional[str],
             q = q.filter(models.Anomaly.timestamp <= dtt)
     return q
 
-# --- Stats: đếm đúng 3 con số ---
 @app.get("/api/anomalies/stats", response_model=Dict[str, Any], tags=["Anomalies"])
-def anomaly_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-    # 1. Giữ nguyên logic cũ: Đếm tổng
-    event_count = db.query(func.count(models.Anomaly.id)).scalar() or 0
-    agg_count   = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
-    total_anomalies = int(event_count + agg_count)
+def anomaly_stats(
+    time_range: str = "D",
+    db: Session = Depends(get_db), 
+    api_key: str = Security(get_api_key)
+):
+    # 1. Xử lý thời gian lọc (Giữ nguyên logic cũ)
+    now = datetime.now()
+    if time_range == "W":
+        start_date = now - timedelta(days=7)
+        group_mode = "day"
+    elif time_range == "M":
+        start_date = now - timedelta(days=30)
+        group_mode = "day"
+    elif time_range == "6M":
+        start_date = now - timedelta(days=180)
+        group_mode = "month"
+    elif time_range == "Y":
+        start_date = now - timedelta(days=365)
+        group_mode = "month"
+    else: # Default 24h
+        start_date = now - timedelta(hours=24)
+        group_mode = "hour"
 
-    # 2. THÊM MỚI: Tính Critical Alerts (Ví dụ: những log có score >= 0.8)
-    # Backend tự lọc và đếm luôn, Frontend chỉ việc hiển thị số
-    crit_events = db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.score >= 0.8).scalar() or 0
-    crit_aggs   = db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.severity >= 0.8).scalar() or 0
+    # 2. KPI Tổng quan (Giữ nguyên)
+    total_scanned = db.query(func.count(models.AllLogs.id)).scalar() or 0
+    event_count = db.query(func.count(models.Anomaly.id)).scalar() or 0
+    agg_count = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
+    total_anomalies = int(event_count + agg_count)
+    
+    crit_events = db.query(func.count(models.Anomaly.id)).filter(
+        or_(
+            # models.Anomaly.score >= 0.9, 
+            models.Anomaly.behavior_group.in_(['TECHNICAL_ATTACK', 'DATA_DESTRUCTION', 'SQL Injection'])
+        )
+    ).scalar() or 0
+    crit_aggs = db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.anomaly_type.in_(['TECHNICAL_ATTACK', 'DATA_DESTRUCTION', 'SQL Injection'])).scalar() or 0
     critical_alerts = int(crit_events + crit_aggs)
 
-    # 3. THÊM MỚI: Tìm Riskiest User (User xuất hiện nhiều nhất trong bảng Anomaly)
-    # Dùng SQL sắp xếp giảm dần theo số lượng và lấy người đầu tiên (LIMIT 1)
-    top_user = (
-        db.query(models.Anomaly.user, func.count(models.Anomaly.id))
+    # 3. Chart Data (Giữ nguyên logic cũ)
+    chart_query = db.query(models.Anomaly.timestamp).filter(models.Anomaly.timestamp >= start_date).all()
+    data_map = {}
+    if group_mode == "hour":
+        for i in range(24):
+            h = (now - timedelta(hours=23-i)).hour
+            key = f"{h}:00"
+            data_map[key] = 0
+        for log in chart_query:
+            key = f"{log.timestamp.hour}:00"
+            if key in data_map: data_map[key] += 1
+    elif group_mode == "month":
+        curr = start_date.replace(day=1)
+        end_date = now.replace(day=1)
+        while curr <= end_date:
+            key = curr.strftime("%m/%Y")
+            data_map[key] = 0
+            if curr.month == 12:
+                curr = curr.replace(year=curr.year + 1, month=1)
+            else:
+                curr = curr.replace(month=curr.month + 1)
+        for log in chart_query:
+            key = log.timestamp.strftime("%m/%Y")
+            if key in data_map: data_map[key] += 1
+    else:
+        days = (now - start_date).days + 1
+        for i in range(days):
+            d = (start_date + timedelta(days=i)).strftime("%d/%m")
+            data_map[d] = 0
+        for log in chart_query:
+            key = log.timestamp.strftime("%d/%m")
+            if key in data_map: data_map[key] += 1
+    chart_data = [{"name": k, "anomalies": v} for k, v in data_map.items()]
+
+    # 4. Top Risky Users (Giữ nguyên)
+    risky_users_query = (
+        db.query(
+            models.Anomaly.user, 
+            func.sum(models.Anomaly.score).label("total_score"),
+            func.count(models.Anomaly.id).label("violation_count")
+        )
         .filter(models.Anomaly.user.isnot(None))
         .group_by(models.Anomaly.user)
+        .order_by(text("total_score DESC"))
+        .limit(10)
+        .all()
+    )
+    top_risky_users = [{"user": u, "score": float(s or 0), "count": c} for u, s, c in risky_users_query]
+
+    # 5. Detection Stats (CẬP NHẬT MAPPING MỚI)
+    group_counts = (
+        db.query(models.Anomaly.behavior_group, func.count(models.Anomaly.id))
+        .filter(models.Anomaly.behavior_group.isnot(None))
+        .group_by(models.Anomaly.behavior_group)
+        .all()
+    )
+
+    # Config màu sắc theo NHÓM
+    GROUP_CONFIG = {
+        "TECHNICAL_ATTACK": {"label": "Technical Attacks", "color": "#ef4444"},   # Đỏ
+        "INSIDER_THREAT": {"label": "Insider Threats", "color": "#f97316"},       # Cam
+        "DATA_DESTRUCTION": {"label": "Data Destruction", "color": "#dc2626"},    # Đỏ đậm
+        "ACCESS_ANOMALY": {"label": "Access Anomalies", "color": "#eab308"},      # Vàng
+        "MULTI_TABLE_ACCESS": {"label": "Mass/Multi-Table", "color": "#3b82f6"}, # Xanh dương
+        "UNUSUAL_BEHAVIOR": {"label": "Behavioral Profile", "color": "#d946ef"},  # Hồng
+        "ML_DETECTED": {"label": "AI/ML Detected", "color": "#8b5cf6"},           # Tím
+        "UNKNOWN": {"label": "Other", "color": "#71717a"}                         # Xám
+    }
+
+    detection_stats = []
+    for group_code, count in group_counts:
+        # Nếu group code không có trong config thì fallback về UNKNOWN
+        config = GROUP_CONFIG.get(group_code, GROUP_CONFIG["UNKNOWN"])
+        
+        detection_stats.append({
+            "name": config["label"],
+            "value": count,
+            "color": config["color"]
+        })
+
+    # Cộng thêm Aggregate Anomalies vào nhóm Multi-table cho biểu đồ (nếu chưa có)
+    agg_count = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
+    if agg_count > 0:
+        found = False
+        for item in detection_stats:
+            if item["name"] == GROUP_CONFIG["MULTI_TABLE_ACCESS"]["label"]:
+                item["value"] += agg_count
+                found = True
+                break
+        if not found:
+             detection_stats.append({
+                "name": GROUP_CONFIG["MULTI_TABLE_ACCESS"]["label"],
+                "value": agg_count,
+                "color": GROUP_CONFIG["MULTI_TABLE_ACCESS"]["color"]
+            })
+
+    detection_stats.sort(key=lambda x: x['value'], reverse=True)
+
+    # 6. Targeted DBs & Latest Feed (Giữ nguyên)
+    targeted_dbs_query = (
+        db.query(models.Anomaly.database, func.count(models.Anomaly.id))
+        .filter(models.Anomaly.database.isnot(None))
+        .group_by(models.Anomaly.database)
         .order_by(func.count(models.Anomaly.id).desc())
-        .first()
-    )
-    riskiest_user = top_user[0] if top_user else "N/A"
-
-    # 4. THÊM MỚI: Chart Data (Dữ liệu biểu đồ)
-    # Lấy timestamp của 1000 log gần nhất để phân bố vào các khung giờ
-    recent_logs = (
-        db.query(models.Anomaly.timestamp)
-        .order_by(models.Anomaly.timestamp.desc())
-        .limit(1000)
+        .limit(5)
         .all()
     )
-    
-    # Tạo khung 24 giờ: {"0:00": 0, "1:00": 0, ...}
-    hours_count = {f"{i}:00": 0 for i in range(24)}
-    
-    for log in recent_logs:
-        if log.timestamp:
-            h = log.timestamp.hour # Lấy giờ (0-23)
-            hours_count[f"{h}:00"] += 1
-            
-    # Chuyển đổi sang format danh sách để Frontend dễ vẽ biểu đồ
-    chart_data = [{"name": k, "anomalies": v} for k, v in hours_count.items()]
-    # Sắp xếp lại từ 0h đến 23h
-    chart_data.sort(key=lambda x: int(x["name"].split(":")[0]))
-    
-    ml_types = ["user_time", "profile_deviation", "ml_anomaly","ml"]
+    targeted_entities = [{"name": db_name, "value": count} for db_name, count in targeted_dbs_query]
 
-    # 5a. Lấy log từ bảng Events (nơi chứa user_time)
-    recent_events = (
+    latest_events = (
         db.query(models.Anomaly)
-        .filter(models.Anomaly.anomaly_type.in_(ml_types)) # <--- CHỈ LẤY ML
         .order_by(models.Anomaly.timestamp.desc())
-        .limit(50) 
+        .limit(10)
         .all()
     )
-    
-    # 5b. Lấy log từ bảng Aggregate (nơi chứa multi_table)
-    # Vì multi_table KHÔNG nằm trong danh sách ml_types, nó sẽ tự động bị loại bỏ
-    recent_aggs = (
-        db.query(models.AggregateAnomaly)
-        .filter(models.AggregateAnomaly.anomaly_type.in_(ml_types)) # <--- CHỈ LẤY ML
-        .order_by(models.AggregateAnomaly.created_at.desc())
-        .limit(50) 
-        .all()
-    )
-
-    # 5c. Hợp nhất (Logic giữ nguyên)
-    unified_logs = []
-    
-    for r in recent_events:
-        unified_logs.append({
-            "id": f"evt-{r.id}",
-            "timestamp": r.timestamp,
+    latest_logs = [
+        {
+            "id": f"evt-{r.id}", 
+            "timestamp": r.timestamp, 
             "user": r.user,
-            "anomaly_type": r.anomaly_type,
+            "anomaly_type": r.anomaly_type, 
+            "behavior_group": r.behavior_group,
             "score": r.score, 
-            "source": "event"
-        })
-        
-    for r in recent_aggs:
-        ts = r.end_time or r.start_time or r.created_at
-        unified_logs.append({
-            "id": f"agg-{r.id}",
-            "timestamp": ts,
-            "user": r.user,
-            "anomaly_type": r.anomaly_type,
-            "score": r.severity,
-            "source": "aggregate"
-        })
+            "source": "event",
+            "query": r.query,        
+            "reason": r.reason,      
+            "database": r.database,  
+            "client_ip": r.client_ip 
+        } for r in latest_events
+    ]
 
-    # 5d. Sắp xếp lại theo thời gian giảm dần
-    unified_logs.sort(key=lambda x: x["timestamp"] if x["timestamp"] else datetime.min, reverse=True)
-
-    # 5e. Trả về kết quả
-    latest_logs = unified_logs[:50]
-
-    # Trả về kết quả đầy đủ cho Frontend
     return {
-        "totalAnomalies": total_anomalies, 
-        "criticalAlerts": critical_alerts, 
-        "riskiestUser": riskiest_user,      
-        "chartData": chart_data, 
-        "latestLogs": latest_logs,
-        
-        # Giữ lại các trường cũ (nếu có chỗ khác dùng thì không bị lỗi)
-        "event_count": int(event_count),
-        "aggregate_count": int(agg_count),
-        "total_count": int(total_anomalies),
+        "total_scanned": total_scanned,
+        "total_anomalies": total_anomalies,
+        "critical_alerts": critical_alerts,
+        "riskiest_users": top_risky_users,
+        "detection_stats": detection_stats,
+        "targeted_entities": targeted_entities,
+        "chartData": chart_data,
+        "latestLogs": latest_logs
     }
 
 # NEW: /api/anomalies/type-stats
-@app.get("/api/anomalies/type-stats", tags=["Anomalies"])
-def anomaly_type_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-    # Đếm event theo type
-    ev = db.query(models.Anomaly.anomaly_type, func.count(models.Anomaly.id))\
-           .group_by(models.Anomaly.anomaly_type).all()
-    # Đếm aggregate theo type
-    ag = db.query(models.AggregateAnomaly.anomaly_type, func.count(models.AggregateAnomaly.id))\
-           .group_by(models.AggregateAnomaly.anomaly_type).all()
+# @app.get("/api/anomalies/type-stats", tags=["Anomalies"])
+# def anomaly_type_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+#     # Đếm event theo type
+#     ev = db.query(models.Anomaly.anomaly_type, func.count(models.Anomaly.id))\
+#            .group_by(models.Anomaly.anomaly_type).all()
+#     # Đếm aggregate theo type
+#     ag = db.query(models.AggregateAnomaly.anomaly_type, func.count(models.AggregateAnomaly.id))\
+#            .group_by(models.AggregateAnomaly.anomaly_type).all()
 
-    from collections import defaultdict
-    counts = defaultdict(int)
-    for t, c in ev: counts[(t or '').strip()] += int(c or 0)
-    for t, c in ag: counts[(t or '').strip()] += int(c or 0)
+#     from collections import defaultdict
+#     counts = defaultdict(int)
+#     for t, c in ev: counts[(t or '').strip()] += int(c or 0)
+#     for t, c in ag: counts[(t or '').strip()] += int(c or 0)
 
-    # Chuẩn hoá 5 rule + ml
-    keys = ["late_night", "dump", "multi_table", "sensitive", "user_time", "ml"]
-    by_type = {k: int(counts.get(k, 0)) for k in keys}
-    total = sum(counts.values())
-    return {"by_type": by_type, "total": int(total)}
+#     # Chuẩn hoá 5 rule + ml
+#     keys = ["late_night", "dump", "multi_table", "sensitive", "user_time", "ml"]
+#     by_type = {k: int(counts.get(k, 0)) for k in keys}
+#     total = sum(counts.values())
+#     return {"by_type": by_type, "total": int(total)}
 
 
-# ===== NEW: KPI theo từng rule =====
-@app.get("/api/anomalies/kpis", tags=["Anomalies"])
+@app.get("/api/anomalies/kpis", response_model=schemas.AnomalyKpis, tags=["Anomalies"])
 def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-    # Đếm event theo type
-    def ev_count(types):
-        if isinstance(types, (list, tuple, set)):
-            return db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.anomaly_type.in_(types)).scalar() or 0
-        return db.query(func.count(models.Anomaly.id)).filter(models.Anomaly.anomaly_type == types).scalar() or 0
+    """
+    Thống kê KPI theo Nhóm Hành Vi (Behavior Group) được định nghĩa trong Data Processor.
+    """
+    
+    # 1. Query Group-by trên bảng Anomaly để lấy số lượng từng nhóm
+    # Kết quả trả về dạng: [('ACCESS_ANOMALY', 5), ('TECHNICAL_ATTACK', 10), ...]
+    group_counts = (
+        db.query(models.Anomaly.behavior_group, func.count(models.Anomaly.id))
+        .group_by(models.Anomaly.behavior_group)
+        .all()
+    )
+    
+    # Chuyển list tuple thành dict cho dễ truy xuất: {'ACCESS_ANOMALY': 5, ...}
+    # Sử dụng (g or 'UNKNOWN') để tránh lỗi nếu behavior_group bị null
+    counts_map = { (g or 'UNKNOWN'): c for g, c in group_counts }
 
-    # Đếm aggregate theo type
-    def agg_count(types):
-        if isinstance(types, (list, tuple, set)):
-            return db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.anomaly_type.in_(types)).scalar() or 0
-        return db.query(func.count(models.AggregateAnomaly.id)).filter(models.AggregateAnomaly.anomaly_type == types).scalar() or 0
+    # 2. Đếm Aggregate Anomaly (Thường là Multi-table sessions)
+    # Bảng AggregateAnomaly không có behavior_group, nhưng bản chất nó là MULTI_TABLE_ACCESS
+    agg_count = db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0
 
-    k_late   = ev_count("late_night") + agg_count("late_night")
-    k_dump   = ev_count(["dump", "large_dump"]) + agg_count(["dump", "large_dump"])
-    k_multi  = ev_count(["multi_table", "multi_table_access"]) + agg_count(["multi_table", "multi_table_access"])
-    k_sens   = ev_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access", "analyze_sensitive_access"]) + \
-               agg_count(["sensitive", "sensitive_access", "sensitive_table", "sensitive_table_access"])
-    k_prof   = ev_count(["user_time","profile_deviation"]) + agg_count(["user_time","profile_deviation"])
-    k_sqli   = ev_count(["sqli", "anomalies_sqli"]) 
-    k_priv   = ev_count(["privilege", "anomalies_privilege"])
-
-    total = (db.query(func.count(models.Anomaly.id)).scalar() or 0) + \
-            (db.query(func.count(models.AggregateAnomaly.id)).scalar() or 0)
-
-    return {
-        "late_night": int(k_late),
-        "large_dump": int(k_dump),
-        "multi_table": int(k_multi),
-        "sensitive_access": int(k_sens),
-        "profile_deviation": int(k_prof),
-        "sqli": int(k_sqli),
-        "privilege": int(k_priv),
-        "total": int(total),
+    # 3. Tổng hợp số liệu vào Schema
+    # Lưu ý: 'UNUSUAL_BEHAVIOR' trong DB tương ứng với 'behavioral_profile' hiển thị
+    
+    stats = {
+        "access_anomaly": counts_map.get("ACCESS_ANOMALY", 0),
+        "insider_threat": counts_map.get("INSIDER_THREAT", 0),
+        "technical_attack": counts_map.get("TECHNICAL_ATTACK", 0),
+        "data_destruction": counts_map.get("DATA_DESTRUCTION", 0),
+        "ml_detected": counts_map.get("ML_DETECTED", 0),
+        
+        # Multi-table = (Số lượng trong bảng Anomaly nếu có) + (Số lượng Sessions gộp)
+        "multi_table": counts_map.get("MULTI_TABLE_ACCESS", 0) + agg_count,
+        
+        # Behavioral Profile = Nhóm UNUSUAL_BEHAVIOR
+        "behavioral_profile": counts_map.get("UNUSUAL_BEHAVIOR", 0)
     }
 
+    # Tính tổng Total
+    total_events = db.query(func.count(models.Anomaly.id)).scalar() or 0
+    stats["total"] = total_events + agg_count
+
+    return stats
 
 # ===== NEW: Facets (users/types) tính trên TOÀN BỘ dataset =====
 @app.get("/api/anomalies/facets", tags=["Anomalies"])
-def anomaly_facets(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-    users = set(u for (u,) in db.query(models.Anomaly.user).distinct() if u) | \
-            set(u for (u,) in db.query(models.AggregateAnomaly.user).distinct() if u)
+def anomaly_facets(
+    behavior_group: Optional[str] = None, # [NEW] Thêm tham số này
+    db: Session = Depends(get_db), 
+    api_key: str = Security(get_api_key)
+):
+    """
+    Trả về danh sách Users và Types (Rules) có dữ liệu thực tế.
+    Nếu có behavior_group, chỉ trả về users/types thuộc nhóm đó.
+    """
+    # 1. Định nghĩa Query cơ bản
+    q_ev_user = db.query(models.Anomaly.user)
+    q_ev_type = db.query(models.Anomaly.anomaly_type) # [NEW] Query cho Type
+    
+    q_ag_user = db.query(models.AggregateAnomaly.user)
+    q_ag_type = db.query(models.AggregateAnomaly.anomaly_type) # [NEW] Query cho Type
 
-    types = set(t for (t,) in db.query(models.Anomaly.anomaly_type).distinct() if t) | \
-            set(t for (t,) in db.query(models.AggregateAnomaly.anomaly_type).distinct() if t)
+    # 2. Áp dụng bộ lọc Behavior Group
+    if behavior_group:
+        # Lọc cho Event Anomaly
+        q_ev_user = q_ev_user.filter(models.Anomaly.behavior_group == behavior_group)
+        q_ev_type = q_ev_type.filter(models.Anomaly.behavior_group == behavior_group)
+        
+        # Lọc cho Aggregate Anomaly (Hiện tại chỉ có Multi-table)
+        if behavior_group == "MULTI_TABLE_ACCESS":
+             # Aggregate giữ nguyên, không cần filter thêm vì nó mặc định là multi-table
+             pass 
+        else:
+             # Nếu nhóm khác -> Aggregate rỗng
+             q_ag_user = q_ag_user.filter(text("1=0"))
+             q_ag_type = q_ag_type.filter(text("1=0"))
+
+    # 3. Lấy Distinct (Chỉ lấy những giá trị có tồn tại)
+    # Users
+    users_ev = set(u for (u,) in q_ev_user.distinct() if u)
+    users_ag = set(u for (u,) in q_ag_user.distinct() if u)
+    final_users = sorted(list(users_ev | users_ag))
+
+    # Types (Rules) - [NEW LOGIC]
+    types_ev = set(t for (t,) in q_ev_type.distinct() if t)
+    types_ag = set(t for (t,) in q_ag_type.distinct() if t)
+    final_types = sorted(list(types_ev | types_ag))
 
     return {
-        "users": sorted(users),
-        "types": sorted(types),
+        "users": final_users,
+        "types": final_types,
     }
 
 
@@ -319,6 +429,7 @@ def anomaly_search(
     search: Optional[str] = None,
     user: Optional[str] = None,
     anomaly_type: Optional[str] = None,
+    behavior_group: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -329,6 +440,8 @@ def anomaly_search(
     if search:
         q_ev = q_ev.filter(or_(models.Anomaly.query.ilike(f"%{search}%"),
                                models.Anomaly.reason.ilike(f"%{search}%")))
+    if behavior_group:
+        q_ev = q_ev.filter(models.Anomaly.behavior_group == behavior_group)
     q_ev = _apply_common_filters(q_ev, user, anomaly_type, date_from, date_to, is_aggregate=False)
     ev_total = q_ev.count()
     ev_rows = (q_ev.order_by(models.Anomaly.timestamp.desc())
@@ -341,6 +454,13 @@ def anomaly_search(
             models.AggregateAnomaly.reason.ilike(f"%{search}%"),
             models.AggregateAnomaly.details.cast(Text).ilike(f"%{search}%")
         ))
+    if behavior_group:
+        if behavior_group == "MULTI_TABLE_ACCESS":
+             # Lấy tất cả aggregate vì hiện tại aggregate chỉ dùng cho multi-table
+             pass 
+        else:
+             # Nếu lọc nhóm khác thì aggregate = 0 (vì aggregate hiện tại chỉ là multi-table)
+             q_ag = q_ag.filter(text("1=0"))
     q_ag = _apply_common_filters(q_ag, user, anomaly_type, date_from, date_to, is_aggregate=True)
     ag_total = q_ag.count()
     ag_rows = (q_ag.order_by(models.AggregateAnomaly.start_time.desc().nullslast(),
@@ -352,7 +472,7 @@ def anomaly_search(
     for r in ev_rows:
         items.append(schemas.UnifiedAnomaly(
             id=f"event-{r.id}", source="event",
-            anomaly_type=r.anomaly_type, timestamp=r.timestamp,
+            anomaly_type=r.anomaly_type, behavior_group=r.behavior_group, timestamp=r.timestamp,
             user=r.user, database=r.database, query=r.query,
             reason=r.reason, score=r.score, scope="log", details=None
         ))
@@ -360,6 +480,7 @@ def anomaly_search(
         items.append(schemas.UnifiedAnomaly(
             id=f"agg-{r.id}", source="aggregate",
             anomaly_type=r.anomaly_type,
+            behavior_group="MULTI_TABLE_ACCESS",
             timestamp=r.start_time or r.end_time or r.created_at,
             user=r.user, database=r.database, query=None,
             reason=r.reason, score=r.severity, scope=r.scope, details=r.details
@@ -391,6 +512,7 @@ def list_event_anomalies(skip: int = 0, limit: int = 100,
         id=f"event-{r.id}",
         source="event",
         anomaly_type=r.anomaly_type,
+        behavior_group=r.behavior_group,
         timestamp=r.timestamp,
         user=r.user,
         database=r.database,
@@ -457,6 +579,7 @@ def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(
                 id=f"event-{a.id}",
                 source="event",
                 anomaly_type=a.anomaly_type,
+                behavior_group=a.behavior_group,
                 timestamp=a.timestamp,
                 user=a.user,
                 database=a.database,
@@ -484,6 +607,7 @@ def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(
                 id=f"agg-{a.id}",
                 source="aggregate",
                 anomaly_type=a.anomaly_type,
+                behavior_group="MULTI_TABLE_ACCESS",
                 timestamp=a.start_time or a.end_time or a.created_at,
                 user=a.user,
                 database=a.database,
@@ -628,7 +752,8 @@ def read_all_logs(
     search: str = None, # Thêm bộ lọc
     user: str = None,   # Thêm bộ lọc
     date_from: datetime = None, # Thêm bộ lọc
-    date_to: datetime = None    # Thêm bộ lọc
+    date_to: datetime = None,    # Thêm bộ lọc
+    behavior_group: str = None
 ):
     """
     Lấy ra TẤT CẢ các log đã được xử lý (bình thường + bất thường).
@@ -640,6 +765,8 @@ def read_all_logs(
         query = query.filter(models.AllLogs.query.ilike(f"%{search}%"))
     if user:
         query = query.filter(models.AllLogs.user == user)
+    if behavior_group:
+        query = query.filter(models.AllLogs.behavior_group == behavior_group)
     if date_from:
         query = query.filter(models.AllLogs.timestamp >= date_from)
     if date_to:

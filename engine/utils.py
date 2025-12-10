@@ -21,218 +21,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import *
 
-# ==============================================================================
-# I. CÁC HÀM HỖ TRỢ PHÂN TÍCH THEO LUẬT (RULE-BASED ANALYSIS)
-# ==============================================================================
-# Các hàm trong mục này cung cấp logic cốt lõi cho các luật phát hiện bất thường.
+# --- Import GeoIP (Xử lý nếu chưa cài thư viện) ---
+try:
+    import geoip2.database
+    from geopy.distance import geodesic
+    HAS_GEOIP = True
+except ImportError:
+    HAS_GEOIP = False
 
-def is_late_night_query(timestamp_obj, start_time_rule, end_time_rule):
-    """
-    Kiểm tra xem một truy vấn có được thực hiện vào khung giờ "đêm khuya" không.
-    Hàm này xử lý được cả trường hợp khung giờ vượt qua nửa đêm (ví dụ: 22:00 - 05:00).
-    """
-    # Lấy ra phần thời gian (giờ:phút:giây) từ đối tượng datetime đầy đủ.
-    query_time = timestamp_obj.time()
-    
-    # Nếu khung giờ nằm trọn trong một ngày (ví dụ: 01:00 - 05:00).
-    if start_time_rule <= end_time_rule:
-        return start_time_rule <= query_time < end_time_rule
-    # Nếu khung giờ vượt qua nửa đêm (ví dụ: 22:00 - 05:00 sáng hôm sau).
-    else:
-        # Điều kiện là: thời gian lớn hơn giờ bắt đầu (22:00) HOẶC nhỏ hơn giờ kết thúc (05:00).
-        return query_time >= start_time_rule or query_time < end_time_rule
-
-def is_potential_large_dump(row, large_tables_list, threshold=1000):
-    """
-    Phát hiện hành vi dump dữ liệu lớn
-    """
-    # DÙNG .at ĐỂ LẤY GIÁ TRỊ SCALAR — AN TOÀN 100%
-    try:
-        rows_returned = int(row.at['rows_returned']) if pd.notna(row.at['rows_returned']) else 0
-    except:
-        rows_returned = 0
-
-    try:
-        query = str(row.at['query']).lower() if pd.notna(row.at['query']) else ""
-    except:
-        query = ""
-
-    # Rule 1: Rõ ràng dump lớn
-    if rows_returned > threshold:
-        return True
-
-    # Rule 2: INTO OUTFILE / DUMPFILE
-    if "into outfile" in query or "into dumpfile" in query:
-        return True
-
-    # Rule 3: SELECT * + bảng lớn + không có WHERE
-    if "select *" in query:
-        has_where = "where" in query
-        accesses_large = any(table.lower() in query for table in large_tables_list)
-        if not has_where and accesses_large:
-            return True
-
-    return False
-
-def is_sensitive_table_accessed(accessed_tables_list, sensitive_tables_list):
-    """
-    Kiểm tra xem danh sách các bảng bị truy cập có chứa bất kỳ bảng nhạy cảm nào không.
-    """
-    # Trả về False nếu đầu vào không phải là một danh sách.
-    if not isinstance(accessed_tables_list, list): 
-        return False, []
-        
-    accessed_sensitive = [] # Danh sách để lưu các bảng nhạy cảm cụ thể đã bị truy cập.
-    sensitive_tables_lower = [st.lower() for st in sensitive_tables_list] # Chuẩn hóa tên bảng nhạy cảm về chữ thường.
-    
-    # Lặp qua các bảng đã bị truy cập.
-    for table in accessed_tables_list:
-        table_lower = table.lower()
-        # Lấy tên bảng (bỏ phần database nếu có)
-        table_name_only = table_lower.split('.')[-1]
-        
-        # Kiểm tra cả tên đầy đủ và tên bảng đơn giản
-        for sensitive in sensitive_tables_lower:
-            sensitive_name_only = sensitive.split('.')[-1]
-            # Match nếu:
-            # 1. Tên đầy đủ khớp (mydb.users == mydb.users)
-            # 2. Tên bảng khớp (users == users hoặc mydb.users ends with users)
-            if table_lower == sensitive or table_name_only == sensitive_name_only:
-                accessed_sensitive.append(table)
-                break
-            
-    # Trả về một tuple: (True/False, danh_sách_bảng_nhạy_cảm_bị_truy_cập).
-    return bool(accessed_sensitive), accessed_sensitive
-
-# --- RULE MỚI (Giờ đã khả thi) ---
-def is_data_sabotage(row, threshold=100):
-    """
-    Phát hiện các lệnh DELETE/UPDATE ảnh hưởng đến nhiều hàng.
-    """
-    query_lower = str(row.get('query', '')).lower()
-    rows_affected = row.get('rows_affected', 0)
-    
-    if rows_affected > threshold and ('delete' in query_lower or 'update' in query_lower):
-        # Kiểm tra thêm để loại bỏ các lệnh an toàn (ví dụ: không có WHERE)
-        if 'where' not in query_lower:
-            return True, "No WHERE clause"
-        else:
-            return True, f"High row count ({rows_affected})"
-            
-    return False, None
-
-# --- RULE MỚI (Giờ đã khả thi) ---
-def is_dos_attack(row, time_threshold_ms=15000): # 15 giây
-    """
-    Phát hiện các truy vấn chạy quá chậm (Tấn công DoS)
-    """
-    exec_time = row.get('execution_time_ms', 0)
-    
-    if exec_time > time_threshold_ms:
-        return True, f"Query took {exec_time:.0f} ms"
-    return False, None
-
-def analyze_sensitive_access(row, sensitive_tables_list, allowed_users_list,
-                             safe_start, safe_end, safe_days):
-
-    accessed_tables = row.get('accessed_tables', [])
-    user = row.get('user')
-    timestamp = row.get('timestamp')
-
-    if accessed_tables is None:
-        accessed_tables = []
-    
-    # Nếu accessed_tables là chuỗi (do đọc từ CSV/DB lên), cần eval lại
-    if isinstance(accessed_tables, str):
-        try:
-            import ast
-            accessed_tables = ast.literal_eval(accessed_tables)
-        except:
-            accessed_tables = []
-
-    is_sensitive_hit, specific_sensitive_tables = is_sensitive_table_accessed(accessed_tables, sensitive_tables_list)
-
-    # Nếu không truy cập bảng nhạy cảm, bỏ qua
-    if not is_sensitive_hit:
-        return None
-
-    # Kiểm tra các điều kiện
-    user_is_allowed = (not pd.isna(user) and user in allowed_users_list)
-    is_outside_safe_hours = not (safe_start <= timestamp.hour < safe_end and timestamp.weekday() in safe_days)
-
-    # LỖ HỔNG LÀ Ở ĐÂY. Logic cũ của bạn là `if user_is_allowed: return None`.
-    # Logic ĐÚNG là:
-
-    # CHỈ COI LÀ HỢP LỆ (return None) NẾU
-    # user được phép VÀ truy cập TRONG giờ an toàn.
-    if user_is_allowed and not is_outside_safe_hours:
-        return None
-
-    # Tất cả các trường hợp khác đều là bất thường.
-    # Xây dựng lý do:
-    anomaly_reasons = []
-    if not user_is_allowed:
-        anomaly_reasons.append(f"User '{user if not pd.isna(user) else 'N/A'}' không có trong danh sách được phép.")
-    if is_outside_safe_hours:
-        anomaly_reasons.append("Truy cập ngoài giờ làm việc an toàn.")
-
-    return {
-        "reason": " ".join(anomaly_reasons) + f" [Tables: {', '.join(specific_sensitive_tables)}]",
-        "accessed_sensitive_tables_list": specific_sensitive_tables
-    }
-
-
-def check_unusual_user_activity_time(row, user_profiles_dict):
-    """Kiểm tra xem hoạt động của người dùng có nằm ngoài giờ hoạt động bình thường của họ không."""
-    user = row['user']
-    timestamp = row['timestamp']
-    
-    # Bỏ qua nếu không có thông tin user hoặc user chưa có hồ sơ hoạt động.
-    if pd.isna(user) or user not in user_profiles_dict: 
-        return None 
-    
-    # Lấy hồ sơ hoạt động của user.
-    profile = user_profiles_dict[user]
-    current_hour = timestamp.hour
-    
-    # Kiểm tra xem giờ hiện tại có nằm ngoài khoảng thời gian hoạt động bình thường không.
-    if 'active_start' in profile and 'active_end' in profile:
-        if not (profile['active_start'] <= current_hour < profile['active_end'] + 1):
-            return f"Ngoài giờ Hoạt Động thường lệ của user ({profile['active_start']:02d}:00 - {profile['active_end']+1:02d}:00)"
-            
-    # Nếu nằm trong giờ bình thường, trả về None.
-    return None
-
-# --- RULE MỚI: PHÁT HIỆN HÀM NGHI VẤN (SQLi) ---
-def is_suspicious_function_used(query: str):
-    """
-    Kiểm tra query có chứa các hàm đáng ngờ thường dùng trong SQLi/Exfiltration.
-    Trả về (bool, str) - (Có đáng ngờ không, Tên hàm đáng ngờ)
-    """
-    if pd.isna(query):
-        return False, None
-    query_lower = str(query).lower()
-    for func in SUSPICIOUS_FUNCTIONS:
-        if f"{func}(" in query_lower:
-            return True, func
-    return False, None
-
-# --- RULE MỚI: PHÁT HIỆN THAY ĐỔI QUYỀN (DCL/DDL) ---
-def is_privilege_change(query: str):
-    """
-    Kiểm tra query có phải là lệnh thay đổi quyền hoặc user không.
-    Trả về (bool, str) - (Có thay đổi không, Lệnh)
-    """
-    if pd.isna(query):
-        return False, None
-    query_lower = str(query).lower().strip()
-    for cmd in PRIVILEGE_COMMANDS:
-        if query_lower.startswith(cmd):
-            return True, cmd
-    return False, None
 
 # ==============================================================================
-# II. CÁC HÀM HỖ TRỢ FEATURE ENGINEERING VÀ FEEDBACK
+#   CÁC HÀM HỖ TRỢ FEATURE ENGINEERING VÀ FEEDBACK
 # ==============================================================================
 # Các hàm trong mục này hỗ trợ việc trích xuất đặc trưng cho AI và xử lý feedback.
 
@@ -491,7 +290,7 @@ def is_late_night(ts):
 
 
 # ============================================================
-# ACTIVE RESPONSE AUDIT LOGGER
+#   ACTIVE RESPONSE AUDIT LOGGER
 # ============================================================
 
 # Cấu hình logger
@@ -623,6 +422,350 @@ def generate_html_alert(violation_summary: list):
     </html>
     """
     return html_template
+
+# ==============================================================================
+#   CÁC HÀM HỖ TRỢ PHÂN TÍCH THEO LUẬT (RULE-BASED ANALYSIS)
+# ==============================================================================
+
+# ==============================================================================
+# 1. NHÓM ACCESS ANOMALIES (Bất thường truy cập)
+# Bao gồm: Concurrent Login, Brute-force, Impossible Travel
+# ==============================================================================
+def check_access_anomalies(df, rule_config):
+    """Nhóm 1: Bất thường truy cập"""
+    anomalies = {}
+    thresholds = rule_config.get('thresholds', {})
+    settings = rule_config.get('settings', {})
+    
+    # Rule 1. Concurrent Login
+    limit_ips = thresholds.get('concurrent_ips_limit', 1)
+    df_sorted = df.sort_values('timestamp')
+    grouped = df_sorted.groupby(['user', pd.Grouper(key='timestamp', freq='5Min')], observed=False)
+    idx_concurrent = []
+    for (user, time), group in grouped:
+        if group['client_ip'].nunique() > limit_ips:
+            idx_concurrent.extend(group.index.tolist()) 
+    if idx_concurrent:
+        anomalies['Concurrent Login'] = list(set(idx_concurrent))
+                
+    # Rule 2. Brute-force Success
+    limit_attempts = thresholds.get('brute_force_attempts', 5)
+    failed_attempts = df[df['error_code'] != 0] # Error code != 0 là lỗi
+    idx_bruteforce = [] 
+    if not failed_attempts.empty:
+        ip_error_counts = failed_attempts.groupby(['client_ip', pd.Grouper(key='timestamp', freq='1Min')], observed=False).size()
+        suspicious_ips = ip_error_counts[ip_error_counts > limit_attempts].index.get_level_values(0).unique()     
+        # Tìm log thành công ngay sau chuỗi lỗi từ IP đó
+        brute_force_success = df[
+            (df['client_ip'].isin(suspicious_ips)) & 
+            (df['error_code'] == 0) & 
+            (df['event_name'] == 'connect')
+        ]
+        idx_bruteforce.extend(brute_force_success.index.tolist())      
+    if idx_bruteforce:
+        anomalies['Brute-force Success'] = list(set(idx_bruteforce))
+        
+    # Rule 3. Impossible Travel
+    if HAS_GEOIP:
+        max_speed = thresholds.get('impossible_travel_speed_kmh', 800)
+        db_path = settings.get('geoip_db_path', 'engine/geoip/GeoLite2-City.mmdb')
+        idx_travel = []  
+        if os.path.exists(db_path):        
+            try:
+                reader = geoip2.database.Reader(db_path)
+                def get_lat_lon(ip):
+                    try:
+                        if ip in ['127.0.0.1', 'localhost', '::1', '0.0.0.0']: return None
+                        res = reader.city(ip)
+                        return (res.location.latitude, res.location.longitude)
+                    except: return None              
+                # Group by User để check hành trình
+                grouped_user = df_sorted.groupby('user', observed=False)
+                for user, group in grouped_user:
+                    if len(group) < 2: continue
+                    prev_row = None
+                    for idx, row in group.iterrows():
+                        curr_loc = get_lat_lon(row['client_ip'])
+                        if prev_row and curr_loc and prev_row['loc']:
+                            dist = geodesic(prev_row['loc'], curr_loc).km
+                            time_diff = (row['timestamp'] - prev_row['time']).total_seconds() / 3600
+                            if time_diff > 0 and dist > 50:
+                                speed = dist / time_diff
+                                if speed > max_speed:
+                                    idx_travel.append(idx)
+                        if curr_loc:
+                            prev_row = {'loc': curr_loc, 'time': row['timestamp']}
+                reader.close()
+            except Exception as e:
+                logging.error(f"GeoIP Logic Error: {e}")             
+        if idx_travel:
+            anomalies['Impossible Travel'] = list(set(idx_travel))
+
+    return anomalies
+
+# ==============================================================================
+# 2. NHÓM INSIDER THREATS (Mối đe dọa nội bộ)
+# Bao gồm: Service Account, Admin Privilege Escalation, Sensitive Access, Late Night, Ghost Account
+# ==============================================================================
+def check_insider_threats(df, rule_config):
+    """Nhóm 2: Insider Threat"""
+    anomalies = {}
+    service_accounts = rule_config.get('service_accounts', {})
+    signatures = rule_config.get('signatures', {})
+    settings = rule_config.get('settings', {})
+    hr_users = set(signatures.get('hr_authorized_users', []))
+    
+    # Rule 4. Service Account Misuse
+    idx_service = []
+    for user, config in service_accounts.items():
+        user_logs = df[df['user'] == user]
+        if user_logs.empty: continue
+        invalid_hour = user_logs[~user_logs['timestamp'].dt.hour.isin(config.get('allowed_hours', []))]
+        idx_service.extend(invalid_hour.index.tolist())  
+        invalid_ip = user_logs[~user_logs['client_ip'].isin(config.get('allowed_ips', []))]
+        idx_service.extend(invalid_ip.index.tolist())      
+    if idx_service: anomalies['Service Account Misuse'] = list(set(idx_service))
+
+    # Rule 5. Admin Privilege Escalation
+    idx_admin = []
+    admin_kws = signatures.get('admin_keywords', [])
+    if admin_kws:
+        pattern = "|".join(re.escape(k) for k in admin_kws)
+        admin_actions = df[
+            (df['query'].str.contains(pattern, case=False, na=False)) &
+            (df['user'] != 'root')
+        ]
+        idx_admin.extend(admin_actions.index.tolist())       
+    if idx_admin: anomalies['Admin Privilege Abuse'] = list(set(idx_admin))
+        
+    # Rule 6. Sensitive Table Access 
+    idx_sensitive = []
+    sensitive_tables = signatures.get('sensitive_tables', [])
+    allowed_users = settings.get('sensitive_allowed_users', [])    
+    # Hàm check logic
+    def is_violation(row):
+        # Nếu user nằm trong whitelist thì bỏ qua
+        if row['user'] in allowed_users: return False
+        
+        # Check nếu query chứa bảng nhạy cảm
+        for tbl in sensitive_tables:
+            if tbl in str(row['query']):
+                return True # Vi phạm: User không được phép truy cập bảng này
+        return False
+    if sensitive_tables:
+        sensitive_violation = df[df.apply(is_violation, axis=1)]
+        idx_sensitive.extend(sensitive_violation.index.tolist())   
+    if idx_sensitive: anomalies['Sensitive Table Access'] = list(set(idx_sensitive))
+
+    # Rule 7. Late Night Query 
+    # Logic: Truy cập ngoài giờ hành chính (22h - 5h sáng)
+    idx_latenight = []
+    try:
+        s_str = settings.get('late_night_start', '22:00:00')
+        e_str = settings.get('late_night_end', '05:00:00')
+        start_time = dt_time.fromisoformat(s_str)
+        end_time = dt_time.fromisoformat(e_str)
+        def check_time(ts):
+            t = ts.time()
+            if start_time <= end_time: return start_time <= t <= end_time
+            else: return start_time <= t or t <= end_time # Qua đêm (ví dụ 22h -> 5h)
+        late_night_logs = df[df['timestamp'].apply(check_time)]
+        # Có thể lọc bớt các user chạy job đêm nếu cần
+        idx_latenight.extend(late_night_logs.index.tolist())
+    except:
+        pass 
+    if idx_latenight: anomalies['Late Night Query'] = list(set(idx_latenight))
+    
+    # Rule 8. Ghost Account Creation
+    idx_ghost = []
+    create_cmds = df[df['query'].str.contains("CREATE USER", case=False, na=False)]
+    if not create_cmds.empty:
+        pattern = re.compile(r"CREATE\s+USER\s+['\"`]?([a-zA-Z0-9_]+)['\"`]?", re.IGNORECASE)
+        for idx, row in create_cmds.iterrows():
+            match = pattern.search(row['query'])
+            if match and match.group(1) not in hr_users:
+                idx_ghost.append(idx)               
+    if idx_ghost: anomalies['Ghost Account Creation'] = list(set(idx_ghost))
+    
+    return anomalies
+
+# ==============================================================================
+# 3. NHÓM TECHNICAL ATTACKS (Tấn công kỹ thuật)
+# Bao gồm: SQLi, DoS, High CPU Usage, Scan Efficiency, Config Change, Entropy, Client Mismatch
+# ==============================================================================
+def check_technical_attacks(df, rule_config):
+    """Nhóm 3: Technical Attacks"""
+    anomalies = {}
+    thresholds = rule_config.get('thresholds', {})
+    signatures = rule_config.get('signatures', {})
+    
+    # Rule 9. SQL Injection
+    idx_sqli = []
+    sqli_kws = signatures.get('sqli_keywords', [])
+    if sqli_kws:
+        pattern_sqli = "|".join(re.escape(k) for k in sqli_kws)
+        sqli_logs = df[df['query'].str.contains(pattern_sqli, case=False, na=False)]
+        idx_sqli.extend(sqli_logs.index.tolist())
+    if idx_sqli: anomalies['SQL Injection'] = list(set(idx_sqli))
+    
+    # Rule 10. DoS / Resource Exhaustion
+    idx_dos = []
+    max_time = thresholds.get('execution_time_limit_ms', 5000)
+    idx_dos.extend(df[df['execution_time_ms'] > max_time].index.tolist())
+    if idx_dos: anomalies['DoS / Resource Exhaustion'] = list(set(idx_dos))
+    
+    # Rule 11. High CPU Usage 
+    idx_cpu = []
+    max_cpu_time = thresholds.get('cpu_time_limit_ms', 1000) # 1s CPU
+    if 'cpu_time_ms' in df.columns:
+        high_cpu = df[df['cpu_time_ms'] > max_cpu_time]
+        idx_cpu.extend(high_cpu.index.tolist())
+    if idx_cpu: anomalies['High CPU Usage'] = list(set(idx_cpu))
+    
+    # Rule 12. Scan Efficiency
+    idx_scan = []
+    min_eff = thresholds.get('scan_efficiency_min', 0.01)
+    min_rows = thresholds.get('scan_efficiency_min_rows', 1000)
+    inefficient = df[
+        (df['rows_examined'] > min_rows) & 
+        (df['rows_returned'] < (df['rows_examined'] * min_eff))
+    ]
+    idx_scan.extend(inefficient.index.tolist())
+    if idx_scan: anomalies['Scan Efficiency'] = list(set(idx_scan))
+    
+    # Rule 13. Config Change
+    idx_config = []
+    config_change = df[
+        df['query'].str.contains("SET GLOBAL|general_log", regex=True, case=False, na=False)
+    ]
+    idx_config.extend(config_change.index.tolist())
+    if idx_config: anomalies['Config Change'] = list(set(idx_config))
+    
+    # Rule 14. High Entropy Queries
+    idx_entropy = []
+    max_entropy = thresholds.get('max_query_entropy', 4.8)
+    if 'query_entropy' in df.columns:
+        high_entropy = df[df['query_entropy'] > max_entropy]
+        idx_entropy.extend(high_entropy.index.tolist())
+    if idx_entropy: anomalies['High Entropy Query'] = list(set(idx_entropy))
+
+    # Rule 15. Client/OS Mismatch
+    # Phát hiện tool tấn công trong blacklist (sqlmap, nmap...)
+    idx_client = []
+    whitelist = signatures.get('allowed_programs', [])
+    if 'program_name' in df.columns and not whitelist:
+        pattern_bad = "|".join(re.escape(p) for p in whitelist)
+        bad_clients = df[df['program_name'].str.contains(pattern_bad, case=False, na=False)]
+        idx_client.extend(bad_clients.index.tolist())
+    if idx_client: anomalies['Client Mismatch'] = list(set(idx_client))
+
+    return anomalies
+
+# ==============================================================================
+# 4. NHÓM DATA DESTRUCTION (Phá hoại dữ liệu)
+# Bao gồm: Mass Delete, Old Data, Large Dump
+# ==============================================================================
+def check_data_destruction(df, rule_config):
+    """Nhóm 4: Data Destruction"""
+    anomalies = {}
+    thresholds = rule_config.get('thresholds', {})
+    signatures = rule_config.get('signatures', {})
+    
+    # Rule 16. Mass Deletion (Xóa hàng loạt)
+    idx_delete = []
+    limit_rows = thresholds.get('mass_deletion_rows', 500)
+    mass_delete = df[
+        (df['event_name'].isin(['statement/sql/delete', 'statement/sql/drop'])) &
+        (df['rows_affected'] > limit_rows)
+    ]
+    idx_delete.extend(mass_delete.index.tolist())
+    if idx_delete: anomalies['Mass Deletion'] = list(set(idx_delete))
+    
+    # Rule 17. Old Data Modification (Sửa dữ liệu cũ)
+    idx_old_data = []
+    old_data_access = df[df['query'].str.contains("2019|2020|2021|2022|2023|2024", regex=True, na=False)]
+    idx_old_data.extend(old_data_access.index.tolist())
+    if idx_old_data: anomalies['Old Data Modification'] = list(set(idx_old_data))
+
+    # Rule 18. Large Data Dump 
+    # Logic: Select bảng quan trọng mà trả về quá nhiều dòng
+    idx_dump = []
+    large_dump_tables = signatures.get('large_dump_tables', [])
+    if large_dump_tables:
+        pattern_dump = "|".join(re.escape(k) for k in large_dump_tables)
+        # Điều kiện: Query chứa tên bảng quan trọng VÀ trả về > 1000 dòng
+        dump_logs = df[
+            (df['query'].str.contains(pattern_dump, case=False, na=False)) &
+            (df['rows_returned'] > 1000)
+        ]
+        idx_dump.extend(dump_logs.index.tolist())
+    if idx_dump: anomalies['Large Data Dump'] = list(set(idx_dump))
+    
+    return anomalies
+
+# ==============================================================================
+# 5. RULE RIÊNG: MULTI-TABLE ACCESS 
+# ==============================================================================
+def check_multi_table_anomalies(df, rule_config):
+    """
+    Rule 19: Multi-table Access
+    """
+    anomalies = []
+    thresholds = rule_config.get('thresholds', {})
+    
+    # Lấy tham số (Mặc định 5 phút, 3 bảng)
+    window_min = thresholds.get('multi_table_window_minutes', 5)
+    min_tables = thresholds.get('multi_table_min_count', 3)
+    
+    # Hàm tách tên bảng từ câu lệnh SQL
+    def extract_table_name(q):
+        if not isinstance(q, str): return None
+        # Regex tìm từ sau FROM hoặc JOIN
+        match = re.search(r'\b(?:FROM|JOIN)\s+[`\'"]?([a-zA-Z0-9_.]+)[`\'"]?', q, re.IGNORECASE)
+        if match:
+            # Loại bỏ ký tự quote thừa nếu có (ví dụ: `sales_db`.`orders` -> sales_db.orders)
+            return match.group(1).replace('`', '').replace("'", "").replace('"', "")
+        return None
+
+    # Chỉ xét các câu lệnh SELECT
+    df_select = df[df['query'].str.contains('SELECT', case=False, na=False)].copy()
+    if df_select.empty: return []
+
+    # Tạo cột tên bảng tạm thời
+    df_select['extracted_table'] = df_select['query'].apply(extract_table_name)
+    # Lọc bỏ các giá trị None hoặc rỗng
+    df_select = df_select[df_select['extracted_table'].notna() & (df_select['extracted_table'] != '')]
+
+    # Group theo User và Khung giờ
+    # Sort trước để Grouper chạy đúng
+    df_select = df_select.sort_values('timestamp')
+    grouped = df_select.groupby(['user', pd.Grouper(key='timestamp', freq=f'{window_min}Min')], observed=False)
+
+    for (user, time_window), group in grouped:
+        unique_tables = group['extracted_table'].nunique()
+        if unique_tables > min_tables:
+            # --- ĐIỂM SỬA QUAN TRỌNG: Trả về toàn bộ index của nhóm này ---
+            anomalies.extend(group.index.tolist())
+
+    return list(set(anomalies))
+
+# ==============================================================================
+# 5. RULE RIÊNG: BEHAVIORAL PROFILE
+# ==============================================================================
+def check_unusual_user_activity_time(row, profiles):
+    """
+    Rule 20: Unusual User Time
+    """
+    user = row.get('user')
+    if user not in profiles: return None
+    
+    hour = row['timestamp'].hour
+    p = profiles[user]
+    # Giả sử profile lưu 'active_start' và 'active_end'
+    # Nếu giờ nằm ngoài khoảng [start - 1, end + 1] thì báo
+    if hour < (p['active_start'] - 1) or hour > (p['active_end'] + 1):
+        return f"User {user} active at {hour}h (Profile: {p['active_start']}-{p['active_end']})"
+    return None
 
 # ==============================================================================
 # REDIS CONFIGURATION HELPER

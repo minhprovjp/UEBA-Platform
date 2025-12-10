@@ -29,6 +29,7 @@ class Anomaly(Base):
     database = Column(String, nullable=True)
     query = Column(Text, nullable=False)
     anomaly_type = Column(String, index=True, nullable=False)
+    behavior_group = Column(String, index=True, nullable=True)
     score = Column(Float, nullable=True)
     reason = Column(Text, nullable=True)
     status = Column(String, default='new', index=True)
@@ -107,6 +108,9 @@ class AllLogs(Base):
     is_anomaly = Column(Boolean, default=False) 
     ml_anomaly_score = Column(Float, default=0.0)
     analysis_type = Column(String, nullable=True)
+    
+    behavior_group = Column(String, nullable=True, index=True) 
+    specific_rule = Column(String, nullable=True, index=True)
     
 # 3. Contextual / Velocity (Rolling Windows) ---
     query_count_5m = Column(Float, nullable=True)

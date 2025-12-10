@@ -1,66 +1,73 @@
-// // uba_frontend/src/pages/LogExplorer.jsx
+// uba_frontend/src/pages/LogExplorer.jsx
 import React, { useState, useMemo } from 'react';
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge"; // Cần component Badge
+import { Switch } from "@/components/ui/switch"; // Cần component Switch
+import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Filter, Bot, Check, X, ChevronLeft, ChevronRight } from 'lucide-react';
-import { useLogs, useAnalyzeMutation, useFeedbackMutation } from '@/api/queries'; // Import hooks mới
-import { AnomalyDetailModal } from '@/components/AnomalyDetailModal'; // Import Modal (sẽ tạo ở bước 4)
+import { Search, Filter, ChevronLeft, ChevronRight, Copy, Database, Terminal, AlertCircle, CheckCircle } from 'lucide-react';
+import { useLogs, useAnalyzeMutation, useFeedbackMutation } from '@/api/queries';
+import { AnomalyDetailModal } from '@/components/AnomalyDetailModal';
 import { Toaster, toast } from 'sonner';
 
-const PAGE_SIZE = 20; // Hiển thị 20 log mỗi trang
+const PAGE_SIZE = 20;
 
 export default function LogExplorer() {
-  // --- State cho Bộ lọc và Phân trang ---
+  // --- State ---
   const [filters, setFilters] = useState({
     search: '',
-    user: null, // 'user:root'
-    date_from: null,
-    date_to: null,
+    user: '', 
+    date_from: '',
+    date_to: '',
   });
+  
+  // State lọc riêng ở UI
+  const [showAnomaliesOnly, setShowAnomaliesOnly] = useState(false);
+
   const [pagination, setPagination] = useState({
-    pageIndex: 0, // Bắt đầu từ trang 0
+    pageIndex: 0, 
     pageSize: PAGE_SIZE,
   });
 
-  // --- Lấy dữ liệu bằng React Query ---
-  // `useLogs` sẽ tự động tải lại khi `filters` hoặc `pagination` thay đổi
+  // --- Query Data ---
+  // Lưu ý: Nếu backend hỗ trợ lọc is_anomaly thì truyền vào đây, 
+  // nếu không ta sẽ filter client-side (như code dưới demo)
   const { data, isLoading, isError, error } = useLogs({
     ...filters,
     ...pagination,
   });
 
-  // Lấy ra logs và trạng thái phân trang
   const logs = data?.logs || [];
   const hasMore = data?.hasMore || false;
   
-  // --- State cho Modal ---
-  const [selectedLog, setSelectedLog] = useState(null); 
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Filter Client-side cho nút Toggle (Nếu backend chưa hỗ trợ param này)
+  const displayedLogs = useMemo(() => {
+    if (!showAnomaliesOnly) return logs;
+    return logs.filter(l => l.is_anomaly || l.ml_anomaly_score > 0.5);
+  }, [logs, showAnomaliesOnly]);
 
-  // --- Lấy ra các Mutations ---
+  // --- Modal State ---
+  const [selectedLog, setSelectedLog] = useState(null); 
+
+  // --- Mutations ---
   const analyzeMutation = useAnalyzeMutation();
   const feedbackMutation = useFeedbackMutation();
 
-  // --- Lấy danh sách filter động ---
-  // Lấy ra danh sách User duy nhất từ log đã tải
-  const uniqueUsers = useMemo(() => {
-    return [...new Set(logs.map(log => log.user).filter(Boolean))];
-  }, [logs]);
-
   // --- Handlers ---
-  const handleRowClick = (log) => {
-    setSelectedLog(log);
-    setIsModalOpen(true);
+  const handleCopyQuery = (e, query) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(query);
+    toast.success("Copied query to clipboard");
   };
 
   const handleAnalyze = () => {
     analyzeMutation.mutate(selectedLog, {
       onSuccess: (data) => {
-        // Cập nhật state để hiển thị kết quả AI
+        const res = data.data || data;
         setSelectedLog(prev => ({
           ...prev, 
-          aiAnalysis: data.data.final_analysis 
+          aiAnalysis: res.final_analysis || res.first_analysis 
         }));
       }
     });
@@ -69,101 +76,191 @@ export default function LogExplorer() {
   const handleFeedback = (label) => {
     feedbackMutation.mutate(
       { label, anomaly_data: selectedLog },
-      { onSuccess: () => setIsModalOpen(false) } // Đóng modal khi feedback thành công
+      { onSuccess: () => setSelectedLog(null) } 
     );
   };
 
-  // -------------------------
-  // PHẦN GIAO DIỆN (RENDER)
-  // -------------------------
   return (
     <>
       <Toaster position="top-right" theme="dark" />
-      <div className="h-full flex flex-col">
-        <header>
-          <h2 className="text-2xl font-semibold">Log Explorer</h2>
-          <p className="text-muted-foreground">Quản lý và giám sát log truy vấn CSDL.</p>
+      <div className="h-full flex flex-col gap-4 overflow-hidden pr-2">
+        
+        {/* HEADER */}
+        <header className="shrink-0 pb-4 border-b border-zinc-800">
+          <h2 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            <Terminal className="w-5 h-5 text-primary-500"/> Log Explorer
+          </h2>
+          <p className="text-zinc-400 text-xs mt-1">
+            Real-time investigation of database access logs.
+          </p>
         </header>
 
-        {/* Thanh tìm kiếm và bộ lọc (ĐÃ HOẠT ĐỘNG) */}
-        <div className="flex items-center space-x-2 py-4">
-          <Input 
-            placeholder="Tìm kiếm query..." 
-            className="max-w-sm bg-zinc-900"
-            value={filters.search}
-            onChange={(e) => setFilters(prev => ({...prev, search: e.target.value, pageIndex: 0}))}
-          />
-          {/* TODO: Thêm Dropdown cho uniqueUsers và Bộ lọc Ngày */}
-          <Button variant="outline" className="bg-zinc-900">
-            <Filter className="h-4 w-4 mr-2" />
-            Filter
-          </Button>
+        {/* TOOLBAR */}
+        <div className="flex items-center justify-between gap-3 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 shrink-0">
+          {/* Left: Search & Inputs */}
+          <div className="flex items-center gap-2 flex-1">
+            <div className="relative w-64">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-500" />
+                <Input 
+                    placeholder="Search query content..." 
+                    className="pl-9 bg-zinc-950 border-zinc-700 h-9 text-sm"
+                    value={filters.search}
+                    onChange={(e) => setFilters(prev => ({...prev, search: e.target.value, pageIndex: 0}))}
+                />
+            </div>
+            
+            <Input 
+                placeholder="Filter by User..." 
+                className="w-40 bg-zinc-950 border-zinc-700 h-9 text-sm"
+                value={filters.user || ''}
+                onChange={(e) => setFilters(prev => ({...prev, user: e.target.value, pageIndex: 0}))}
+            />
+
+            {/* Date Inputs (Simple) */}
+            <Input 
+                type="datetime-local"
+                className="w-48 bg-zinc-950 border-zinc-700 h-9 text-sm text-zinc-400"
+                value={filters.date_from || ''}
+                onChange={(e) => setFilters(prev => ({...prev, date_from: e.target.value, pageIndex: 0}))}
+            />
+          </div>
+
+          {/* Right: Toggles */}
+          <div className="flex items-center gap-4 border-l border-zinc-700 pl-4">
+             <div className="flex items-center space-x-2">
+                <Switch 
+                    id="anomaly-mode" 
+                    checked={showAnomaliesOnly}
+                    onCheckedChange={setShowAnomaliesOnly}
+                />
+                <Label htmlFor="anomaly-mode" className={`text-xs font-medium ${showAnomaliesOnly ? 'text-red-400' : 'text-zinc-400'}`}>
+                    Anomalies Only
+                </Label>
+            </div>
+            <Button variant="outline" size="sm" className="h-9 bg-zinc-800 border-zinc-700 hover:bg-zinc-700">
+                <Filter className="h-3.5 w-3.5 mr-2" />
+                More Filters
+            </Button>
+          </div>
         </div>
 
-        {/* Bảng dữ liệu */}
-        <div className="flex-1 overflow-auto rounded-md border border-border">
+        {/* TABLE */}
+        <div className="flex-1 overflow-auto rounded-md border border-zinc-800 bg-zinc-950/30 custom-scrollbar">
           <Table>
-            <TableHeader className="bg-zinc-900">
-              <TableRow>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Client IP</TableHead>
-                <TableHead>Query</TableHead>
-                <TableHead>Risk</TableHead>
+            <TableHeader className="bg-zinc-900 sticky top-0 z-10">
+              <TableRow className="hover:bg-zinc-900 border-zinc-800">
+                <TableHead className="w-[180px]">Timestamp</TableHead>
+                <TableHead className="w-[150px]">Identity</TableHead>
+                <TableHead className="w-[120px]">Database</TableHead>
+                <TableHead>Query Snapshot</TableHead>
+                <TableHead className="w-[100px] text-center">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && <TableRow><TableCell colSpan={5} className="text-center">Đang tải dữ liệu...</TableCell></TableRow>}
-              {isError && <TableRow><TableCell colSpan={5} className="text-center text-red-500">{error.message}</TableCell></TableRow>}
-              {!isLoading && logs.map((log) => (
-                <TableRow key={log.id} onClick={() => handleRowClick(log)} className="cursor-pointer hover:bg-zinc-900">
-                  <TableCell>{new Date(log.timestamp).toLocaleString()}</TableCell>
-                  <TableCell>{log.user}</TableCell>
-                  <TableCell>{log.client_ip}</TableCell>
-                  <TableCell><code className="text-sm">{log.query.substring(0, 70)}...</code></TableCell>
-                  <TableCell>
-                    {log.is_anomaly && (
-                      <span className="bg-red-900 text-red-300 px-2 py-1 rounded-full text-xs font-semibold">
-                        {log.anomaly_type || log.analysis_type || 'ANOMALY'}
-                      </span>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {isLoading && <TableRow><TableCell colSpan={5} className="text-center py-10 text-zinc-500">Loading logs...</TableCell></TableRow>}
+              {isError && <TableRow><TableCell colSpan={5} className="text-center py-10 text-red-500">{error.message}</TableCell></TableRow>}
+              
+              {!isLoading && displayedLogs.length === 0 && (
+                 <TableRow><TableCell colSpan={5} className="text-center py-10 text-zinc-500">No logs found matching criteria.</TableCell></TableRow>
+              )}
+
+              {!isLoading && displayedLogs.map((log) => {
+                // Style cho dòng Anomaly
+                const isAnomaly = log.is_anomaly || log.ml_anomaly_score > 0.5;
+                const rowClass = isAnomaly 
+                    ? "bg-red-950/10 hover:bg-red-950/20 border-l-2 border-l-red-500" 
+                    : "hover:bg-zinc-900 border-l-2 border-l-transparent";
+
+                return (
+                  <TableRow key={log.id} onClick={() => setSelectedLog(log)} className={`cursor-pointer transition-colors border-b border-zinc-800/50 ${rowClass}`}>
+                    
+                    {/* Timestamp */}
+                    <TableCell className="font-mono text-xs text-zinc-400">
+                        {new Date(log.timestamp).toLocaleString()}
+                    </TableCell>
+                    
+                    {/* Identity */}
+                    <TableCell>
+                        <div className="flex flex-col">
+                            <span className="font-medium text-zinc-200 text-xs">{log.user}</span>
+                            <span className="text-[10px] text-zinc-500">{log.client_ip}</span>
+                        </div>
+                    </TableCell>
+                    
+                    {/* Database */}
+                    <TableCell>
+                         <div className="flex items-center gap-1.5">
+                            <Database className="w-3 h-3 text-zinc-600"/>
+                            <span className="text-xs text-zinc-300">{log.database || 'default'}</span>
+                         </div>
+                    </TableCell>
+                    
+                    {/* Query Snapshot */}
+                    <TableCell>
+                        <div className="group flex items-center justify-between gap-2">
+                             <code className="text-[15px] text-zinc-400 font-mono truncate max-w-[400px] bg-zinc-900/50 px-1.5 py-0.5 rounded">
+                                {log.query}
+                             </code>
+                             <Button 
+                                variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => handleCopyQuery(e, log.query)}
+                             >
+                                <Copy className="w-3 h-3 text-zinc-500 hover:text-white"/>
+                             </Button>
+                        </div>
+                    </TableCell>
+                    
+                    {/* Status Badge */}
+                    <TableCell className="text-center">
+                      {isAnomaly ? (
+                        <Badge variant="outline" className="bg-red-950/30 text-red-400 border-red-900 text-[10px] px-2 py-0.5 whitespace-nowrap">
+                            <AlertCircle className="w-3 h-3 mr-1"/>
+                            {log.behavior_group || 'ANOMALY'}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-green-950/30 text-green-500 border-green-900 text-[10px] px-2 py-0.5">
+                            <CheckCircle className="w-3 h-3 mr-1"/>
+                            Normal
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>
 
-        {/* Phân trang (Pagination) */}
-        <div className="flex items-center justify-end space-x-2 py-4">
-          <span className="text-sm text-muted-foreground">
-            Trang {pagination.pageIndex + 1}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPagination(prev => ({...prev, pageIndex: prev.pageIndex - 1}))}
-            disabled={pagination.pageIndex === 0}
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Previous
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setPagination(prev => ({...prev, pageIndex: prev.pageIndex + 1}))}
-            disabled={!hasMore} // Tắt nút Next nếu không còn dữ liệu
-          >
-            Next
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+        {/* PAGINATION */}
+        <div className="flex items-center justify-between shrink-0 py-2 border-t border-zinc-800">
+          <div className="text-xs text-zinc-500">
+             Showing {displayedLogs.length} logs
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+                variant="outline" size="sm"
+                className="h-8 bg-zinc-900 border-zinc-700 hover:bg-zinc-800"
+                onClick={() => setPagination(prev => ({...prev, pageIndex: Math.max(0, prev.pageIndex - 1)}))}
+                disabled={pagination.pageIndex === 0}
+            >
+                <ChevronLeft className="h-4 w-4" /> Previous
+            </Button>
+            <Button
+                variant="outline" size="sm"
+                className="h-8 bg-zinc-900 border-zinc-700 hover:bg-zinc-800"
+                onClick={() => setPagination(prev => ({...prev, pageIndex: prev.pageIndex + 1}))}
+                disabled={!hasMore}
+            >
+                Next <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
-      {/* Modal chi tiết */}
+      {/* REUSE DETAIL MODAL */}
       <AnomalyDetailModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        isOpen={!!selectedLog}
+        onClose={() => setSelectedLog(null)}
         log={selectedLog}
         onAnalyze={handleAnalyze}
         onFeedback={handleFeedback}
