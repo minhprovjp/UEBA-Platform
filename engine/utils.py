@@ -388,10 +388,10 @@ def generate_html_alert(violation_summary: list):
                 </td>
                 <td style="text-align: center;"><strong>{item['count']}</strong></td>
                 <td style="font-size: 13px; color: #333;">
-                    {item['target_str']}
+                    {item.get('target_str', 'N/A')}
                 </td>
                 <td style="font-size: 13px; white-space: nowrap;">
-                    {item['time_range']}
+                    {item.get('time_range', 'N/A')}
                 </td>
             </tr>
         """
