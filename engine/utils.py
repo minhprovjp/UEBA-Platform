@@ -11,6 +11,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import Set
+from redis import Redis, RedisError
 
 # Thêm cấu hình logging ở đầu file
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [Utils] - %(message)s')
@@ -765,3 +766,63 @@ def check_unusual_user_activity_time(row, profiles):
     if hour < (p['active_start'] - 1) or hour > (p['active_end'] + 1):
         return f"User {user} active at {hour}h (Profile: {p['active_start']}-{p['active_end']})"
     return None
+
+# ==============================================================================
+# REDIS CONFIGURATION HELPER
+# ==============================================================================
+
+def configure_redis_for_reliability(redis_client: Redis) -> bool:
+    """
+    Configure Redis for better reliability and handle MISCONF errors.
+    
+    Returns:
+        bool: True if configuration was successful, False otherwise
+    """
+    try:
+        # Strategy 1: Use AOF instead of RDB for better persistence
+        try:
+            redis_client.config_set("save", "")  # Disable RDB snapshots
+            logging.info("✅ Redis: Disabled RDB snapshots")
+            
+            redis_client.config_set("appendonly", "yes")  # Enable AOF
+            logging.info("✅ Redis: Enabled AOF persistence")
+            
+            return True
+            
+        except Exception as config_error:
+            logging.warning(f"⚠️ Could not configure Redis persistence: {config_error}")
+            
+            # Strategy 2: Fallback - disable the error check
+            try:
+                redis_client.config_set("stop-writes-on-bgsave-error", "no")
+                logging.warning("⚠️ Redis: Disabled RDB error checking (fallback)")
+                return True
+                
+            except Exception as fallback_error:
+                logging.warning(f"⚠️ Redis: Could not modify config: {fallback_error}")
+                return False
+                
+    except Exception as e:
+        logging.error(f"❌ Redis configuration failed: {e}")
+        return False
+
+def handle_redis_misconf_error(error_msg: str) -> str:
+    """
+    Provide helpful error message and suggestions for MISCONF errors.
+    
+    Args:
+        error_msg: The Redis error message
+        
+    Returns:
+        str: Helpful suggestion message
+    """
+    if "MISCONF" in error_msg:
+        return (
+            "💡 Redis MISCONF Error Solutions:\n"
+            "   1. Check disk space: df -h\n"
+            "   2. Check Redis logs: tail -f /var/log/redis/redis-server.log\n"
+            "   3. Fix permissions: sudo chown redis:redis /var/lib/redis\n"
+            "   4. Disable RDB: redis-cli CONFIG SET save ''\n"
+            "   5. Enable AOF: redis-cli CONFIG SET appendonly yes"
+        )
+    return "Check Redis server status and logs"

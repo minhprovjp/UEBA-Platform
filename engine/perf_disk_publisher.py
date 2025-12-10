@@ -44,18 +44,25 @@ def save_last_id(lid):
 
 # === 2. Kết nối ===
 def connect_db():
-    # [FIX] Xử lý chuỗi kết nối để đảm bảo trỏ vào uba_db
-    url = MYSQL_LOG_DATABASE_URL
-    
-    # Logic thay thế tên DB trong URL connection string
-    if "/mysql" in url:
-        url = url.replace("/mysql", "/uba_db")
-    elif "/performance_schema" in url:
-        url = url.replace("/performance_schema", "/uba_db")
-    elif "/sys" in url:
-        url = url.replace("/sys", "/uba_db")
-    
-    return create_engine(url)
+    try:
+        url = MYSQL_LOG_DATABASE_URL.replace("/mysql", "/uba_db") if "/mysql" in MYSQL_LOG_DATABASE_URL else MYSQL_LOG_DATABASE_URL
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,  # Test connections before using them
+            pool_recycle=3600,   # Recycle connections after 1 hour
+            pool_size=5,
+            max_overflow=10,
+            connect_args={
+                'connect_timeout': 10,
+                'autocommit': True
+            }
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception as e:
+        logging.error(f"DB Connect failed: {e}")
+        return None
 
 def calculate_entropy(text):
     if not text: return 0.0
@@ -79,7 +86,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
           AND (PROCESSLIST_USER IS NULL OR PROCESSLIST_USER NOT IN ('uba_user'))
           AND (CURRENT_SCHEMA IS NULL OR CURRENT_SCHEMA != 'uba_db')
           AND SQL_TEXT IS NOT NULL
-          AND e.SQL_TEXT NOT LIKE '%UBA_EVENT%'
+          AND SQL_TEXT NOT LIKE '%UBA_EVENT%'
         ORDER BY id ASC 
         LIMIT 5000;
     """)

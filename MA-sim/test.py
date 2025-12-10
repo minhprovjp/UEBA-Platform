@@ -14,7 +14,7 @@ from executor import SQLExecutor
 
 # --- CẤU HÌNH ---
 NUM_THREADS = 10
-SIMULATION_SPEED_UP = 86400 # 1s = 1 ngày
+SIMULATION_SPEED_UP = 3600 # 1s = 1 ngày
 START_DATE = datetime(2025, 1, 1, 8, 0, 0)
 TOTAL_REAL_SECONDS = 600
 
@@ -74,16 +74,23 @@ def generate_profile(role, is_malicious=False):
         "source_ip": base["ip_range"] + str(random.randint(2, 250)) # [RENAMED] IP giả lập
     }
 
-# ... (Class VirtualClock giữ nguyên) ...
+# Biến toàn cục quản lý thời gian
 class VirtualClock:
     def __init__(self, start_time, speed_up):
         self.start_real = time.time()
         self.start_sim = start_time
         self.speed_up = speed_up
+        self.lock = threading.Lock()
+
     def get_current_sim_time(self):
+        """Tính thời gian ảo dựa trên thời gian trôi qua thực tế"""
         now = time.time()
         elapsed_real = now - self.start_real
-        return self.start_sim + timedelta(seconds=elapsed_real * self.speed_up)
+        elapsed_sim = elapsed_real * self.speed_up
+        
+        # Thêm chút jitter (ngẫu nhiên mili-giây) để log không bị trùng khít
+        current_sim = self.start_sim + timedelta(seconds=elapsed_sim)
+        return current_sim
 
 def load_config():
     try:
@@ -105,33 +112,63 @@ def user_worker_fast(agent, translator, executor, v_clock, stop_event):
              my_profile["program_name"] = "python-requests" 
 
     while not stop_event.is_set():
+        # 1. Lấy giờ ảo hiện tại
         sim_time = v_clock.get_current_sim_time()
         hour = sim_time.hour
         
-        # Logic nghỉ đêm
+        # 2. Logic nghỉ ngơi (Sleep) theo giờ ảo
+        # Nếu là đêm (22h - 6h), giảm tần suất hoạt động cực thấp
         if (hour >= 22 or hour < 6) and not agent.is_malicious:
-            time.sleep(0.005)
+            time.sleep(0.5) # Ngủ 0.5s thực (tương đương 30p ảo)
             continue
-            
-        intent = agent.step()
-        if intent['action'] in ["START", "LOGOUT"]:
-            time.sleep(0.001); continue
 
+        # 3. Sinh hành động
+        intent = agent.step()
+        
+        # Bỏ qua các bước đệm không sinh query
+        if intent['action'] in ["START", "LOGOUT"]:
+            time.sleep(0.01)
+            continue
+
+        # 4. Dịch & Bắn
         sql = translator.translate(intent)
+        
+        # Convert Sim Time sang String ISO để gửi kèm
         ts_str = sim_time.isoformat()
         
         # [QUAN TRỌNG] Truyền Profile vào Executor
         success = executor.execute(intent, sql, sim_timestamp=ts_str, client_profile=my_profile)
         
-        # In log tượng trưng
-        if random.random() < 0.05:
+        # 5. Log tiến độ (Chỉ in tượng trưng để đỡ lag console)
+        if random.random() < 0.05: # In 5% số log thôi
             print(f"[{ts_str}] {agent.username} ({my_profile['program_name']}) | {intent['action']} -> {'OK' if success else 'FAIL'}")
 
-        # Think time
-        time.sleep(random.randint(1, 3) / v_clock.speed_up)
+        # 6. [UPDATE] Nghỉ ngơi (Think Time) theo phân phối Pareto
+        # Thay vì random.randint(5, 30) (Uniform)
+        
+        # Logic:
+        # - Hành động nhanh (Search/View): nghỉ ngắn, thỉnh thoảng nghỉ dài
+        # - Hành động chậm (Update/Create): nghỉ lâu hơn
+        
+        min_wait = 2  # Giây ảo
+        mode_wait = 15 # Giây ảo phổ biến
+        
+        if "UPDATE" in intent['action'] or "CREATE" in intent['action']:
+            mode_wait = 45 # Thao tác ghi thường tốn thời gian suy nghĩ hơn
+            
+        # Sinh thời gian chờ ảo
+        sim_wait_seconds = StatisticalGenerator.generate_pareto_delay(min_wait, mode_wait)
+        
+        # Chuyển đổi sang thời gian thực (để thread sleep)
+        real_sleep_seconds = sim_wait_seconds / v_clock.speed_up
+        
+        # Giới hạn sleep thực tế tối thiểu để tránh spam quá tải CPU (ví dụ 0.001s)
+        time.sleep(max(real_sleep_seconds, 0.001))
 
 def main():
-    print(f"🚀 BẮT ĐẦU MÔ PHỎNG (Tên thật + Thiết bị thật)...")
+    print(f"🚀 BẮT ĐẦU MÔ PHỎNG ĐA LUỒNG (x{SIMULATION_SPEED_UP} speed)")
+    print(f"   - Start Time (Sim): {START_DATE}")
+    
     user_config, db_state = load_config()
     users_map = user_config.get("users", {})
     
@@ -163,10 +200,15 @@ def main():
             start_run = time.time()
             while (time.time() - start_run) < TOTAL_REAL_SECONDS:
                 time.sleep(1)
+                # In trạng thái thời gian ảo
+                curr_sim = v_clock.get_current_sim_time()
+                sys.stdout.write(f"\r⏳ Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')} (Real elapsed: {int(time.time() - start_run)}s)   ")
+                sys.stdout.flush()
         except KeyboardInterrupt:
-            pass
+            print("\n🛑 Force stopping...")
         finally:
             stop_event.set()
+            print("\n✅ Simulation finished.")
 
 if __name__ == "__main__":
     main()

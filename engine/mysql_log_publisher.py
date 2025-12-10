@@ -2,14 +2,14 @@
 import os, json, time, threading, logging, re, sys
 import pandas as pd
 from datetime import datetime, timezone
-from redis import Redis
+from redis import Redis, ConnectionError as RedisConnectionError, RedisError
 from sqlalchemy.engine.url import make_url 
 from typing import Optional
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet 
+    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error
 
     try:
         # Đọc URL của publisher kia để biết nó dùng user nào
@@ -39,6 +39,10 @@ def connect_redis():
             r = Redis.from_url(REDIS_URL, decode_responses=True)
             r.ping()
             logging.info("Kết nối Redis (Publisher) thành công.")
+            
+            # Configure Redis for better reliability
+            configure_redis_for_reliability(r)  
+            
             return r
         except ConnectionError as e:
             logging.error(f"Kết nối Redis (Publisher) thất bại: {e}. Thử lại sau 5 giây...")
