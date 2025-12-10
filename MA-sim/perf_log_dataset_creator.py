@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", date
 
 # --- CẤU HÌNH ---
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_creator.state")
-CSV_OUTPUT_FILE = "final_dataset_30d.csv"
+CSV_OUTPUT_FILE = "final_clean_dataset_30d.csv"
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0
@@ -39,7 +39,7 @@ def sort_final_csv():
         
         # Chuyển cột timestamp sang datetime để sort chuẩn
         if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
             df = df.sort_values(by='timestamp')
         
         # Lưu lại (Ghi đè)

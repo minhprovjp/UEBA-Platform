@@ -1,4 +1,4 @@
-# simulation/setup_full_environment.py
+# Vietnamese Medium-Sized Sales Company User Generator
 import mysql.connector
 from faker import Faker
 import random
@@ -9,19 +9,106 @@ import unicodedata
 # CẤU HÌNH
 DB_CONFIG = {"host": "localhost", "port": 3306, "user": "root", "password": "root"}
 USERS_CONFIG_FILE = "simulation/users_config.json"
-fake = Faker('vi_VN')
 
-def remove_accents(input_str):
-    """Chuyển 'Nguyễn Văn Nam' -> 'nguyen.van.nam'"""
-    nfkd_form = unicodedata.normalize('NFKD', input_str)
-    s = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-    return ".".join(s.lower().split())
+# Vietnamese Faker for authentic Vietnamese names
+fake_vn = Faker('vi_VN')
+
+# Common Vietnamese family names (họ) - researched from Vietnamese demographics
+VIETNAMESE_FAMILY_NAMES = [
+    "Nguyễn", "Trần", "Lê", "Phạm", "Hoàng", "Huỳnh", "Phan", "Vũ", "Võ", "Đặng",
+    "Bùi", "Đỗ", "Hồ", "Ngô", "Dương", "Lý", "Đinh", "Đào", "Lương", "Trương",
+    "Tạ", "Quách", "Vương", "Lại", "Thái", "Cao", "Chu", "Triệu", "Lưu", "Tô",
+    "Đoàn", "Hà", "Tăng", "Mạc", "Kiều", "Ông", "Đồng", "Quan", "Hứa", "Khương"
+]
+
+# Common Vietnamese middle names (tên đệm)
+VIETNAMESE_MIDDLE_NAMES = {
+    "male": ["Văn", "Đức", "Minh", "Quang", "Hữu", "Công", "Thành", "Xuân", "Thanh", "Tuấn"],
+    "female": ["Thị", "Minh", "Thu", "Hồng", "Lan", "Mai", "Hương", "Linh", "Ngọc", "Phương"]
+}
+
+# Common Vietnamese given names (tên)
+VIETNAMESE_GIVEN_NAMES = {
+    "male": [
+        "Nam", "Hùng", "Dũng", "Tuấn", "Hải", "Long", "Quang", "Minh", "Đức", "Thành",
+        "Hoàng", "Khang", "Phong", "Tùng", "Việt", "Bảo", "Khánh", "Tân", "Hưng", "Thắng",
+        "Cường", "Sơn", "Tú", "Hiếu", "Trung", "Kiên", "Lâm", "Phúc", "An", "Đạt"
+    ],
+    "female": [
+        "Linh", "Hương", "Lan", "Mai", "Thu", "Hà", "Nga", "Hoa", "Trang", "Nhung",
+        "Thảo", "Yến", "Oanh", "Dung", "Hạnh", "Tâm", "Châu", "Vân", "Xuân", "Diệu",
+        "Phương", "Ngọc", "Hồng", "Bích", "Thúy", "Giang", "Ly", "My", "Anh", "Huệ"
+    ]
+}
+
+def remove_vietnamese_accents(input_str):
+    """
+    Convert Vietnamese names to clean username format
+    'Nguyễn Văn Nam' -> 'nguyen_van_nam'
+    """
+    # Vietnamese accent mapping for proper conversion
+    vietnamese_map = {
+        'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+        'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+        'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+        'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+        'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+        'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+        'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+        'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+        'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+        'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+        'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+        'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+        'đ': 'd', 'Đ': 'D'
+    }
+    
+    # Convert to lowercase and replace Vietnamese characters
+    result = input_str.lower()
+    for vn_char, latin_char in vietnamese_map.items():
+        result = result.replace(vn_char, latin_char)
+    
+    # Remove any remaining special characters and join with underscores
+    clean_parts = []
+    for part in result.split():
+        clean_part = "".join(c for c in part if c.isalnum())
+        if clean_part:
+            clean_parts.append(clean_part)
+    
+    return "_".join(clean_parts)
+
+def generate_vietnamese_name():
+    """
+    Generate authentic Vietnamese names for medium-sized company
+    Returns username and full Vietnamese name
+    """
+    # Randomly choose gender for appropriate middle and given names
+    gender = random.choice(["male", "female"])
+    
+    # Select name components
+    family_name = random.choice(VIETNAMESE_FAMILY_NAMES)
+    middle_name = random.choice(VIETNAMESE_MIDDLE_NAMES[gender])
+    given_name = random.choice(VIETNAMESE_GIVEN_NAMES[gender])
+    
+    # Create full Vietnamese name (Họ Tên_đệm Tên)
+    full_name = f"{family_name} {middle_name} {given_name}"
+    
+    # Create username (ho.tendem.ten)
+    username = remove_vietnamese_accents(full_name)
+    
+    # Ensure reasonable length for MySQL (32 char limit)
+    if len(username) > 30:
+        # Use family name + given name only
+        short_name = f"{family_name} {given_name}"
+        username = remove_vietnamese_accents(short_name)
+    
+    return username, full_name
 
 def get_conn():
     return mysql.connector.connect(**DB_CONFIG, autocommit=True)
 
 def setup_real_users():
-    print("👤 ĐANG TẠO USER TÊN THẬT & PHÂN QUYỀN...")
+    print("👤 CREATING VIETNAMESE MEDIUM-SIZED SALES COMPANY USERS & PERMISSIONS...")
     conn = get_conn()
     cur = conn.cursor()
     
@@ -32,49 +119,77 @@ def setup_real_users():
             try: cur.execute(f"DROP USER '{u}'@'{h}'")
             except: pass
 
-    # 2. Định nghĩa số lượng nhân sự
-    # Format: (Role, Count, DB_Access)
+    # 2. Define Vietnamese medium-sized sales company structure (80-120 employees)
+    # Enhanced structure with 7-database access
     teams = [
-        ("SALES", 20, ["sales_db"]),
-        ("HR", 5, ["hr_db", "sales_db"]), # HR xem được sales để tính lương
-        ("DEV", 10, ["sales_db", "hr_db", "mysql"]),
-        ("ADMIN", 2, ["*"])
+        ("SALES", 35),                      # Sales team - largest department
+        ("MARKETING", 12),                  # Marketing team - campaigns and leads
+        ("CUSTOMER_SERVICE", 15),           # Customer service - support tickets
+        ("HR", 6),                         # HR team - employee management
+        ("FINANCE", 8),                     # Finance team - accounting and budgets
+        ("DEV", 10),                       # IT/Development team - system maintenance
+        ("MANAGEMENT", 8),                  # Management - cross-department oversight
+        ("ADMIN", 3)                       # System administrators - full access
     ]
 
     user_map = {} # username -> role
     
-    for role, count, dbs in teams:
-        for _ in range(count):
-            # Tạo tên thật: nguyen.van.a
-            full_name = fake.name()
-            username = remove_accents(full_name)[:30] # Limit 32 chars
+    for role, count in teams:
+        print(f"🏢 Tạo {count} nhân viên cho phòng ban {role}...")
+        for i in range(count):
+            # Generate authentic Vietnamese name
+            username, full_name = generate_vietnamese_name()
             
-            # Tránh trùng
+            # Ensure unique username
+            original_username = username
+            counter = 1
             while username in user_map:
-                username += str(random.randint(1,9))
+                username = f"{original_username}{counter}"
+                counter += 1
             
             user_map[username] = role
+            print(f"  ✅ Tạo: {username} ({full_name}) -> {role}")
             
             # Tạo MySQL User
             try:
                 cur.execute(f"CREATE USER '{username}'@'%' IDENTIFIED BY 'password'")
                 
-                # Cấp quyền
+                # Cấp quyền theo vai trò với enhanced database structure
                 if role == "ADMIN":
                     cur.execute(f"GRANT ALL PRIVILEGES ON *.* TO '{username}'@'%'")
                 else:
-                    for db in dbs:
-                        if db == "*": cur.execute(f"GRANT SELECT ON *.* TO '{username}'@'%'")
-                        elif db == "mysql": cur.execute(f"GRANT SELECT ON mysql.* TO '{username}'@'%'")
-                        else: cur.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {db}.* TO '{username}'@'%'")
+                    # Get enhanced permissions from config
+                    with open(USERS_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                    
+                    role_permissions = config.get("roles", {}).get(role, {})
+                    
+                    for db_name, permissions in role_permissions.items():
+                        if db_name == "description":
+                            continue
+                        elif db_name == "*":
+                            cur.execute(f"GRANT ALL PRIVILEGES ON *.* TO '{username}'@'%'")
+                        elif db_name == "mysql":
+                            cur.execute(f"GRANT SELECT ON mysql.* TO '{username}'@'%'")
+                        else:
+                            if permissions:
+                                perm_str = ", ".join(permissions)
+                                cur.execute(f"GRANT {perm_str} ON {db_name}.* TO '{username}'@'%'")
+                    
+                    # Always grant basic usage
+                    cur.execute(f"GRANT USAGE ON *.* TO '{username}'@'%'")
             except Exception as e:
-                print(f"⚠️ Lỗi tạo {username}: {e}")
+                print(f"⚠️ Lỗi tạo user {username}: {e}")
 
-    # Tạo User Hacker/Insider cụ thể để kịch bản dùng
+    # Create specific Vietnamese accounts for attack scenarios
+    print("🔒 Tạo tài khoản đặc biệt cho kịch bản bảo mật...")
     bad_actors = {
-        "dave.insider": "BAD_ACTOR",     # Insider Threat
-        "guest.temp": "VULNERABLE",      # User yếu để hacker chiếm
-        "script.kiddie": "EXTERNAL"      # Hacker bên ngoài
+        "nguyen_noi_bo": "BAD_ACTOR",           # Insider Threat (Vietnamese name)
+        "thuc_tap_sinh": "VULNERABLE",          # Intern account (Vietnamese)
+        "khach_truy_cap": "VULNERABLE",         # Guest access account (Vietnamese)
+        "dich_vu_he_thong": "VULNERABLE",       # Service account (Vietnamese)
+        "nhan_vien_tam": "VULNERABLE",          # Temporary employee (Vietnamese)
+        "tu_van_ngoai": "BAD_ACTOR"             # External consultant (Vietnamese)
     }
     
     for u, role in bad_actors.items():
@@ -82,17 +197,93 @@ def setup_real_users():
             cur.execute(f"CREATE USER '{u}'@'%' IDENTIFIED BY 'password'")
             cur.execute(f"GRANT SELECT ON sales_db.* TO '{u}'@'%'")
             user_map[u] = role
-        except: pass
+            print(f"  ✅ Tạo tài khoản đặc biệt: {u} -> {role}")
+        except Exception as e:
+            print(f"⚠️ Lỗi tạo tài khoản đặc biệt {u}: {e}")
 
     cur.execute("FLUSH PRIVILEGES")
     conn.close()
     
-    # Lưu config
-    # ROLE_PERMISSIONS mapping giữ nguyên hoặc cập nhật tùy ý
-    config_data = {"users": user_map}
+    # Save configuration with Vietnamese company role permissions
+    config_data = {
+        "company_info": {
+            "name": "Công ty TNHH Thương mại ABC",
+            "type": "Vietnamese Medium-Sized Sales Company",
+            "size": "80-120 employees",
+            "industry": "Sales & Trading"
+        },
+        "roles": {
+            "SALES": {
+                "sales_db": ["SELECT", "INSERT", "UPDATE"],
+                "description": "Nhân viên kinh doanh - truy cập dữ liệu bán hàng"
+            },
+            "MARKETING": {
+                "sales_db": ["SELECT", "INSERT", "UPDATE"],
+                "description": "Nhân viên marketing - hỗ trợ bán hàng"
+            },
+            "CUSTOMER_SERVICE": {
+                "sales_db": ["SELECT", "INSERT", "UPDATE"],
+                "description": "Nhân viên chăm sóc khách hàng"
+            },
+            "HR": {
+                "sales_db": ["SELECT"],
+                "hr_db": ["SELECT", "INSERT", "UPDATE"],
+                "description": "Nhân viên nhân sự"
+            },
+            "FINANCE": {
+                "sales_db": ["SELECT"],
+                "hr_db": ["SELECT"],
+                "description": "Nhân viên tài chính"
+            },
+            "DEV": {
+                "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"],
+                "hr_db": ["SELECT", "INSERT", "UPDATE"],
+                "mysql": ["SELECT"],
+                "description": "Nhân viên IT/Phát triển"
+            },
+            "MANAGEMENT": {
+                "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+                "hr_db": ["SELECT"],
+                "description": "Quản lý cấp trung và cao"
+            },
+            "ADMIN": {
+                "*": ["ALL"],
+                "description": "Quản trị viên hệ thống"
+            },
+            "BAD_ACTOR": {
+                "sales_db": ["SELECT"],
+                "description": "Tài khoản có nguy cơ bảo mật"
+            },
+            "VULNERABLE": {
+                "description": "Tài khoản dễ bị tấn công"
+            }
+        },
+        "users": user_map
+    }
+    
     with open(USERS_CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config_data, f, indent=2)
-    print(f"✅ Đã tạo {len(user_map)} users tên thật. Config saved.")
+        json.dump(config_data, f, indent=2, ensure_ascii=False)
+    
+    print(f"✅ Đã tạo {len(user_map)} nhân viên Việt Nam cho công ty quy mô trung bình. Cấu hình đã lưu.")
+    print(f"📊 Phân bố nhân viên theo phòng ban:")
+    role_counts = {}
+    for username, role in user_map.items():
+        role_counts[role] = role_counts.get(role, 0) + 1
+    
+    for role, count in role_counts.items():
+        print(f"   {role}: {count} nhân viên")
+    
+    total_employees = sum(role_counts.values())
+    print(f"🏢 Tổng số nhân viên: {total_employees} (quy mô công ty trung bình)")
+    print(f"🇻🇳 Tên Việt Nam chính thống với các họ phổ biến nhất")
+    print(f"🔐 Tất cả user được tạo với mật khẩu: 'password'")
+    print(f"📁 Cấu hình đã lưu tại: {USERS_CONFIG_FILE}")
+    
+    # Validate medium-sized company criteria
+    if 80 <= total_employees <= 200:
+        print(f"✅ CONFIRMED: Đây là dataset cho công ty quy mô TRUNG BÌNH ({total_employees} nhân viên)")
+    else:
+        print(f"⚠️ WARNING: Số lượng nhân viên ({total_employees}) không phù hợp với quy mô trung bình (80-200)")
 
 if __name__ == "__main__":
     setup_real_users()
