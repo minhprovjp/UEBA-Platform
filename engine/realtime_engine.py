@@ -12,6 +12,7 @@ from engine.db_writer import save_results_to_db
 from email_alert import send_email_alert
 from active_response import execute_lock_and_kill_strategy
 from utils import generate_html_alert
+from engine.utils import configure_redis_for_reliability, handle_redis_misconf_error
 from config import *
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [RealtimeEngine] - %(message)s")
@@ -46,6 +47,10 @@ def connect_redis():
                 socket_connect_timeout=5
             )
             r.ping()
+            
+            # Configure Redis for better reliability
+            configure_redis_for_reliability(r)
+            
             logging.info("✅ Kết nối Redis thành công.")
             return r
         except Exception as e:

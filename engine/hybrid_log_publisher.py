@@ -12,7 +12,7 @@ from collections import Counter
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet 
+    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error
 except ImportError:
     print("Lỗi: Không thể import config/utils.")
     sys.exit(1)
@@ -86,6 +86,10 @@ def connect_redis():
             socket_connect_timeout=5
         )
         r.ping()
+        
+        # Configure Redis for better reliability
+        configure_redis_for_reliability(r)
+        
         return r
     except Exception as e:
         logging.error(f"Redis connection failed: {e}")
@@ -230,7 +234,10 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             logging.error(f"Redis connection error while pushing logs: {e}")
             # Continue to save to parquet even if Redis fails
         except RedisError as e:
+            # Handle MISCONF and other Redis errors
             logging.error(f"Redis error while pushing logs: {e}")
+            if "MISCONF" in str(e):
+                logging.info(handle_redis_misconf_error(str(e)))
             # Continue to save to parquet even if Redis fails
         except Exception as e:
             logging.error(f"Unexpected error while pushing to Redis: {e}")

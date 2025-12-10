@@ -155,10 +155,17 @@ def process_logs():
     try:
         redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
         redis_client.ping()
+        
+        # [FIX] Tự động tắt lỗi BGSAVE để tránh crash khi chạy lâu
+        try:
+            redis_client.config_set("stop-writes-on-bgsave-error", "no")
+            logging.info("✅ Redis Configured: stop-writes-on-bgsave-error = no")
+        except:
+            logging.warning("⚠️ Could not set Redis config (Permission denied?)")
+
         logging.info("✅ Redis Connected")
     except:
         logging.warning("⚠️ Redis connection failed at startup. Will retry later.")
-
     # Init CSV Header
     csv_headers = [
         "timestamp", "event_id", "event_name", 

@@ -13,7 +13,7 @@ import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet 
+    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error
 except ImportError:
     print("Lỗi: Không thể import 'config' hoặc 'engine.utils'.")
     sys.exit(1)
@@ -61,20 +61,26 @@ def write_last_timer(ts: int):
         logging.error(f"Cannot write state file: {e}")
 
 # === 2. Kết nối ===
-def connect_db(db_url: str):
-    while is_running:
-        try:
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
-                try:
-                    conn.execute(text("UPDATE performance_schema.setup_consumers SET ENABLED='YES' WHERE NAME LIKE 'events_statements_history_long'"))
-                except: pass
-            logging.info("✅ Kết nối MySQL thành công.")
-            return engine
-        except Exception as e:
-            logging.error(f"❌ Lỗi kết nối MySQL: {e}. Thử lại sau 5s...")
-            time.sleep(5)
-    return None
+def connect_db():
+    try:
+        url = MYSQL_LOG_DATABASE_URL.replace("/mysql", "/uba_db") if "/mysql" in MYSQL_LOG_DATABASE_URL else MYSQL_LOG_DATABASE_URL
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,  # Test connections before using them
+            pool_recycle=3600,   # Recycle connections after 1 hour
+            pool_size=5,
+            max_overflow=10,
+            connect_args={
+                'connect_timeout': 10,
+                'autocommit': True
+            }
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception as e:
+        logging.error(f"DB Connect failed: {e}")
+        return None
 
 def connect_redis():
     while is_running:
@@ -82,6 +88,10 @@ def connect_redis():
             r = Redis.from_url(REDIS_URL, decode_responses=True)
             r.ping()
             logging.info("✅ Kết nối Redis thành công.")
+            
+            # Configure Redis for better reliability
+            configure_redis_for_reliability(r)  
+            
             return r
         except Exception as e:
             logging.error(f"❌ Lỗi kết nối Redis: {e}. Thử lại sau 5s...")
@@ -101,7 +111,7 @@ def calculate_entropy(text):
 def monitor_performance_schema(poll_interval_sec: int = 2):
     global is_running
     
-    db_engine = connect_db(MYSQL_LOG_DATABASE_URL)
+    db_engine = connect_db()
     redis_client = connect_redis()
     
     if not db_engine or not redis_client: return
@@ -284,16 +294,29 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
 
                 # 5. Push & Update State
                 if new_records:
-                    pipe = redis_client.pipeline()
-                    for rec in new_records:
-                        pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, ensure_ascii=False)})
-                    pipe.execute()
+                    try:
+                        pipe = redis_client.pipeline()
+                        for rec in new_records:
+                            pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, ensure_ascii=False)})
+                        pipe.execute()
 
-                    save_logs_to_parquet(new_records, source_dbms="MySQL")
-                    
-                    last_timer = batch_max_timer
-                    write_last_timer(last_timer)
-                    logging.info(f"Published {len(new_records)} logs. (Timer: {last_timer})")
+                        save_logs_to_parquet(new_records, source_dbms="MySQL")
+                        
+                        last_timer = batch_max_timer
+                        write_last_timer(last_timer)
+                        logging.info(f"Published {len(new_records)} logs. (Timer: {last_timer})")
+                    except (RedisConnectionError, ConnectionResetError, BrokenPipeError) as e:
+                        logging.error(f"Redis connection error while pushing logs: {e}")
+                        # Continue to save to parquet even if Redis fails
+                    except RedisError as e:
+                        # Handle MISCONF and other Redis errors
+                        logging.error(f"Redis error while pushing logs: {e}")
+                        if "MISCONF" in str(e):
+                            logging.info(handle_redis_misconf_error(str(e)))
+                        # Continue to save to parquet even if Redis fails
+                    except Exception as e:
+                        logging.error(f"Unexpected error while pushing to Redis: {e}")
+                        # Continue to save to parquet even if Redis fails
                 
                 else:
                     # Catch-up: Nếu DB trôi đi (do filter), vẫn cập nhật con trỏ
@@ -305,7 +328,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             logging.error(f"Error: {e}")
             time.sleep(5)
             try:
-                db_engine = connect_db(MYSQL_LOG_DATABASE_URL)
+                db_engine = connect_db()
                 redis_client = connect_redis()
             except: pass
 

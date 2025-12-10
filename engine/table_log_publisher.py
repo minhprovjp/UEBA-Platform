@@ -50,18 +50,26 @@ def write_last_known_timestamp(last_time_str: str, state_file_path=TABLE_STATE_F
         logging.error(f"Không thể ghi state file: {e}")
 
 # === 2. Logic Kết nối Tin cậy (Robust) ===
-def connect_db(db_url: str):
-    """Kết nối đến MySQL với cơ chế thử lại."""
-    while True:
-        try:
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            logging.info("Kết nối MySQL (Publisher) thành công.")
-            return engine
-        except OperationalError as e:
-            logging.error(f"Kết nối MySQL (Publisher) thất bại: {e}. Thử lại sau 5 giây...")
-            time.sleep(5)
+def connect_db():
+    try:
+        url = MYSQL_LOG_DATABASE_URL.replace("/mysql", "/uba_db") if "/mysql" in MYSQL_LOG_DATABASE_URL else MYSQL_LOG_DATABASE_URL
+        engine = create_engine(
+            url,
+            pool_pre_ping=True,  # Test connections before using them
+            pool_recycle=3600,   # Recycle connections after 1 hour
+            pool_size=5,
+            max_overflow=10,
+            connect_args={
+                'connect_timeout': 10,
+                'autocommit': True
+            }
+        )
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception as e:
+        logging.error(f"DB Connect failed: {e}")
+        return None
 
 def connect_redis():
     """Kết nối đến Redis với cơ chế thử lại."""
@@ -80,7 +88,7 @@ def monitor_log_table(poll_interval_sec: int = 1):
     """
     Theo dõi bảng mysql.general_log, xử lý và đẩy vào Redis Stream.
     """
-    db_engine = connect_db(MYSQL_LOG_DATABASE_URL)
+    db_engine = connect_db()
     redis_client = connect_redis()
     
     # Tải timestamp cuối cùng đã xử lý
@@ -166,7 +174,7 @@ def monitor_log_table(poll_interval_sec: int = 1):
             
             except (OperationalError, ProgrammingError) as e:
                 logging.error(f"Lỗi CSDL MySQL: {e}. Đang kết nối lại...")
-                db_engine = connect_db(MYSQL_LOG_DATABASE_URL) # Thử kết nối lại
+                db_engine = connect_db() # Thử kết nối lại
             
             except Exception as e:
                 logging.error(f"Lỗi không xác định: {e}", exc_info=True)

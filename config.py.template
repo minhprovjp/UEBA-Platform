@@ -45,7 +45,7 @@ MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch_mysql")   # Thư m
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://uba_user:password@localhost:5432/uba_db")
 
 # Hãy đảm bảo user/password này có quyền SELECT trên bảng mysql.general_log
-MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost:3306/mysql"
+MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost:3306/uba_db"
 
 # SQLite cũ:
 # DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'app_database.db')}"
