@@ -1,465 +1,115 @@
-# llm_analyzer_dual.py
+# engine/llm_analyzer_dual.py
 """
 ================================================================================
-MODULE PHÂN TÍCH BẰNG MÔ HÌNH NGÔN NGỮ LỚN (LLM) - DUAL PROVIDER SYSTEM
+MODULE PHÂN TÍCH LLM - OLLAMA ONLY (2 ROUNDS - ORIGINAL PROMPTS)
 ================================================================================
-Module này chứa tất cả logic để tương tác với cả Local LLM (Ollama) và Third-party AI APIs.
-Nó chịu trách nhiệm cho việc:
-1.  Tạo kết nối đến Ollama server hoặc Third-party API.
-2.  Xây dựng các câu lệnh prompt chi tiết, giàu ngữ cảnh.
-3.  Gửi yêu cầu phân tích và nhận về kết quả dưới dạng JSON.
-4.  Intelligent fallback giữa các providers.
+- Sử dụng Ollama (Local AI) duy nhất.
+- Giữ nguyên cơ chế 2 vòng (Round 1: Phân tích -> Round 2: Review) để tăng độ chính xác.
+- Đã thêm bộ lọc JSON để sửa lỗi hiển thị với DeepSeek-R1.
 """
 
-# Import các thư viện cần thiết
-import ollama          # Thư viện chính để giao tiếp với Ollama
-import pandas as pd    # Dùng để làm việc với đối tượng Series
-import json            # Dùng để làm việc với định dạng dữ liệu JSON
-from typing import Optional, Dict, Any, List, Union # Dùng cho type hinting
+import ollama
+import pandas as pd
+import json
 import logging
 import os
 import sys
 import time
-import requests
+import re
 from urllib.parse import urlparse
-from abc import ABC, abstractmethod
+from typing import Optional, Dict, Any
 
-# Thêm thư mục gốc vào sys.path để có thể import utils
+# Thêm đường dẫn để import utils từ thư mục cha
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from engine.utils import extract_query_features
 
-# Cấu hình logging cho module này
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [LLM_Analyzer_Dual] - %(message)s')
+# Cấu hình logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [LLM_Dual] - %(message)s')
 logger = logging.getLogger(__name__)
 
-class LLMProvider(ABC):
-    """Abstract base class for LLM providers"""
-    
-    @abstractmethod
-    def is_available(self) -> bool:
-        """Check if provider is available"""
-        pass
-    
-    @abstractmethod
-    def analyze(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Perform analysis with the provider"""
-        pass
-    
-    @abstractmethod
-    def get_name(self) -> str:
-        """Get provider name"""
-        pass
+# --- [FIX QUAN TRỌNG] HÀM LÀM SẠCH JSON TỪ DEEPSEEK ---
+def clean_json_text(text: str) -> str:
+    """Loại bỏ thẻ <think> và markdown để lấy JSON thuần."""
+    if not text: return "{}"
+    # Xóa thẻ suy nghĩ của DeepSeek (flags=re.DOTALL để match xuống dòng)
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Xóa markdown code block ```json ... ```
+    match = re.search(r'```json\s*(.*?)\s*```', text, flags=re.DOTALL)
+    if match: return match.group(1)
+    match = re.search(r'```\s*(.*?)\s*```', text, flags=re.DOTALL)
+    if match: return match.group(1)
+    return text.strip()
 
-class OllamaProvider(LLMProvider):
-    """Ollama local LLM provider"""
+class OllamaProvider:
+    """Provider đơn giản hóa chỉ cho Ollama"""
     
-    def __init__(self, host: str = "http://100.92.147.73:11434", timeout: int = 3600):
+    def __init__(self, host: str, timeout: int = 120):
         self.host = host
         self.timeout = timeout
         self.client = None
         self._connect()
     
     def _connect(self):
-        """Establish connection to Ollama server"""
         try:
-            # Validate host URL
             parsed_url = urlparse(self.host)
             if not parsed_url.scheme or not parsed_url.netloc:
                 raise ValueError(f"Invalid host URL: {self.host}")
             
-            logger.info(f"Attempting to connect to Ollama server at {self.host}")
+            logger.info(f"Connecting to Ollama at {self.host}...")
             self.client = ollama.Client(host=self.host, timeout=self.timeout)
-            
-            # Test the connection immediately
-            try:
-                # Simple ping test
-                response = self.client.list()
-                logger.info(f"Successfully connected to Ollama server at {self.host}")
-                logger.debug(f"Initial connection test response: {type(response)} - {response}")
-            except Exception as test_error:
-                logger.warning(f"Connection established but test failed: {test_error}")
-                # Don't fail the connection, just log the warning
-                
         except Exception as e:
-            logger.error(f"Failed to connect to Ollama server at {self.host}: {e}")
+            logger.error(f"Ollama connection failed: {e}")
             self.client = None
-    
-    def is_available(self) -> bool:
-        """Check if Ollama is available"""
-        try:
-            if not self.client:
-                return False
-            
-            # Try to list models to test connection
-            models = self.client.list()
-            
-            # Handle different Ollama API response formats
-            if 'models' in models:
-                # New format: models['models'] is a list
-                model_names = []
-                for m in models['models']:
-                    if isinstance(m, dict) and 'name' in m:
-                        model_names.append(m['name'])
-                    elif hasattr(m, 'name'):
-                        model_names.append(m.name)
-                    else:
-                        # Fallback: try to get string representation
-                        model_names.append(str(m))
-                
-                logger.info(f"Ollama connection test successful. Available models: {model_names}")
-            else:
-                # Alternative format: models might be a list directly
-                model_names = []
-                for m in models:
-                    if isinstance(m, dict) and 'name' in m:
-                        model_names.append(m['name'])
-                    elif hasattr(m, 'name'):
-                        model_names.append(m.name)
-                    else:
-                        model_names.append(str(m))
-                
-                logger.info(f"Ollama connection test successful. Available models: {model_names}")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Ollama connection test failed: {e}")
-            # Log the actual response structure for debugging
-            try:
-                if 'models' in models:
-                    logger.debug(f"Models response structure: {type(models['models'])} - {models['models']}")
-                else:
-                    logger.debug(f"Models response structure: {type(models)} - {models}")
-            except:
-                pass
-            
-            # Try fallback health check
-            logger.info("Attempting fallback health check...")
-            health_status = self.health_check()
-            if health_status.get("status") == "healthy":
-                logger.info("Fallback health check successful - Ollama is available")
-                return True
-            else:
-                logger.warning(f"Fallback health check failed: {health_status}")
-                return False
-    
-    def health_check(self) -> Dict[str, Any]:
-        """Simple health check without trying to list models"""
-        try:
-            if not self.client:
-                return {"status": "disconnected", "error": "Client not initialized"}
-            
-            # Try a simple ping-like operation
-            try:
-                # Use the tags endpoint which is lighter than listing models
-                response = requests.get(f"{self.host}/api/tags", timeout=5)
-                if response.status_code == 200:
-                    return {"status": "healthy", "endpoint": f"{self.host}/api/tags"}
-                else:
-                    return {"status": "unhealthy", "endpoint": f"{self.host}/api/tags", "status_code": response.status_code}
-            except Exception as ping_error:
-                return {"status": "unhealthy", "error": str(ping_error)}
-                
-        except Exception as e:
-            return {"status": "error", "error": str(e)}
-    
-    def analyze(self, prompt: str, model: str = "qwen2.5-coder:32b", **kwargs) -> Dict[str, Any]:
-        """Send analysis request to Ollama"""
+
+    def analyze(self, prompt: str, model: str = "deepseek-r1:1.5b", **kwargs) -> Dict[str, Any]:
         if not self.client:
-            raise ConnectionError("Ollama client not connected")
+            self._connect()
+            if not self.client: raise ConnectionError("Ollama Disconnected")
         
-        max_retries = kwargs.get('max_retries', 3)
-        retry_delay = kwargs.get('retry_delay', 2)
-        
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                logger.info(f"Sending request to Ollama model {model} (attempt {attempt + 1})")
                 response = self.client.chat(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    format="json"
+                    format="json", # Cố gắng ép format JSON
+                    options={"temperature": 0.6}
                 )
-                logger.info(f"Successfully received response from Ollama model {model}")
                 return response
             except Exception as e:
-                logger.warning(f"Ollama attempt {attempt + 1} failed: {e}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                else:
-                    logger.error(f"All {max_retries} Ollama attempts failed")
-                    raise e
-    
-    def get_name(self) -> str:
-        return "Ollama"
+                logger.warning(f"Attempt {attempt+1} failed: {e}")
+                time.sleep(1)
+        raise ConnectionError("Failed to get response from Ollama")
 
-class OpenAIProvider(LLMProvider):
-    """OpenAI API provider"""
-    
-    def __init__(self, api_key: str, model: str = "gpt-3.5-turbo", base_url: str = "https://api.openai.com/v1"):
-        self.api_key = api_key
-        self.model = model
-        self.base_url = base_url
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-    
-    def is_available(self) -> bool:
-        """Check if OpenAI API is available"""
-        try:
-            response = requests.get(f"{self.base_url}/models", headers=self.headers, timeout=10)
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"OpenAI API availability check failed: {e}")
-            return False
-    
-    def analyze(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Send analysis request to OpenAI"""
-        try:
-            model = kwargs.get('model', self.model)
-            temperature = kwargs.get('temperature', 0.7)
-            max_tokens = kwargs.get('max_tokens', 4096)
-            
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"}
-            }
-            
-            logger.info(f"Sending request to OpenAI model {model}")
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=self.headers,
-                json=payload,
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info("Successfully received response from OpenAI")
-                return {
-                    "message": {
-                        "content": result["choices"][0]["message"]["content"]
-                    }
-                }
-            else:
-                raise Exception(f"OpenAI API error: {response.status_code} - {response.text}")
-                
-        except Exception as e:
-            logger.error(f"OpenAI analysis failed: {e}")
-            raise e
-    
-    def get_name(self) -> str:
-        return "OpenAI"
-
-class AnthropicProvider(LLMProvider):
-    """Anthropic Claude API provider"""
-    
-    def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229"):
-        self.api_key = api_key
-        self.model = model
-        self.headers = {
-            "x-api-key": api_key,
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01"
-        }
-    
-    def is_available(self) -> bool:
-        """Check if Anthropic API is available"""
-        try:
-            response = requests.get("https://api.anthropic.com/v1/models", headers=self.headers, timeout=10)
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Anthropic API availability check failed: {e}")
-            return False
-    
-    def analyze(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Send analysis request to Anthropic"""
-        try:
-            model = kwargs.get('model', self.model)
-            max_tokens = kwargs.get('max_tokens', 4096)
-            
-            payload = {
-                "model": model,
-                "max_tokens": max_tokens,
-                "messages": [{"role": "user", "content": prompt}],
-                "system": "You are a security analyst. Respond only with valid JSON."
-            }
-            
-            logger.info(f"Sending request to Anthropic model {model}")
-            response = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers=self.headers,
-                json=payload,
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info("Successfully received response from Anthropic")
-                return {
-                    "message": {
-                        "content": result["content"][0]["text"]
-                    }
-                }
-            else:
-                raise Exception(f"Anthropic API error: {response.status_code} - {response.text}")
-                
-        except Exception as e:
-            logger.error(f"Anthropic analysis failed: {e}")
-            raise e
-    
-    def get_name(self) -> str:
-        return "Anthropic"
-
-class LLMManager:
-    """Manager class for handling multiple LLM providers with fallback logic"""
-    
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.providers: List[LLMProvider] = []
-        self._initialize_providers()
-    
-    def _initialize_providers(self):
-        """Initialize available LLM providers based on configuration"""
-        llm_config = self.config.get('llm_config', {})
-        
-        # Initialize Ollama provider
-        if llm_config.get('enable_ollama', True):
-            try:
-                ollama_provider = OllamaProvider(
-                    host=llm_config.get('ollama_host', 'http://100.92.147.73:11434'),
-                    timeout=llm_config.get('ollama_timeout', 3600)
-                )
-                self.providers.append(ollama_provider)
-                logger.info("Ollama provider initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Ollama provider: {e}")
-        
-        # Initialize OpenAI provider
-        if llm_config.get('enable_openai', False) and llm_config.get('openai_api_key'):
-            try:
-                openai_provider = OpenAIProvider(
-                    api_key=llm_config.get('openai_api_key'),
-                    model=llm_config.get('openai_model', 'gpt-3.5-turbo'),
-                    base_url=llm_config.get('openai_base_url', 'https://api.openai.com/v1')
-                )
-                self.providers.append(openai_provider)
-                logger.info("OpenAI provider initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize OpenAI provider: {e}")
-        
-        # Initialize Anthropic provider
-        if llm_config.get('enable_anthropic', False) and llm_config.get('anthropic_api_key'):
-            try:
-                anthropic_provider = AnthropicProvider(
-                    api_key=llm_config.get('anthropic_api_key'),
-                    model=llm_config.get('anthropic_model', 'claude-3-sonnet-20240229')
-                )
-                self.providers.append(anthropic_provider)
-                logger.info("Anthropic provider initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Anthropic provider: {e}")
-        
-        if not self.providers:
-            logger.error("No LLM providers available!")
-            raise RuntimeError("No LLM providers could be initialized")
-        
-        logger.info(f"Initialized {len(self.providers)} LLM providers: {[p.get_name() for p in self.providers]}")
-    
-    def get_available_providers(self) -> List[LLMProvider]:
-        """Get list of currently available providers"""
-        return [p for p in self.providers if p.is_available()]
-    
-    def analyze_with_fallback(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Analyze with automatic fallback between providers"""
-        available_providers = self.get_available_providers()
-        
-        if not available_providers:
-            raise RuntimeError("No LLM providers are currently available")
-        
-        # Try providers in order of preference
-        for provider in available_providers:
-            try:
-                logger.info(f"Attempting analysis with {provider.get_name()}")
-                result = provider.analyze(prompt, **kwargs)
-                logger.info(f"Successfully analyzed with {provider.get_name()}")
-                return {
-                    "result": result,
-                    "provider": provider.get_name(),
-                    "success": True
-                }
-            except Exception as e:
-                logger.warning(f"Analysis failed with {provider.get_name()}: {e}")
-                continue
-        
-        # If all providers failed
-        raise RuntimeError(f"All LLM providers failed: {[p.get_name() for p in available_providers]}")
-
+# --- LOGIC PHÂN TÍCH EVENT (QUERY) ---
 def analyze_query_with_llm(
     anomaly_row: Dict[str, Any], 
     anomaly_type_from_system: str,
     llm_config: Dict[str, Any],
     rules_config: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
-    """
-    Gửi một câu truy vấn (query) đến LLM với dual provider system:
-    - Lần 1: Phân tích sơ bộ
-    - Lần 2: Gửi lại kết quả lần 1 để LLM phân tích sâu hơn
-    """
     
-    logger.info("Initializing dual-provider LLM analysis")
+    logger.info("Initializing Dual-Round Analysis (Ollama Only)...")
     
-    try:
-        # Initialize LLM manager
-        config = {
-            "llm_config": llm_config
-        }
-        llm_manager = LLMManager(config)
-        
-        # Check available providers
-        available_providers = llm_manager.get_available_providers()
-        if not available_providers:
-            raise RuntimeError("No LLM providers are available")
-        
-        logger.info(f"Available providers: {[p.get_name() for p in available_providers]}")
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize LLM manager: {e}")
-        raise ConnectionError(f"Could not initialize LLM providers: {e}")
-    
+    # 1. Setup Provider
+    host = llm_config.get('ollama_host', 'http://127.0.0.1:11434')
+    # Timeout 120s để đảm bảo DeepSeek đủ thời gian suy nghĩ
+    provider = OllamaProvider(host=host, timeout=120)
+    model_name = llm_config.get('ollama_model', 'deepseek-r1:1.5b')
+
+    # 2. Prepare Data
     query_to_analyze = anomaly_row.get('query', '')
     if not query_to_analyze:
-        # Xử lý trường hợp query rỗng một cách an toàn
-        return {
-            "query_analyzed": "Empty Query", "is_anomalous": False, "confidence_score": 1.0,
-            "anomaly_type": "Logic Error", "security_risk_level": "None", "performance_impact": "None",
-            "summary": "Câu lệnh SQL đầu vào bị rỗng.",
-            "detailed_analysis": "Không thể phân tích một chuỗi SQL rỗng. Đây có thể là một lỗi trong quá trình ghi log.",
-            "recommendation": "Kiểm tra nguồn log để xác định tại sao một câu lệnh rỗng được ghi lại.",
-            "tags": ["EMPTY_QUERY"]
-        }
+        query_to_analyze = "N/A (Aggregated Session or Empty Query)"
     
-    # --- BƯỚC 1: TỔNG HỢP NGỮ CẢNH PHONG PHÚ ---
-    
-    # "Làm sạch" query để đảm bảo nó không phá vỡ cấu trúc JSON của prompt
     sanitized_query = query_to_analyze.replace('"', '\\"').replace('\n', ' ')
 
-    # --- SỬA LỖI: Chuyển đổi tường minh các kiểu dữ liệu sang kiểu gốc của Python ---
+    # Helper chuyển đổi kiểu dữ liệu (Fix lỗi JSON serialization)
     def get_as_native_type(value, default_val, target_type):
-        """Hàm helper để lấy giá trị và chuyển đổi sang kiểu gốc, xử lý NaN."""
-        if pd.isna(value):
-            return default_val
-        try:
-            return target_type(value)
-        except (ValueError, TypeError):
-            return default_val
+        if pd.isna(value): return default_val
+        try: return target_type(value)
+        except: return default_val
 
-    # Xây dựng một dictionary chứa hồ sơ kỹ thuật của câu query
-    # Sử dụng hàm helper để đảm bảo tất cả đều là kiểu Python gốc
     structural_profile = {
         "num_joins": get_as_native_type(anomaly_row.get('num_joins'), 0, int),
         "num_where_conditions": get_as_native_type(anomaly_row.get('num_where_conditions'), 0, int),
@@ -530,12 +180,20 @@ Based on all the provided context and the query itself, perform the following an
 """
 
     try:
-        # Lần 1: Gửi prompt gốc
-        logger.info("Sending first analysis request to LLM")
-        res1 = llm_manager.analyze_with_fallback(prompt_round_1)
-        first_analysis_str = res1["result"]['message']['content']
-        first_analysis = json.loads(first_analysis_str)
-        logger.info("First analysis completed successfully")
+        # --- ROUND 1 EXECUTION ---
+        logger.info("Sending Round 1 Request...")
+        res1 = provider.analyze(prompt_round_1, model=model_name)
+        
+        # [FIX] Clean JSON
+        raw_1 = res1['message']['content']
+        clean_1 = clean_json_text(raw_1)
+        try:
+            first_analysis = json.loads(clean_1)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to parse Round 1 JSON. Raw: {clean_1}")
+            first_analysis = {"summary": "Round 1 Parsing Error", "detailed_analysis": clean_1}
+            
+        logger.info("Round 1 Completed.")
 
         # --------------------- PROMPT LẦN 2 ---------------------
         prompt_round_2 = f"""
@@ -574,34 +232,35 @@ Review the preliminary analysis critically. Your task is to produce a definitive
 Final Output: Return ONLY the refined JSON object in the same, original format. Do not add any conversational text.
 """
 
-        logger.info("Sending second analysis request to LLM")
-        res2 = llm_manager.analyze_with_fallback(prompt_round_2)
-        final_analysis_str = res2["result"]['message']['content']
-        final_analysis = json.loads(final_analysis_str)
-        logger.info("Second analysis completed successfully")
-
-        # Nếu muốn so sánh 2 kết quả, có thể kiểm tra:
-        discrepancy_warning = None
-        if first_analysis != final_analysis:
-            discrepancy_warning = "⚠️ Có sự khác biệt giữa lần phân tích đầu và lần phân tích sau. Hãy xem xét kỹ."
+            # --- ROUND 2 EXECUTION ---
+        logger.info("Sending Round 2 Request...")
+        res2 = provider.analyze(prompt_round_2, model=model_name)
+        
+        # [FIX] Clean JSON
+        raw_2 = res2['message']['content']
+        clean_2 = clean_json_text(raw_2)
+        final_analysis = json.loads(clean_2)
+        logger.info("Round 2 Completed.")
         
         return {
             "first_analysis": first_analysis,
             "final_analysis": final_analysis,
-            "prompt_round_1": prompt_round_1,
-            "prompt_round_2": prompt_round_2,
-            "discrepancy_warning": discrepancy_warning,
-            "providers_used": [res1["provider"], res2["provider"]],
+            "providers_used": ["Ollama", "Ollama"],
             "analysis_timestamp": time.time()
         }
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Lỗi: AI trả về JSON không hợp lệ. {e}")
-        # Ném lỗi để tầng API có thể bắt và xử lý
-        raise ValueError(f"AI response is not a valid JSON: {e}")
     except Exception as e:
-        logger.error(f"Lỗi khi phân tích với LLM: {e}")
-        raise ConnectionError(f"LLM analysis failed: {e}")
+        logger.error(f"Analysis Error: {e}")
+        return {
+            "final_analysis": {
+                "summary": "AI Processing Failed",
+                "detailed_analysis": f"Internal Error: {str(e)}",
+                "is_anomalous": False,
+                "confidence_score": 0.0,
+                "security_risk_level": "Unknown",
+                "recommendation": "Check backend logs."
+            }
+        }
 
 
 def analyze_session_with_llm(    
@@ -614,63 +273,42 @@ def analyze_session_with_llm(
     Phân tích một session (một chuỗi các query) bằng cách tổng hợp các đặc trưng
     thống kê và gửi cho LLM với dual provider system.
     """
-    logger.info("Initializing dual-provider session analysis")
-    
-    try:
-        # Initialize LLM manager
-        config = {
-            "llm_config": llm_config
-        }
-        llm_manager = LLMManager(config)
-        
-        # Check available providers
-        available_providers = llm_manager.get_available_providers()
-        if not available_providers:
-            raise RuntimeError("No LLM providers are available")
-        
-        logger.info(f"Available providers for session analysis: {[p.get_name() for p in available_providers]}")
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize LLM manager for session analysis: {e}")
-        raise ConnectionError(f"Could not initialize LLM providers: {e}")
-    
-    # --- Bước 2: Trích xuất và tổng hợp dữ liệu từ session ---
+    logger.info("Initializing Session Analysis (Dual-Round)...")
+
+    host = llm_config.get('ollama_host', 'http://127.0.0.1:11434')
+    provider = OllamaProvider(host=host, timeout=120)
+    model_name = llm_config.get('ollama_model', 'deepseek-r1:1.5b')
+
+    # Data Prep
     user = session_anomaly_row.get('user', 'N/A')
     start_time = session_anomaly_row.get('start_time', 'N/A')
     end_time = session_anomaly_row.get('end_time', 'N/A')
     distinct_tables_count = session_anomaly_row.get('distinct_tables_count', 0)
-    tables_accessed_list = session_anomaly_row.get('tables_accessed_in_session', [])
     queries_details = session_anomaly_row.get('queries_details', [])
-    
+
     if not queries_details:
-        return {
-            "session_summary": "Session không chứa câu query nào để phân tích.",
-            "is_threatening_behavior": False,
-            "confidence_score": 1.0,
-            "behavior_type": "Empty Session",
-            "detailed_analysis": "Không có dữ liệu query để phân tích hành vi.",
-            "recommendation": "Kiểm tra nguồn log để xác định tại sao session này lại rỗng."
-        }
+        return {"final_analysis": {"session_summary": "Empty Session", "is_threatening_behavior": False}}
 
+    # Feature Extraction (Lite version)
     session_df = pd.DataFrame(queries_details)
-
-    # --- Bước 3: Tính toán các đặc trưng thống kê cho cả session ---
     num_queries = len(session_df)
-    query_types = session_df['query'].str.lower().str.split().str[0].value_counts().to_dict()
-    
+    try:
+        query_types = session_df['query'].str.lower().str.split().str[0].value_counts().to_dict()
+    except:
+        query_types = {}
+
+    # Try basic stats
     try:
         features_df = session_df['query'].apply(extract_query_features).apply(pd.Series)
         session_df = pd.concat([session_df, features_df], axis=1)
         avg_joins = session_df['num_joins'].mean()
         total_subqueries = int(session_df['has_subquery'].sum())
         total_unions = int(session_df['has_union'].sum())
-    except KeyError as e:
-        # Thay thế st.warning bằng logging.warning
-        logger.warning(f"Không thể tính toán đặc trưng độ phức tạp: {e}. Phân tích sẽ tiếp tục với thông tin cơ bản.")
-        avg_joins, total_subqueries, total_unions = 0.0, 0, 0
-
-    all_tables_touched = [table for sublist in session_df.get('tables_touched', []) for table in sublist]
-    top_5_tables = pd.Series(all_tables_touched).value_counts().nlargest(5).to_dict()
+        all_tables = [t for sub in session_df.get('tables_touched', []) for t in sub]
+        top_5_tables = pd.Series(all_tables).value_counts().nlargest(5).to_dict()
+    except:
+        avg_joins, total_subqueries, total_unions = 0, 0, 0
+        top_5_tables = {}
 
     # --- Bước 4: Xây dựng Prompt chi tiết cho session ---
     prompt_round_1 = f"""
@@ -708,12 +346,11 @@ You are a Database Security Intelligence Analyst. Your task is to analyze a stat
 """
     # --- Bước 5: Gửi yêu cầu đến LLM và xử lý kết quả ---
     try:
-        # === THỰC HIỆN LẦN 1 ===
-        logger.info("Sending first session analysis request to LLM")
-        res1 = llm_manager.analyze_with_fallback(prompt_round_1)
-        first_analysis_str = res1["result"]['message']['content']
-        first_analysis = json.loads(first_analysis_str)
-        logger.info("First session analysis completed successfully")
+        # Round 1
+        logger.info("Sending Session Round 1 Request...")
+        res1 = provider.analyze(prompt_round_1, model=model_name)
+        first_analysis = json.loads(clean_json_text(res1['message']['content']))
+        logger.info("Session Round 1 Completed.")
 
         # --- BƯỚC 5: XÂY DỰNG PROMPT LẦN 2 (NÂNG CẤP) ---
         prompt_round_2 = f"""
@@ -743,11 +380,10 @@ Final Output: Return ONLY the refined JSON object in the same, original format. 
 """
     
         # === THỰC HIỆN LẦN 2 ===
-        logger.info("Sending second session analysis request to LLM")
-        res2 = llm_manager.analyze_with_fallback(prompt_round_2)
-        final_analysis_str = res2["result"]['message']['content']
-        final_analysis = json.loads(final_analysis_str)
-        logger.info("Second session analysis completed successfully")
+        logger.info("Sending Session Round 2 Request...")
+        res2 = provider.analyze(prompt_round_2, model=model_name)
+        final_analysis = json.loads(clean_json_text(res2['message']['content']))
+        logger.info("Session Round 2 Completed.")
     
         # Nếu muốn so sánh 2 kết quả, có thể kiểm tra:
         discrepancy_warning = None

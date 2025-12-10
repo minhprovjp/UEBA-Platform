@@ -31,6 +31,8 @@ except ImportError as e:
     sys.exit(1)
 
 from pydantic import BaseModel
+from fastapi.security import OAuth2PasswordRequestForm
+from . import auth
 
 # === BỎ LOGIC AnalysisEngine CŨ ===
 # (ĐÃ XÓA) engine_instance = AnalysisEngine()
@@ -59,23 +61,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# API Security
-API_KEY_NAME = "X-API-Key"
-API_KEY_HEADER = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
-
-# Lấy API Key an toàn từ biến môi trường
-# Hãy đặt biến này trong file .env của bạn: API_KEY="your_super_secret_key"
-EXPECTED_API_KEY = os.getenv("API_KEY", "default_secret_key_change_me")
-
-async def get_api_key(api_key_header: str = Security(API_KEY_HEADER)):
-    """Kiểm tra xem API key được gửi lên có hợp lệ không."""
-    if api_key_header == EXPECTED_API_KEY:
-        return api_key_header
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
-        )
+ENGINE_START_TIME = datetime.now()
 
 # --- Dependency Injection: Cung cấp DB Session cho các endpoint ---
 def get_db():
@@ -85,15 +71,78 @@ def get_db():
     finally:
         db.close()
 
-# === CÁC ENDPOINT LẤY DỮ LIỆU BẤT THƯỜNG (CHO FRONTEND) ===
+# 1. Endpoint Login (Nhận username/password -> Trả về Token)
+@app.post("/api/login", tags=["Authentication"])
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # Tìm user trong DB
+    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    
+    # Kiểm tra user và pass
+    if not user or not auth.verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Tạo token
+    access_token_expires = timedelta(minutes=auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = auth.create_access_token(
+        data={"sub": user.username, "role": user.role},
+        expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
-# @app.get("/api/anomalies/", response_model=List[schemas.Anomaly], tags=["Anomalies"])
-# def read_anomalies(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-#     """
-#     Lấy ra một danh sách các bất thường, hỗ trợ phân trang (pagination).
-#     """
-#     anomalies = db.query(models.Anomaly).order_by(models.Anomaly.timestamp.desc()).offset(skip).limit(limit).all()
-#     return anomalies
+# 2. Endpoint tạo user đầu tiên (Để bạn test, sau này xóa đi cũng được)
+@app.post("/api/register", tags=["Authentication"])
+def register_user(username: str, password: str, db: Session = Depends(get_db)):
+    hashed_password = auth.get_password_hash(password)
+    new_user = models.User(username=username, hashed_password=hashed_password, role="admin")
+    try:
+        db.add(new_user)
+        db.commit()
+    except Exception as e:
+        db.rollback() # Quan trọng! Hoàn tác nếu lỗi
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"msg": "User created"}
+
+@app.post("/api/change-password", tags=["Authentication"])
+def change_password(
+    request: schemas.ChangePasswordRequest, 
+    current_user: models.User = Depends(auth.get_current_user), 
+    db: Session = Depends(get_db)
+):
+    # 1. Kiểm tra Mật khẩu cũ
+    if not auth.verify_password(request.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mật khẩu hiện tại không chính xác."
+        )
+
+    # 2. Validate độ dài
+    if len(request.new_password) < 6:
+         raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mật khẩu mới phải có ít nhất 6 ký tự."
+        )
+
+    # 3. [FIX QUAN TRỌNG] Truy vấn lại user từ DB session hiện tại để đảm bảo UPDATE được ghi nhận
+    user_in_db = db.query(models.User).filter(models.User.id == current_user.id).first()
+    
+    if not user_in_db:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 4. Hash mật khẩu mới và cập nhật
+    user_in_db.hashed_password = auth.get_password_hash(request.new_password)
+    
+    # 5. Lưu thay đổi
+    db.add(user_in_db) # Đánh dấu object này cần được update
+    db.commit()        # Thực thi lệnh COMMIT xuống database
+    db.refresh(user_in_db) # Làm mới object (tùy chọn)
+    
+    return {"msg": "Đổi mật khẩu thành công! Vui lòng đăng nhập lại."}
+
+# === CÁC ENDPOINT LẤY DỮ LIỆU BẤT THƯỜNG (CHO FRONTEND) ===
 
 # --- Helper filter áp dụng chung ---
 def _apply_common_filters(q, user: Optional[str], anomaly_type: Optional[str],
@@ -127,7 +176,7 @@ def _apply_common_filters(q, user: Optional[str], anomaly_type: Optional[str],
 def anomaly_stats(
     time_range: str = "D",
     db: Session = Depends(get_db), 
-    api_key: str = Security(get_api_key)
+    current_user: models.User = Depends(auth.get_current_user)
 ):
     # 1. Xử lý thời gian lọc (Giữ nguyên logic cũ)
     now = datetime.now()
@@ -163,7 +212,11 @@ def anomaly_stats(
     critical_alerts = int(crit_events + crit_aggs)
 
     # 3. Chart Data (Giữ nguyên logic cũ)
-    chart_query = db.query(models.Anomaly.timestamp).filter(models.Anomaly.timestamp >= start_date).all()
+    event_query = db.query(models.Anomaly.timestamp).filter(models.Anomaly.timestamp >= start_date).all()
+    agg_query = db.query(models.AggregateAnomaly.created_at).filter(models.AggregateAnomaly.created_at >= start_date).all()
+
+    chart_query = event_query + agg_query
+
     data_map = {}
     if group_mode == "hour":
         for i in range(24):
@@ -293,6 +346,10 @@ def anomaly_stats(
         } for r in latest_events
     ]
 
+    current_time = datetime.now()
+    uptime_delta = current_time - ENGINE_START_TIME
+    uptime_seconds = int(uptime_delta.total_seconds())
+
     return {
         "total_scanned": total_scanned,
         "total_anomalies": total_anomalies,
@@ -301,33 +358,17 @@ def anomaly_stats(
         "detection_stats": detection_stats,
         "targeted_entities": targeted_entities,
         "chartData": chart_data,
-        "latestLogs": latest_logs
+        "latestLogs": latest_logs,
+        "system_status": {
+            "uptime_seconds": uptime_seconds,
+            "status": "ONLINE",
+            "logs_processed": total_scanned
+            }
     }
-
-# NEW: /api/anomalies/type-stats
-# @app.get("/api/anomalies/type-stats", tags=["Anomalies"])
-# def anomaly_type_stats(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
-#     # Đếm event theo type
-#     ev = db.query(models.Anomaly.anomaly_type, func.count(models.Anomaly.id))\
-#            .group_by(models.Anomaly.anomaly_type).all()
-#     # Đếm aggregate theo type
-#     ag = db.query(models.AggregateAnomaly.anomaly_type, func.count(models.AggregateAnomaly.id))\
-#            .group_by(models.AggregateAnomaly.anomaly_type).all()
-
-#     from collections import defaultdict
-#     counts = defaultdict(int)
-#     for t, c in ev: counts[(t or '').strip()] += int(c or 0)
-#     for t, c in ag: counts[(t or '').strip()] += int(c or 0)
-
-#     # Chuẩn hoá 5 rule + ml
-#     keys = ["late_night", "dump", "multi_table", "sensitive", "user_time", "ml"]
-#     by_type = {k: int(counts.get(k, 0)) for k in keys}
-#     total = sum(counts.values())
-#     return {"by_type": by_type, "total": int(total)}
 
 
 @app.get("/api/anomalies/kpis", response_model=schemas.AnomalyKpis, tags=["Anomalies"])
-def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+def anomaly_kpis(db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     """
     Thống kê KPI theo Nhóm Hành Vi (Behavior Group) được định nghĩa trong Data Processor.
     """
@@ -376,7 +417,7 @@ def anomaly_kpis(db: Session = Depends(get_db), api_key: str = Security(get_api_
 def anomaly_facets(
     behavior_group: Optional[str] = None, # [NEW] Thêm tham số này
     db: Session = Depends(get_db), 
-    api_key: str = Security(get_api_key)
+    current_user: models.User = Depends(auth.get_current_user)
 ):
     """
     Trả về danh sách Users và Types (Rules) có dữ liệu thực tế.
@@ -433,7 +474,7 @@ def anomaly_search(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: Session = Depends(get_db),
-    api_key: str = Security(get_api_key),
+    current_user: models.User = Depends(auth.get_current_user),
 ):
     # Event
     q_ev = db.query(models.Anomaly)
@@ -473,7 +514,7 @@ def anomaly_search(
         items.append(schemas.UnifiedAnomaly(
             id=f"event-{r.id}", source="event",
             anomaly_type=r.anomaly_type, behavior_group=r.behavior_group, timestamp=r.timestamp,
-            user=r.user, database=r.database, query=r.query,
+            user=r.user, client_ip=r.client_ip, database=r.database, query=r.query,
             reason=r.reason, score=r.score, scope="log", details=None
         ))
     for r in ag_rows:
@@ -482,12 +523,15 @@ def anomaly_search(
             anomaly_type=r.anomaly_type,
             behavior_group="MULTI_TABLE_ACCESS",
             timestamp=r.start_time or r.end_time or r.created_at,
-            user=r.user, database=r.database, query=None,
+            user=r.user, client_ip=r.client_ip, database=r.database, query=None,
             reason=r.reason, score=r.severity, scope=r.scope, details=r.details
         ))
 
     items.sort(key=lambda x: x.timestamp or datetime.min, reverse=True)
-    return {"items": items, "total": int(ev_total + ag_total)}
+
+    paginated_items = items[:limit]
+
+    return {"items": paginated_items, "total": int(ev_total + ag_total)}
 
 
 
@@ -500,7 +544,7 @@ def list_event_anomalies(skip: int = 0, limit: int = 100,
                          date_from: Optional[str] = None,
                          date_to: Optional[str] = None,
                          db: Session = Depends(get_db),
-                         api_key: str = Security(get_api_key)):
+                         current_user: models.User = Depends(auth.get_current_user)):
     q = db.query(models.Anomaly)
     if search:
         q = q.filter(or_(models.Anomaly.query.ilike(f"%{search}%"),
@@ -532,7 +576,7 @@ def list_aggregate_anomalies(skip: int = 0, limit: int = 100,
                              date_from: Optional[str] = None,
                              date_to: Optional[str] = None,
                              db: Session = Depends(get_db),
-                             api_key: str = Security(get_api_key)):
+                             current_user: models.User = Depends(auth.get_current_user)):
     q = db.query(models.AggregateAnomaly)
     if search:
         # tìm trong reason hoặc details (cast text)
@@ -559,7 +603,7 @@ def list_aggregate_anomalies(skip: int = 0, limit: int = 100,
     ) for r in rows]
 
 @app.get("/api/anomalies/",response_model=List[schemas.UnifiedAnomaly],tags=["Anomalies"])
-def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(get_db),api_key: str = Security(get_api_key)):
+def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(get_db),current_user: models.User = Depends(auth.get_current_user)):
     """
     Lấy danh sách tất cả bất thường (event-level + aggregate),
     trả về ở dạng unified cho frontend.
@@ -629,7 +673,7 @@ def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(
     return unified[skip : skip + limit]
 
 @app.get("/api/anomalies/{anomaly_id}", response_model=schemas.Anomaly, tags=["Anomalies"])
-def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), api_key: str = Security(get_api_key)):
+def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.get_current_user)):
     """
     Lấy thông tin chi tiết của một bất thường cụ thể bằng ID của nó.
     """
@@ -642,7 +686,7 @@ def read_anomaly_by_id(anomaly_id: int, db: Session = Depends(get_db), api_key: 
 def read_aggregate_anomaly_by_id(
     agg_id: int,
     db: Session = Depends(get_db),
-    api_key: str = Security(get_api_key)
+    current_user: models.User = Depends(auth.get_current_user)
 ):
     """
     Lấy chi tiết một aggregate anomaly (ví dụ: multi_table session).
@@ -669,16 +713,30 @@ def read_aggregate_anomaly_by_id(
 # === ENDPOINT PHÂN TÍCH LLM ===
 
 @app.post("/api/llm/analyze-anomaly", tags=["LLM Analysis"])
-def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest, api_key: str = Security(get_api_key)):
+def analyze_anomaly_with_llm_endpoint(
+    request: schemas.AnomalyAnalysisRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+    ):
     """
     Nhận thông tin về một bất thường và yêu cầu LLM phân tích nó.
     """
     try:
+        # 1. Load config & Prepare Data
         engine_config = load_config()
         llm_settings = engine_config.get("llm_config", {})
         rules_settings = engine_config.get("analysis_params", {})
-        anomaly_data = request.model_dump()
         
+        anomaly_data = request.model_dump(mode='json')
+        
+        # Xử lý query null (như cũ)
+        if not anomaly_data.get('query'):
+            if anomaly_data.get('details'):
+                 anomaly_data['query'] = f"SESSION DATA: {str(anomaly_data['details'])[:500]}..."
+            else:
+                 anomaly_data['query'] = "N/A (No query provided)"
+
+        # 2. GỌI AI PHÂN TÍCH
         analysis_result = analyze_query_with_llm(
             anomaly_row=anomaly_data,
             anomaly_type_from_system=anomaly_data['anomaly_type'],
@@ -686,12 +744,48 @@ def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest, a
             rules_config=rules_settings
         )
         
+        if not analysis_result:
+            raise ValueError("Analyzer returned None")
+
+        # 3. [MỚI] LƯU KẾT QUẢ VÀO DATABASE
+        # request.id có dạng "event-123" hoặc "agg-456"
+        req_id = request.id
+        
+        final_result_to_save = analysis_result.get("final_analysis") or analysis_result
+
+        if req_id.startswith("event-"):
+            # Xử lý lưu cho Event Anomaly
+            db_id = int(req_id.split("-")[1])
+            record = db.query(models.Anomaly).filter(models.Anomaly.id == db_id).first()
+            if record:
+                record.ai_analysis = final_result_to_save
+                db.commit()
+                print(f"Đã lưu kết quả AI vào Event ID {db_id}")
+
+        elif req_id.startswith("agg-"):
+            # Xử lý lưu cho Aggregate Anomaly
+            db_id = int(req_id.split("-")[1])
+            record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == db_id).first()
+            if record:
+                record.ai_analysis = final_result_to_save
+                db.commit()
+                print(f"Đã lưu kết quả AI vào Aggregate ID {db_id}")
+
         return analysis_result
         
-    except (ValueError, ConnectionError) as e:
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        print(f"Lỗi API AI: {str(e)}")
+        # Trả về lỗi giả để UI hiển thị (như cũ)
+        return {
+            "final_analysis": {
+                "summary": "Analysis Process Failed",
+                "detailed_analysis": f"Lỗi hệ thống: {str(e)}",
+                "is_anomalous": False,
+                "confidence_score": 0.0,
+                "recommendation": "Check backend logs.",
+                "security_risk_level": "Unknown"
+            }
+        }
 
 # === CÁC ENDPOINT MỚI ĐỂ ĐIỀU KHIỂN ENGINE (ĐÃ XÓA) ===
 # Các endpoint /api/engine/status, /start, /stop đã bị xóa
@@ -699,7 +793,7 @@ def analyze_anomaly_with_llm_endpoint(request: schemas.AnomalyAnalysisRequest, a
 
 # === CÁC ENDPOINT ĐỂ QUẢN LÝ CẤU HÌNH (VẪN CẦN THIẾT) ===
 @app.get("/api/engine/config", response_model=Dict[str, Any], tags=["Configuration"])
-def get_engine_config(api_key: str = Security(get_api_key)):
+def get_engine_config(current_user: models.User = Depends(auth.get_current_user)):
     """
     Đọc và trả về nội dung hiện tại của file engine_config.json.
     """
@@ -709,7 +803,7 @@ def get_engine_config(api_key: str = Security(get_api_key)):
     return config
 
 @app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Configuration"])
-def update_engine_config(config_data: Dict[str, Any], api_key: str = Security(get_api_key)):
+def update_engine_config(config_data: Dict[str, Any], current_user: models.User = Depends(auth.get_current_user)):
     """
     Nhận một đối tượng JSON và ghi đè hoàn toàn file engine_config.json.
     (Các engine độc lập sẽ cần phải được khởi động lại để nhận cấu hình này,
@@ -725,7 +819,7 @@ def update_engine_config(config_data: Dict[str, Any], api_key: str = Security(ge
 
 # === ENDPOINT ĐỂ NHẬN FEEDBACK ===
 @app.post("/api/feedback/", status_code=status.HTTP_201_CREATED, tags=["Feedback"])
-def submit_feedback(feedback: schemas.FeedbackCreate, api_key: str = Security(get_api_key)):
+def submit_feedback(feedback: schemas.FeedbackCreate, current_user: models.User = Depends(auth.get_current_user)):
     """
     Nhận phản hồi từ người dùng và lưu vào file feedback.csv.
     """
@@ -748,7 +842,7 @@ def read_all_logs(
     skip: int = 0, 
     limit: int = 100, 
     db: Session = Depends(get_db), 
-    api_key: str = Security(get_api_key),
+    current_user: models.User = Depends(auth.get_current_user),
     search: str = None, # Thêm bộ lọc
     user: str = None,   # Thêm bộ lọc
     date_from: datetime = None, # Thêm bộ lọc

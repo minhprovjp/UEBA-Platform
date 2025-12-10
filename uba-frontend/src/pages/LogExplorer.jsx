@@ -215,7 +215,7 @@ export default function LogExplorer() {
                       {isAnomaly ? (
                         <Badge variant="outline" className="bg-red-950/30 text-red-400 border-red-900 text-[10px] px-2 py-0.5 whitespace-nowrap">
                             <AlertCircle className="w-3 h-3 mr-1"/>
-                            {log.behavior_group || 'ANOMALY'}
+                            {log.specific_rule || log.behavior_group || log.analysis_type || 'ANOMALY'}
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="bg-green-950/30 text-green-500 border-green-900 text-[10px] px-2 py-0.5">
