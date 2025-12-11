@@ -639,7 +639,6 @@ class DatabaseManager:
         print("=" * 60)
         
         steps = [
-            ("Checking requirements", self.check_requirements),
             ("Cleaning database", self.clean_database),
             ("Creating database structure", self.create_database_structure),
             ("Creating users", self.create_users)
