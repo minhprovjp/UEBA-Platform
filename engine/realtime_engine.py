@@ -78,21 +78,26 @@ def handle_email_alerts_async(results: dict):
     """
     global LAST_EMAIL_SENT_TIME, PENDING_VIOLATIONS
 
-    # 1. Thu thập dữ liệu tóm tắt từ batch hiện tại
+    # 1. Thu thập dữ liệu
     current_batch_summary = []
+    # Set để theo dõi các dòng log đã xử lý
+    processed_log_indices = set()
 
-    # Hàm helper nội bộ đã được nâng cấp để xử lý cột 'specific_rule'
+    # Hàm helper nội bộ
     def add_violation_from_group(df, group_name_fallback):
         if df is not None and not df.empty:
 
-            # Nếu DataFrame có cột 'specific_rule' (được tạo ở data_processor), ta group theo nó
-            # để email chi tiết hơn (VD: SQL Injection riêng, DoS riêng)
-            if 'specific_rule' in df.columns:
-                grouped = df.groupby('specific_rule')
+            new_logs = df[~df.index.isin(processed_log_indices)]
+            if new_logs.empty:
+                return
+            # Cập nhật danh sách đã xử lý
+            processed_log_indices.update(new_logs.index.tolist())
+
+            if 'specific_rule' in new_logs.columns:
+                grouped = new_logs.groupby('specific_rule')
                 iterator = grouped
             else:
-                # Fallback nếu không có cột specific_rule (ví dụ ML)
-                iterator = [(group_name_fallback, df)]
+                iterator = [(group_name_fallback, new_logs)]
 
             for rule_name, sub_df in iterator:
                 if sub_df.empty: continue
@@ -124,33 +129,29 @@ def handle_email_alerts_async(results: dict):
                     description = "Session accessing multiple distinct tables rapidly"
 
                 current_batch_summary.append({
-                    'title': str(rule_name),  # Tiêu đề là tên Rule cụ thể
+                    'title': str(rule_name),
                     'count': len(sub_df),
                     'first_time': sub_df[time_col].min(),
                     'last_time': sub_df[time_col].max(),
                     'desc': description,
                     'targets': users_ips
                 })
-
-    # --- TRÍCH XUẤT DỮ LIỆU TỪ CÁC KEY ---
-    # 1. Access Anomalies
-    add_violation_from_group(results.get("rule_access"), "Access Anomaly")
-
-    # 2. Insider Threats
-    add_violation_from_group(results.get("rule_insider"), "Insider Threat")
-
-    # 3. Technical Attacks
+    # ORDER
+    # 1. Technical Attacks (SQLi, DoS...)
     add_violation_from_group(results.get("rule_technical"), "Technical Attack")
 
-    # 4. Data Destruction
+    # 2. Data Destruction
     add_violation_from_group(results.get("rule_destruction"), "Data Destruction")
 
-    # 5. Behavior Profile
+    # 3. Insider Threats
+    add_violation_from_group(results.get("rule_insider"), "Insider Threat")
+
+    # 4. Access Anomalies
+    add_violation_from_group(results.get("rule_access"), "Access Anomaly")
+
+    # 5. Behavior & Multi-table
     add_violation_from_group(results.get("rule_behavior_profile"), "Behavioral Anomaly")
-
-    # 6. Multi-table (Session based)
     add_violation_from_group(results.get("rule_multi_table"), "Multi-Table Scanning")
-
 
     # --- LOGIC GỬI THREAD GIỮ NGUYÊN ---
     if current_batch_summary:
