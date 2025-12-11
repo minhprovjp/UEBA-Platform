@@ -70,13 +70,19 @@ pip install -r requirements.txt
 python database_manager.py complete
 ```
 
-### 2. Run Simulation
+### 2. Test Setup
+```bash
+# Verify everything is working
+python simulation_runner.py test
+```
+
+### 3. Run Simulation
 ```bash
 # Interactive simulation with configuration
 python simulation_runner.py complete
 ```
 
-### 3. Analyze Results
+### 4. Analyze Results
 ```bash
 # Comprehensive analysis
 python analysis_tools.py dataset simulation_dataset_*.csv

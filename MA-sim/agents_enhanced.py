@@ -186,6 +186,10 @@ class EnhancedEmployeeAgent:
         else:  # 10% rare databases
             return random.choice(prefs['rare']) if prefs['rare'] else random.choice(prefs['primary'])
 
+    def get_next_action(self):
+        """Get next action for the agent - compatibility method for simulation runner"""
+        return self.step()
+    
     def step(self):
         """Enhanced step function with Vietnamese business logic"""
         # Determine next state
@@ -364,6 +368,10 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
         self.attack_origin = random.choice(["domestic", "international"])
         self.skill_level = random.choice(["script_kiddie", "intermediate", "advanced"])
         
+    def get_next_action(self):
+        """Get next action for the malicious agent - compatibility method for simulation runner"""
+        return self.step()
+    
     def step(self):
         """Enhanced attack step with sophisticated patterns"""
         chain = self.attack_chains[self.current_chain]

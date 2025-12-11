@@ -47,6 +47,133 @@ class SQLExecutor:
         except Exception as e:
             # logging.error(f"Connection failed for {target_user}: {e}")
             return None
+    
+    def execute_action(self, agent, action, timestamp):
+        """
+        Execute an action from an agent and return the result record
+        """
+        if not action:
+            return None
+        
+        try:
+            # Get connection for the agent
+            conn = self.get_connection(
+                action.get("user", agent.username),
+                action.get("client_profile", "default"),
+                action.get("target_database")
+            )
+            
+            if not conn:
+                return {
+                    "timestamp": timestamp,
+                    "username": agent.username,
+                    "role": agent.role,
+                    "database": action.get("target_database", "unknown"),
+                    "query": "CONNECTION_FAILED",
+                    "has_error": 1,
+                    "error_message": "Failed to connect to database",
+                    "execution_time": 0.0
+                }
+            
+            # Generate a simple query based on the action
+            query = self._generate_query_for_action(action)
+            
+            if not query:
+                return None
+            
+            # Execute the query
+            start_time = time.time()
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute(query)
+                result = cursor.fetchall()
+                execution_time = time.time() - start_time
+                
+                # Create success record
+                record = {
+                    "timestamp": timestamp,
+                    "username": agent.username,
+                    "role": agent.role,
+                    "database": action.get("target_database", "unknown"),
+                    "query": query,
+                    "has_error": 0,
+                    "error_message": "",
+                    "execution_time": execution_time,
+                    "rows_returned": len(result) if result else 0
+                }
+                
+                cursor.close()
+                conn.close()
+                return record
+                
+            except Exception as e:
+                execution_time = time.time() - start_time
+                
+                # Create error record
+                record = {
+                    "timestamp": timestamp,
+                    "username": agent.username,
+                    "role": agent.role,
+                    "database": action.get("target_database", "unknown"),
+                    "query": query,
+                    "has_error": 1,
+                    "error_message": str(e),
+                    "execution_time": execution_time
+                }
+                
+                cursor.close()
+                conn.close()
+                return record
+                
+        except Exception as e:
+            return {
+                "timestamp": timestamp,
+                "username": agent.username,
+                "role": agent.role,
+                "database": action.get("target_database", "unknown"),
+                "query": "EXECUTION_ERROR",
+                "has_error": 1,
+                "error_message": str(e),
+                "execution_time": 0.0
+            }
+    
+    def _generate_query_for_action(self, action):
+        """Generate a SQL query based on the action"""
+        action_type = action.get("action", "LOGIN")
+        database = action.get("target_database", "sales_db")
+        
+        # Simple query generation based on action type
+        if action_type == "LOGIN":
+            return f"SELECT 1"
+        elif action_type == "SEARCH_CUSTOMER":
+            return f"SELECT customer_id, company_name FROM {database}.customers LIMIT 10"
+        elif action_type == "VIEW_CUSTOMER":
+            customer_id = action.get("params", {}).get("customer_id", 1)
+            return f"SELECT * FROM {database}.customers WHERE customer_id = {customer_id}"
+        elif action_type == "SEARCH_ORDER":
+            return f"SELECT order_id, customer_id, total_amount FROM {database}.orders LIMIT 10"
+        elif action_type == "VIEW_ORDER":
+            order_id = action.get("params", {}).get("order_id", 1)
+            return f"SELECT * FROM {database}.orders WHERE order_id = {order_id}"
+        elif action_type == "SEARCH_EMPLOYEE":
+            return f"SELECT employee_id, full_name, department FROM {database}.employees LIMIT 10"
+        elif action_type == "VIEW_PROFILE":
+            employee_id = action.get("params", {}).get("employee_id", 1)
+            return f"SELECT * FROM {database}.employees WHERE employee_id = {employee_id}"
+        elif action_type == "SEARCH_CAMPAIGN":
+            return f"SELECT campaign_id, campaign_name, status FROM {database}.campaigns LIMIT 10"
+        elif action_type == "VIEW_CAMPAIGN":
+            campaign_id = action.get("params", {}).get("campaign_id", 1)
+            return f"SELECT * FROM {database}.campaigns WHERE campaign_id = {campaign_id}"
+        elif action_type == "SEARCH_TICKET":
+            return f"SELECT ticket_id, subject, status FROM {database}.support_tickets LIMIT 10"
+        elif action_type == "VIEW_TICKET":
+            ticket_id = action.get("params", {}).get("ticket_id", 1)
+            return f"SELECT * FROM {database}.support_tickets WHERE ticket_id = {ticket_id}"
+        else:
+            # Default query
+            return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
 
     def execute(self, intent, sql, sim_timestamp=None, client_profile=None):
         user = intent['user']
