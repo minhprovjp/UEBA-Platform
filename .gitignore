@@ -198,7 +198,6 @@ engine/*.state.json
 
 # CSV data files
 feedback.csv
-*.csv
 !requirements.txt
 
 # Trained models and ML artifacts

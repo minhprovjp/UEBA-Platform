@@ -20,6 +20,14 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    role = Column(String, default="analyst") # admin, analyst
+    is_active = Column(Boolean, default=True)
+
 class Anomaly(Base):
     __tablename__ = 'anomalies'
     id = Column(Integer, primary_key=True, index=True)
@@ -36,6 +44,7 @@ class Anomaly(Base):
     execution_time_ms = Column(Float, nullable=True, server_default='0')
     rows_returned = Column(BigInteger, nullable=True, server_default='0')
     rows_affected = Column(BigInteger, nullable=True, server_default='0')
+    # ai_analysis = Column(JSON, nullable=True)
 
 class AggregateAnomaly(Base):
     __tablename__ = 'aggregate_anomalies'
@@ -50,6 +59,7 @@ class AggregateAnomaly(Base):
     reason = Column(Text, nullable=True)
     details = Column(JSONB, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+    # ai_analysis = Column(JSON, nullable=True)
 
 class AllLogs(Base):
     __tablename__ = 'all_logs'

@@ -22,6 +22,27 @@ MARKOV_TRANSITIONS = {
         "LOGOUT": {"START": 1.0} # Kết thúc phiên, chờ phiên sau
     },
     
+    "MARKETING": {
+        "START": {"LOGIN": 1.0},
+        "LOGIN": {"SEARCH_CAMPAIGN": 0.5, "VIEW_LEADS": 0.4, "LOGOUT": 0.1},
+        "SEARCH_CAMPAIGN": {"VIEW_CAMPAIGN": 0.8, "SEARCH_CAMPAIGN": 0.2},
+        "VIEW_CAMPAIGN": {"UPDATE_CAMPAIGN": 0.2, "SEARCH_CAMPAIGN": 0.8},
+        "UPDATE_CAMPAIGN": {"VIEW_CAMPAIGN": 1.0},
+        "VIEW_LEADS": {"UPDATE_LEAD": 0.3, "SEARCH_CAMPAIGN": 0.7},
+        "UPDATE_LEAD": {"VIEW_LEADS": 1.0},
+        "LOGOUT": {"START": 1.0}
+    },
+    
+    "CUSTOMER_SERVICE": {
+        "START": {"LOGIN": 1.0},
+        "LOGIN": {"SEARCH_TICKET": 0.6, "VIEW_CUSTOMER": 0.3, "LOGOUT": 0.1},
+        "SEARCH_TICKET": {"VIEW_TICKET": 0.8, "SEARCH_TICKET": 0.2},
+        "VIEW_TICKET": {"UPDATE_TICKET": 0.4, "SEARCH_TICKET": 0.6},
+        "UPDATE_TICKET": {"VIEW_TICKET": 1.0},
+        "VIEW_CUSTOMER": {"SEARCH_TICKET": 0.8, "LOGOUT": 0.2},
+        "LOGOUT": {"START": 1.0}
+    },
+    
     "HR": {
         "START": {"LOGIN": 1.0},
         "LOGIN": {"SEARCH_EMPLOYEE": 0.7, "VIEW_PAYROLL": 0.2, "LOGOUT": 0.1},
@@ -37,12 +58,46 @@ MARKOV_TRANSITIONS = {
         "LOGOUT": {"START": 1.0}
     },
     
+    "FINANCE": {
+        "START": {"LOGIN": 1.0},
+        "LOGIN": {"VIEW_INVOICE": 0.4, "VIEW_EXPENSE": 0.3, "VIEW_REPORT": 0.2, "LOGOUT": 0.1},
+        "VIEW_INVOICE": {"UPDATE_INVOICE": 0.2, "VIEW_INVOICE": 0.8},
+        "UPDATE_INVOICE": {"VIEW_INVOICE": 1.0},
+        "VIEW_EXPENSE": {"APPROVE_EXPENSE": 0.3, "VIEW_EXPENSE": 0.7},
+        "APPROVE_EXPENSE": {"VIEW_EXPENSE": 1.0},
+        "VIEW_REPORT": {"EXPORT_REPORT": 0.4, "VIEW_INVOICE": 0.6},
+        "EXPORT_REPORT": {"LOGOUT": 1.0},
+        "LOGOUT": {"START": 1.0}
+    },
+    
     "DEV": {
         "START": {"LOGIN": 1.0},
         "LOGIN": {"DEBUG_QUERY": 0.5, "CHECK_LOGS": 0.4, "LOGOUT": 0.1},
         "DEBUG_QUERY": {"EXPLAIN_QUERY": 0.6, "DEBUG_QUERY": 0.4},
         "EXPLAIN_QUERY": {"DEBUG_QUERY": 1.0},
         "CHECK_LOGS": {"DEBUG_QUERY": 0.5, "LOGOUT": 0.5},
+        "LOGOUT": {"START": 1.0}
+    },
+    
+    "MANAGEMENT": {
+        "START": {"LOGIN": 1.0},
+        "LOGIN": {"VIEW_DASHBOARD": 0.4, "VIEW_REPORT": 0.3, "SEARCH_CUSTOMER": 0.2, "LOGOUT": 0.1},
+        "VIEW_DASHBOARD": {"VIEW_REPORT": 0.5, "SEARCH_CUSTOMER": 0.5},
+        "VIEW_REPORT": {"EXPORT_REPORT": 0.3, "VIEW_DASHBOARD": 0.7},
+        "EXPORT_REPORT": {"LOGOUT": 1.0},
+        "SEARCH_CUSTOMER": {"VIEW_CUSTOMER": 0.8, "VIEW_DASHBOARD": 0.2},
+        "VIEW_CUSTOMER": {"SEARCH_CUSTOMER": 1.0},
+        "LOGOUT": {"START": 1.0}
+    },
+    
+    "ADMIN": {
+        "START": {"LOGIN": 1.0},
+        "LOGIN": {"CHECK_LOGS": 0.4, "VIEW_USERS": 0.3, "DEBUG_QUERY": 0.2, "LOGOUT": 0.1},
+        "CHECK_LOGS": {"DEBUG_QUERY": 0.5, "VIEW_USERS": 0.5},
+        "VIEW_USERS": {"UPDATE_USER": 0.2, "CHECK_LOGS": 0.8},
+        "UPDATE_USER": {"VIEW_USERS": 1.0},
+        "DEBUG_QUERY": {"EXPLAIN_QUERY": 0.6, "CHECK_LOGS": 0.4},
+        "EXPLAIN_QUERY": {"DEBUG_QUERY": 1.0},
         "LOGOUT": {"START": 1.0}
     }
 }
