@@ -114,19 +114,31 @@ class SimulationRunner:
                 print(f"❌ Database connection failed: {e}")
                 return False
             
-            # Test sample user connection
+            # Test sample user connection to their appropriate database
             sample_user = users[0]
+            print(f"🧪 Testing user: {sample_user['username']} (role: {sample_user['role']})")
+            
+            # Get the appropriate database for this user's role
+            role = sample_user['role']
+            if role in self.role_database_access:
+                test_database = self.role_database_access[role][0]  # Use first accessible database
+            else:
+                test_database = 'sales_db'  # Default fallback
+            
             try:
                 conn = mysql.connector.connect(
                     host='localhost',
                     user=sample_user['username'],
                     password='password',
-                    database='uba_db'
+                    database=test_database
                 )
                 conn.close()
-                print(f"✅ Sample user connection successful: {sample_user['username']}")
+                print(f"✅ Sample user connection successful: {sample_user['username']} -> {test_database}")
             except Exception as e:
                 print(f"❌ Sample user connection failed: {e}")
+                print(f"   User: {sample_user['username']}")
+                print(f"   Role: {sample_user['role']}")
+                print(f"   Database tested: {test_database}")
                 return False
             
             print("✅ Setup verification completed - ready for simulation")

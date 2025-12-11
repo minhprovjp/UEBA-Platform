@@ -35,48 +35,6 @@ class DatabaseManager:
             print(f"❌ MySQL connection error: {e}")
             return False
     
-    def check_requirements(self):
-        """Check if all requirements are met"""
-        print("🔍 CHECKING REQUIREMENTS")
-        print("=" * 50)
-        
-        # Check Python version
-        if sys.version_info < (3, 8):
-            print("❌ Python 3.8+ required")
-            return False
-        else:
-            print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor}")
-        
-        # Check required packages
-        required_packages = [
-            'mysql-connector-python',
-            'pandas',
-            'numpy',
-            'faker'
-        ]
-        
-        missing_packages = []
-        
-        for package in required_packages:
-            try:
-                __import__(package.replace('-', '_'))
-                print(f"✅ {package}")
-            except ImportError:
-                print(f"❌ {package} (missing)")
-                missing_packages.append(package)
-        
-        if missing_packages:
-            print(f"\n📦 INSTALLING MISSING PACKAGES:")
-            for package in missing_packages:
-                try:
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-                    print(f"✅ Installed {package}")
-                except subprocess.CalledProcessError:
-                    print(f"❌ Failed to install {package}")
-                    return False
-        
-        return True
-    
     def clean_database(self):
         """Clean up database for fresh start"""
         print("🧹 CLEANING DATABASE FOR FRESH START")
@@ -88,10 +46,6 @@ class DatabaseManager:
         try:
             # Disable foreign key checks temporarily
             self.cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
-            
-            # Clean main database
-            self.cursor.execute("DROP DATABASE IF EXISTS uba_db")
-            print("✅ Dropped uba_db database")
             
             # Clean business databases
             databases = [
@@ -125,11 +79,6 @@ class DatabaseManager:
         try:
             # Disable foreign key checks temporarily
             self.cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
-            
-            # Create main database
-            self.cursor.execute("CREATE DATABASE IF NOT EXISTS uba_db")
-            self.cursor.execute("USE uba_db")
-            print("✅ Created uba_db database")
             
             # Create all business databases
             databases = [
@@ -647,9 +596,11 @@ class DatabaseManager:
                         self.cursor.execute(f"GRANT ALL PRIVILEGES ON finance_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON sales_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON hr_db.* TO '{username}'@'localhost'")
+                        self.cursor.execute(f"GRANT SELECT ON inventory_db.* TO '{username}'@'localhost'")
                     elif role == 'HR':
                         self.cursor.execute(f"GRANT ALL PRIVILEGES ON hr_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON finance_db.* TO '{username}'@'localhost'")
+                        self.cursor.execute(f"GRANT SELECT ON admin_db.* TO '{username}'@'localhost'")
                     elif role == 'SALES':
                         self.cursor.execute(f"GRANT ALL PRIVILEGES ON sales_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON marketing_db.* TO '{username}'@'localhost'")
@@ -657,12 +608,14 @@ class DatabaseManager:
                     elif role == 'MARKETING':
                         self.cursor.execute(f"GRANT ALL PRIVILEGES ON marketing_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON sales_db.* TO '{username}'@'localhost'")
+                        self.cursor.execute(f"GRANT SELECT ON support_db.* TO '{username}'@'localhost'")
                     elif role == 'CUSTOMER_SERVICE':
                         self.cursor.execute(f"GRANT ALL PRIVILEGES ON support_db.* TO '{username}'@'localhost'")
                         self.cursor.execute(f"GRANT SELECT ON sales_db.* TO '{username}'@'localhost'")
+                        self.cursor.execute(f"GRANT SELECT ON marketing_db.* TO '{username}'@'localhost'")
                     else:
-                        # Default permissions for other roles
-                        self.cursor.execute(f"GRANT SELECT ON uba_db.* TO '{username}'@'localhost'")
+                        # Default permissions for other roles - basic access to sales_db
+                        self.cursor.execute(f"GRANT SELECT ON sales_db.* TO '{username}'@'localhost'")
                     
                     created_count += 1
                     
