@@ -149,8 +149,8 @@ def main():
     
     cursor = conn.cursor()
     
-    clean_databases(cursor)
-    clean_users(cursor)
+    # clean_databases(cursor)
+    # clean_users(cursor)
     reset_global_settings(cursor)
     clean_performance_schema(cursor)
     

@@ -12,7 +12,7 @@ from collections import Counter
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error
+    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error, extract_db_from_sql 
 except ImportError:
     print("Lỗi: Không thể import config/utils.")
     sys.exit(1)
@@ -164,7 +164,26 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             lock_ms = float(g('LOCK_TIME') or g('lock_time') or 0) / 1000000.0
             
             sql_up = sql_txt.upper()
-            db_name = str(g('CURRENT_SCHEMA') or g('current_schema') or 'unknown').lower()
+            
+            raw_db = str(g('CURRENT_SCHEMA') or g('current_schema'))
+            db_name = "unknown"
+                    
+            # Check if current_schema provides valid database name
+            if raw_db and raw_db.lower() not in ['unknown', 'none', '', 'null']:
+                db_name = raw_db.lower()
+            else:
+                # 2. If MySQL doesn't track it, parse from SQL text
+                # This handles cases where queries use fully qualified table names
+                # like "SELECT * FROM sales_db.orders" without "USE sales_db"
+                detected_db = extract_db_from_sql(sql_txt)
+                if detected_db:
+                    db_name = detected_db
+                    # Log when we successfully detect DB from SQL that MySQL missed
+                    logging.debug(f"Detected database '{detected_db}' from SQL text where current_schema was '{raw_db}'")
+                                
+                                
+            # Cập nhật flag hệ thống dựa trên db_name mới tìm được
+            is_system = 1 if db_name in ['mysql','sys','information_schema','performance_schema'] else 0
             host_str = str(g('PROCESSLIST_HOST') or g('processlist_host') or 'unknown')
             client_ip = get_client_ip_safe(host_str)
 
@@ -184,7 +203,7 @@ def process_and_push(rows, redis_client, source_type="RAM"):
                 
                 "query_length": len(sql_txt),
                 "query_entropy": float(f"{calculate_entropy(sql_txt):.4f}"),
-                "is_system_table": 1 if db_name in ['mysql','sys','information_schema','performance_schema'] else 0,
+                "is_system_table": is_system,
                 "scan_efficiency": float(f"{scan_eff:.6f}"),
                 
                 "is_admin_command": 1 if any(k in sql_up for k in ['GRANT','REVOKE','CREATE USER']) else 0,

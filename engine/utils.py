@@ -1,7 +1,6 @@
 import pandas as pd
 import os
 import sqlglot
-import sqlglot.expressions as exp
 import sqlglot.errors as errors
 import hashlib
 import json
@@ -29,11 +28,105 @@ try:
 except ImportError:
     HAS_GEOIP = False
 
-
+try:
+    import sqlglot
+    from sqlglot import exp
+    SQLGLOT_AVAILABLE = True
+except ImportError:
+    SQLGLOT_AVAILABLE = False
+    
 # ==============================================================================
 #   CÁC HÀM HỖ TRỢ FEATURE ENGINEERING VÀ FEEDBACK
 # ==============================================================================
 # Các hàm trong mục này hỗ trợ việc trích xuất đặc trưng cho AI và xử lý feedback.
+
+def extract_db_from_sql(sql_text):
+    """
+    Tự động trích xuất tên Database từ câu lệnh SQL.
+    Ưu tiên dùng SQLGlot, fallback sang Regex.
+    Ví dụ: "SELECT * FROM sales_db.orders" -> "sales_db"
+    
+    Improvements:
+    - Better regex patterns to catch more cases
+    - Handle multiple databases in one query (returns first non-system DB)
+    - Better error handling and logging
+    - Support for more SQL statement types
+    """
+    if not sql_text or not isinstance(sql_text, str):
+        return None
+    
+    # Clean and normalize the SQL text
+    sql_text = sql_text.strip()
+    if not sql_text:
+        return None
+
+    # Cách 1: Dùng SQLGlot (Chính xác nhất)
+    if SQLGLOT_AVAILABLE:
+        try:
+            # Parse query (limit độ dài để tránh treo)
+            parsed = sqlglot.parse_one(sql_text[:5000], read="mysql")
+            if parsed:
+                # Collect all database names, prioritize non-system databases
+                databases = []
+                for table in parsed.find_all(exp.Table):
+                    if table.db and table.db.lower() not in ['mysql', 'sys', 'information_schema', 'performance_schema']:
+                        databases.append(table.db.lower())
+                    elif table.db:  # System database as fallback
+                        databases.append(table.db.lower())
+                
+                # Return first non-system database, or first database if all are system
+                if databases:
+                    return databases[0]
+        except Exception as e:
+            # Log parsing errors for debugging but continue with regex fallback
+            logging.debug(f"SQLGlot parsing failed for query: {e}")
+
+    # Cách 2: Dùng Regex (Nhanh, dự phòng) - Improved patterns
+    # Enhanced regex patterns to catch more SQL statement types and formats
+    patterns = [
+        # Standard table references with database prefix
+        r'(?:FROM|JOIN|UPDATE|INTO|TABLE|REPLACE\s+INTO)\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?\s*\.\s*[`\'"]?[a-zA-Z0-9_]+[`\'"]?',
+        
+        # USE statement
+        r'USE\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?(?:\s|;|$)',
+        
+        # CREATE/DROP/ALTER DATABASE
+        r'(?:CREATE|DROP|ALTER)\s+(?:DATABASE|SCHEMA)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?[`\'"]?([a-zA-Z0-9_]+)[`\'"]?',
+        
+        # SHOW statements with database context
+        r'SHOW\s+(?:TABLES|COLUMNS|INDEX)\s+(?:FROM|IN)\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?',
+        
+        # INSERT INTO with database prefix
+        r'INSERT\s+(?:IGNORE\s+)?INTO\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?\s*\.\s*[`\'"]?[a-zA-Z0-9_]+[`\'"]?',
+        
+        # DELETE FROM with database prefix
+        r'DELETE\s+FROM\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?\s*\.\s*[`\'"]?[a-zA-Z0-9_]+[`\'"]?',
+        
+        # CALL stored procedure with database prefix
+        r'CALL\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?\s*\.\s*[`\'"]?[a-zA-Z0-9_]+[`\'"]?',
+        
+        # DESCRIBE/DESC with database prefix
+        r'(?:DESCRIBE|DESC)\s+[`\'"]?([a-zA-Z0-9_]+)[`\'"]?\s*\.\s*[`\'"]?[a-zA-Z0-9_]+[`\'"]?'
+    ]
+    
+    # Collect all matches and prioritize non-system databases
+    found_databases = []
+    system_databases = {'mysql', 'sys', 'information_schema', 'performance_schema'}
+    
+    for pattern in patterns:
+        matches = re.finditer(pattern, sql_text, re.IGNORECASE)
+        for match in matches:
+            db_name = match.group(1).lower()
+            if db_name not in system_databases:
+                found_databases.append(db_name)
+            elif not found_databases:  # Only add system DB if no user DB found yet
+                found_databases.append(db_name)
+    
+    # Return first non-system database, or first database if all are system
+    if found_databases:
+        return found_databases[0]
+
+    return None
 
 def get_tables_with_sqlglot(sql_query):
     """Trích xuất tên các bảng từ một câu lệnh SQL sử dụng thư viện sqlglot."""
@@ -254,7 +347,7 @@ def save_logs_to_parquet(records: list, source_dbms: str) -> int:
         if 'source_dbms' not in df.columns:
             df['source_dbms'] = source_dbms
         if 'timestamp' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
 
         os.makedirs(STAGING_DATA_DIR, exist_ok=True)  # <-- thêm dòng này
 

@@ -25,9 +25,9 @@ def _normalize_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if 'timestamp' not in df.columns:
         return df
     try:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True, errors='coerce')
     except Exception:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True, errors='coerce')
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True, errors='coerce')
     df = df[df['timestamp'].notna()].reset_index(drop=True)
     return df
 

@@ -9,9 +9,10 @@ import pandas as pd
 # Import Config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
-    from config import * 
-except: 
-    print("Lỗi: Không tìm thấy config.py"); 
+    from config import *
+    from engine.utils import save_logs_to_parquet, configure_redis_for_reliability, handle_redis_misconf_error, extract_db_from_sql 
+except ImportError:
+    print("Lỗi: Không thể import config/utils.")
     sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
@@ -288,10 +289,32 @@ def process_logs():
                     rows_exam = int(r_map['ROWS_EXAMINED'] or 0)
                     scan_efficiency = rows_sent / (rows_exam + 1)
 
-                    is_admin = 1 if any(k in sql_up for k in ['GRANT ', 'REVOKE ', 'CREATE USER']) else 0
+                                        
+                    # Enhanced database detection logic
+                    # 1. First try to get from MySQL's CURRENT_SCHEMA
+                    raw_db = str(r_map['CURRENT_SCHEMA'] or '').strip()
+                    
+                    db_name = "unknown"
+                    
+                    # Check if CURRENT_SCHEMA provides valid database name
+                    if raw_db and raw_db.lower() not in ['unknown', 'none', '', 'null']:
+                        db_name = raw_db.lower()
+                    else:
+                        # 2. If MySQL doesn't track it, parse from SQL text
+                        # This handles cases where queries use fully qualified table names
+                        # like "SELECT * FROM sales_db.orders" without "USE sales_db"
+                        detected_db = extract_db_from_sql(clean_sql)
+                        if detected_db:
+                            db_name = detected_db
+                            # Log when we successfully detect DB from SQL that MySQL missed
+                            logging.debug(f"Detected database '{detected_db}' from SQL text where CURRENT_SCHEMA was '{raw_db}'")
+                                
+                                
+                    # Cập nhật flag hệ thống dựa trên db_name mới tìm được
+                    is_system = 1 if db_name in ['mysql','sys','information_schema','performance_schema'] else 0
                     is_risky = 1 if any(k in sql_up for k in ['DROP ', 'TRUNCATE ']) else 0
                     has_comment = 1 if ('--' in clean_sql or '/*' in clean_sql or '#' in clean_sql) else 0
-                    is_system = 1 if r_map['CURRENT_SCHEMA'] in ['mysql','information_schema','performance_schema','sys'] else 0
+                    is_admin = 1 if any(k in sql_up for k in ['GRANT ', 'REVOKE ', 'CREATE USER']) else 0
                     
                     # Lấy message gốc từ MySQL
                     raw_error_msg = str(r_map['MESSAGE_TEXT'] or "")
@@ -308,7 +331,7 @@ def process_logs():
                         "user": meta["sim_user"],
                         "client_ip": meta["sim_ip"],
                         "client_port": meta["sim_port"],
-                        "database": str(r_map['CURRENT_SCHEMA'] or 'unknown').lower(),
+                        "database": db_name,
                         "query": clean_sql,
                         "normalized_query": str(r_map['DIGEST_TEXT'] or ''),
                         "query_digest": str(r_map['DIGEST'] or ''),                        

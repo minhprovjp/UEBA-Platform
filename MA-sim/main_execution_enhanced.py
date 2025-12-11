@@ -20,12 +20,16 @@ from stats_utils import StatisticalGenerator
 from obfuscator import SQLObfuscator
 from corrected_enhanced_sql_library import CORRECTED_SQL_LIBRARY  # NEW: Fixed enhanced query library
 
-# --- CẤU HÌNH TURBO (Preserved from original) ---
-NUM_THREADS = 10           # 10 luồng spam
-SIMULATION_SPEED_UP = 3600 # 1 giờ ảo / 1 giây thực
-START_DATE = datetime(2025, 12, 11, 8, 0, 0)
-TOTAL_REAL_SECONDS = 900   # Chạy 15 phút
+# --- CẤU HÌNH TURBO (Enhanced for all users) ---
+NUM_THREADS = 20           # Increased threads to handle more users
+SIMULATION_SPEED_UP = 1800 # 30 minutes simulated per 1 second real (slower for better coverage)
+START_DATE = datetime(2025, 12, 1, 5, 0, 0)
+TOTAL_REAL_SECONDS = 3600  # Run for 1 hour real time (30 hours simulated time)
 DB_PASSWORD = "password"
+
+# User rotation settings for comprehensive coverage
+USER_ROTATION_INTERVAL = 60  # Rotate users every 60 seconds
+USERS_PER_ROTATION = 15      # Number of active users per rotation
 
 # --- CẤU HÌNH ANOMALY (Flexible Anomaly Control) ---
 ANOMALY_PERCENTAGE = 0.10          # 10% anomaly rate (0.0 = clean dataset, 1.0 = 100% anomalies)
@@ -316,20 +320,22 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                 # Check if it's weekend (Saturday=5, Sunday=6)
                 day_of_week = sim_time.weekday()
                 if day_of_week >= 5:  # Weekend
-                    # Very minimal weekend activity (only 5% chance)
-                    if random.random() > 0.05:
-                        time.sleep(0.001)
+                    # Minimal weekend activity (20% chance for better coverage)
+                    if random.random() > 0.2:
+                        time.sleep(0.01)  # Shorter sleep for better responsiveness
                         continue
                 
                 # Check business hours activity level
                 activity_level = agent_template.get_activity_level(hour)
                 if activity_level == 0.0:
-                    time.sleep(0.001) 
-                    continue
-                # Reduce activity during low-activity periods
+                    # Even during off-hours, allow some activity (10% chance)
+                    if random.random() > 0.1:
+                        time.sleep(0.01)
+                        continue
+                # Reduce activity during low-activity periods but keep users active
                 elif activity_level < 0.5:
-                    if random.random() > activity_level:
-                        time.sleep(0.001)
+                    if random.random() > (activity_level + 0.3):  # Boost activity level
+                        time.sleep(0.005)  # Very short sleep
                         continue
 
             # Generate action intent
@@ -383,22 +389,25 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
             # Agent reaction
             agent_template.react(success)
             
-            # Enhanced think time based on Vietnamese business patterns
-            min_wait = 2
-            mode_wait = 15
+            # Optimized think time for better query generation
+            min_wait = 1  # Reduced minimum wait
+            mode_wait = 8  # Reduced mode wait for more activity
             
             # Adjust wait time based on role and action
             if agent_template.role in ['FINANCE', 'MANAGEMENT']:
-                mode_wait = 30  # More deliberate actions
+                mode_wait = 12  # Reduced from 30 to 12
             elif agent_template.role in ['CUSTOMER_SERVICE', 'SALES']:
-                mode_wait = 10  # Faster-paced work
+                mode_wait = 5   # Reduced from 10 to 5 for high-activity roles
+            elif agent_template.role in ['DEV', 'ADMIN']:
+                mode_wait = 6   # Moderate activity for technical roles
             
             if "UPDATE" in intent['action'] or "CREATE" in intent['action']: 
-                mode_wait *= 2  # Longer for modification operations
+                mode_wait *= 1.5  # Reduced multiplier from 2 to 1.5
             
             sim_wait = StatisticalGenerator.generate_pareto_delay(min_wait, mode_wait)
             real_wait = sim_wait / v_clock.speed_up
             
+            # Ensure minimum activity with shorter waits
             time.sleep(max(real_wait, 0.001))
 
         except Exception as e:
@@ -482,32 +491,75 @@ def main():
     v_clock = VirtualClock(START_DATE, SIMULATION_SPEED_UP)
     stop_event = threading.Event()
     
-    print(f"\n🚀 Starting enhanced simulation with {NUM_THREADS} threads...")
+    print(f"\n🚀 Starting enhanced simulation with ALL USERS active...")
+    print(f"   Total Users: {len(pool_agents)}")
+    print(f"   Simulation Speed: {SIMULATION_SPEED_UP}x")
+    print(f"   Real Time Duration: {TOTAL_REAL_SECONDS} seconds ({TOTAL_REAL_SECONDS/60:.1f} minutes)")
+    print(f"   Simulated Time Duration: {TOTAL_REAL_SECONDS * SIMULATION_SPEED_UP / 3600:.1f} hours")
     
-    # Run simulation
-    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        for _ in range(NUM_THREADS):
-            agent = random.choice(pool_agents)
-            executor.submit(enhanced_user_worker, agent, sql_generator, v_clock, stop_event)
+    # Create a thread for each user to ensure all users are active
+    print(f"\n👥 Creating threads for all {len(pool_agents)} users...")
+    
+    try:
+        start_run = time.time()
+        
+        # Start a thread for each user
+        with ThreadPoolExecutor(max_workers=len(pool_agents)) as executor:
+            futures = []
             
-        try:
-            start_run = time.time()
+            # Submit each user to the thread pool
+            for i, agent in enumerate(pool_agents):
+                future = executor.submit(enhanced_user_worker, agent, sql_generator, v_clock, stop_event)
+                futures.append((agent.username, future))
+                
+                # Add small delay to stagger thread starts
+                if i % 10 == 0 and i > 0:
+                    time.sleep(0.1)
+            
+            print(f"✅ All {len(futures)} user threads started!")
+            
+            # Main monitoring loop
+            last_report = time.time()
             while (time.time() - start_run) < TOTAL_REAL_SECONDS:
                 time.sleep(1)
+                
+                # Report progress every 30 seconds
+                if time.time() - last_report >= 30:
+                    curr_sim = v_clock.get_current_sim_time()
+                    active_threads = len([f for _, f in futures if not f.done()])
+                    elapsed = time.time() - start_run
+                    remaining = TOTAL_REAL_SECONDS - elapsed
+                    
+                    print(f"\n📊 Progress Report:")
+                    print(f"   Elapsed: {elapsed/60:.1f}min | Remaining: {remaining/60:.1f}min")
+                    print(f"   Active Threads: {active_threads}/{len(futures)}")
+                    print(f"   Total Queries: {total_queries_sent:,}")
+                    print(f"   Query Rate: {total_queries_sent/elapsed:.1f}/sec")
+                    print(f"   Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
+                    
+                    last_report = time.time()
+                
+                # Update status line
                 curr_sim = v_clock.get_current_sim_time()
-                sys.stdout.write(f"\r⚡ Queries: {total_queries_sent} | Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')} | Rate: {total_queries_sent/(time.time()-start_run):.1f}/s ")
+                active_count = len([f for _, f in futures if not f.done()])
+                elapsed = time.time() - start_run
+                sys.stdout.write(f"\r⚡ Queries: {total_queries_sent:,} | Active: {active_count}/{len(futures)} | Elapsed: {elapsed/60:.1f}min | Sim: {curr_sim.strftime('%H:%M')} ")
                 sys.stdout.flush()
-        except KeyboardInterrupt:
-            print("\n🛑 Stopping simulation...")
-        finally:
-            stop_event.set()
             
-            # Final statistics
-            elapsed_time = time.time() - start_run
-            print(f"\n✅ SIMULATION COMPLETED")
-            print(f"   Duration: {elapsed_time:.1f} seconds")
-            print(f"   Total Queries: {total_queries_sent}")
-            print(f"   Average Rate: {total_queries_sent/elapsed_time:.1f} queries/second")
+            print(f"\n⏰ Simulation time completed!")
+            
+    except KeyboardInterrupt:
+        print("\n🛑 Stopping simulation...")
+    finally:
+        stop_event.set()
+        
+        # Final statistics
+        elapsed_time = time.time() - start_run
+        print(f"\n✅ SIMULATION COMPLETED")
+        print(f"   Duration: {elapsed_time:.1f} seconds")
+        print(f"   Total Queries: {total_queries_sent:,}")
+        print(f"   Average Rate: {total_queries_sent/elapsed_time:.1f} queries/second")
+        if 'curr_sim' in locals():
             print(f"   Simulated Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
 
 if __name__ == "__main__":

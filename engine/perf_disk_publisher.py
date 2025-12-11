@@ -11,7 +11,7 @@ from collections import Counter
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from config import *
-    from engine.utils import save_logs_to_parquet 
+    from engine.utils import save_logs_to_parquet, extract_db_from_sql
 except ImportError:
     print("Lỗi: Không thể import 'config' hoặc 'engine.utils'.")
     sys.exit(1)
@@ -124,12 +124,33 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                     rows_exam = int(r['rows_examined'] or 0)
                     scan_eff = rows_sent / (rows_exam + 1)
                     
+                                        
+                    # Enhanced database detection logic (consistent with perf_log_publisher.py)
+                    # 1. First try to get from MySQL's current_schema
+                    raw_db = str(r['current_schema'] or '').strip()
+                    
+                    db_name = "unknown"
+                    
+                    # Check if current_schema provides valid database name
+                    if raw_db and raw_db.lower() not in ['unknown', 'none', '', 'null']:
+                        db_name = raw_db.lower()
+                    else:
+                        # 2. If MySQL doesn't track it, parse from SQL text
+                        # This handles cases where queries use fully qualified table names
+                        # like "SELECT * FROM sales_db.orders" without "USE sales_db"
+                        detected_db = extract_db_from_sql(sql_txt)
+                        if detected_db:
+                            db_name = detected_db
+                            # Log when we successfully detect DB from SQL that MySQL missed
+                            logging.debug(f"Detected database '{detected_db}' from SQL text where current_schema was '{raw_db}'")
+                                
+                                
+                    # Cập nhật flag hệ thống dựa trên db_name mới tìm được
+                    is_system = 1 if db_name in ['mysql','sys','information_schema','performance_schema'] else 0
+                    
                     # Flags & Security Checks
-                    # [FIX TÊN BIẾN] Đổi is_sys thành is_system để khớp bên dưới
-                    is_system = 1 if str(r['current_schema']).lower() in ['mysql','information_schema','sys'] else 0
                     is_admin = 1 if any(k in sql_up for k in ['GRANT ','REVOKE ','CREATE USER']) else 0
                     is_risky = 1 if any(k in sql_up for k in ['DROP ','TRUNCATE ']) else 0
-                    # [FIX TÊN BIẾN] Đổi has_cmt thành has_comment
                     has_comment = 1 if ('--' in sql_txt or '/*' in sql_txt) else 0
                     
                     # Error Handling
@@ -151,7 +172,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         "user": str(r['processlist_user'] or 'unknown'),
                         "client_ip": str(r['processlist_host']).split(':')[0] if r['processlist_host'] else 'unknown',
                         "client_port": 0, 
-                        "database": str(r['current_schema'] or 'unknown'),
+                        "database": db_name,
                         
                         # Content
                         "query": sql_txt,
@@ -163,10 +184,10 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         "query_length": len(sql_txt),
                         "query_entropy": float(f"{entropy:.4f}"),
                         "scan_efficiency": float(f"{scan_eff:.6f}"),
-                        "is_system_table": is_system, # [FIXED] Đã khớp tên biến
+                        "is_system_table": is_system, 
                         "is_admin_command": is_admin,
                         "is_risky_command": is_risky,
-                        "has_comment": has_comment,   # [FIXED] Đã khớp tên biến
+                        "has_comment": has_comment,   
                         "has_error": has_err,
                         
                         # Metrics
