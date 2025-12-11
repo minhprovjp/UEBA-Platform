@@ -136,7 +136,7 @@ def handle_email_alerts_async(results: dict):
                     'desc': description,
                     'targets': users_ips
                 })
-
+    # ORDER
     # 1. Technical Attacks (SQLi, DoS...)
     add_violation_from_group(results.get("rule_technical"), "Technical Attack")
 
