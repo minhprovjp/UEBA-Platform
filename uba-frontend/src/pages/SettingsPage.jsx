@@ -158,20 +158,20 @@ export default function SettingsPage() {
                         <ConfigCard title="Working Hours Definition" desc="Định nghĩa khung giờ làm việc và giờ khuya.">
                              <div className="grid grid-cols-2 gap-4">
                                 <FormItem label="Safe Start Hour (0-23)">
-                                    <Input type="number" value={getVal('analysis_params.p_safe_hours_start')} 
-                                           onChange={e => updateField('analysis_params.p_safe_hours_start', parseInt(e.target.value))}/>
+                                    <Input type="number" value={getVal('security_rules.settings.sensitive_safe_hours_start')} 
+                                           onChange={e => updateField('security_rules.settings.sensitive_safe_hours_start', parseInt(e.target.value))}/>
                                 </FormItem>
                                 <FormItem label="Safe End Hour (0-23)">
-                                    <Input type="number" value={getVal('analysis_params.p_safe_hours_end')} 
-                                           onChange={e => updateField('analysis_params.p_safe_hours_end', parseInt(e.target.value))}/>
+                                    <Input type="number" value={getVal('security_rules.settings.sensitive_safe_hours_end')} 
+                                           onChange={e => updateField('security_rules.settings.sensitive_safe_hours_end', parseInt(e.target.value))}/>
                                 </FormItem>
                                 <FormItem label="Late Night Start (HH:MM)">
-                                    <Input value={getVal('analysis_params.p_late_night_start_time')} 
-                                           onChange={e => updateField('analysis_params.p_late_night_start_time', e.target.value)}/>
+                                    <Input value={getVal('security_rules.settings.late_night_start')} 
+                                           onChange={e => updateField('security_rules.settings.late_night_start', e.target.value)}/>
                                 </FormItem>
                                 <FormItem label="Late Night End (HH:MM)">
-                                    <Input value={getVal('analysis_params.p_late_night_end_time')} 
-                                           onChange={e => updateField('analysis_params.p_late_night_end_time', e.target.value)}/>
+                                    <Input value={getVal('security_rules.settings.late_night_end')} 
+                                           onChange={e => updateField('security_rules.settings.late_night_end', e.target.value)}/>
                                 </FormItem>
                              </div>
                         </ConfigCard>
