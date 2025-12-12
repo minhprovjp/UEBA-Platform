@@ -56,7 +56,7 @@ export default function LoginPage({ onLoginSuccess }) {
             <Input 
               value={username} onChange={e => setUsername(e.target.value)}
               className="bg-zinc-950 border-zinc-800 focus:border-primary-500" 
-              placeholder="admin" required
+              placeholder="username" required
             />
           </div>
           <div className="space-y-2">
@@ -65,7 +65,7 @@ export default function LoginPage({ onLoginSuccess }) {
               type="password"
               value={password} onChange={e => setPassword(e.target.value)}
               className="bg-zinc-950 border-zinc-800 focus:border-primary-500" 
-              required
+              placeholder="password" required
             />
           </div>
           <Button type="submit" className="w-full bg-primary-600 hover:bg-primary-700" disabled={loading}>

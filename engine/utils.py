@@ -596,10 +596,10 @@ def check_access_anomalies(df, rule_config):
 
     return anomalies
 
-# ==============================================================================
+# ============================================================================================================================================================
 # 2. NHÓM INSIDER THREATS (Mối đe dọa nội bộ)
-# Bao gồm: Service Account, Admin Privilege Escalation, Sensitive Access, Late Night, Ghost Account
-# ==============================================================================
+# Bao gồm: Service Account, Admin Privilege Escalation, Sensitive Access, Late Night, Ghost Account, System Table Modification, Insecure Connection
+# ============================================================================================================================================================
 def check_insider_threats(df, rule_config):
     """Nhóm 2: Insider Threat"""
     anomalies = {}
@@ -679,20 +679,47 @@ def check_insider_threats(df, rule_config):
             if match and match.group(1) not in hr_users:
                 idx_ghost.append(idx)               
     if idx_ghost: anomalies['Ghost Account Creation'] = list(set(idx_ghost))
+
+    # Rule 9. System Table Modification
+    # Logic: Can thiệp bảng hệ thống nhưng không phải lệnh SELECT/SHOW
+    idx_sys_mod = []
+    if 'is_system_table' in df.columns:
+        # Lọc các dòng tác động bảng hệ thống
+        sys_access = df[df['is_system_table'] == 1]
+        if not sys_access.empty:
+            # Loại trừ các lệnh chỉ đọc (SELECT, SHOW, DESCRIBE)
+            # Lưu ý: event_name thường là 'statement/sql/update', 'statement/sql/insert'...
+            # Cách đơn giản: query không bắt đầu bằng SELECT/SHOW
+            sys_mod = sys_access[~sys_access['query'].str.match(r'^\s*(SELECT|SHOW|DESC)', case=False, na=False)]
+            idx_sys_mod.extend(sys_mod.index.tolist())
+    if idx_sys_mod: anomalies['System Table Modification'] = list(set(idx_sys_mod))
+
+    # Rule 10. Insecure Connection
+    # Logic: Các user quan trọng (như root) kết nối qua TCP/IP (thường không an toàn nếu không có SSL) thay vì Socket
+    idx_insecure = []
+    restricted_users = signatures.get('restricted_connection_users', ['root', 'admin'])
+    if 'connection_type' in df.columns:
+        insecure_conns = df[
+            (df['user'].isin(restricted_users)) &
+            (df['connection_type'] == 'TCP/IP')  # Socket thường là 'Localhost via UNIX socket'
+        ]
+        idx_insecure.extend(insecure_conns.index.tolist())
+    if idx_insecure: anomalies['Insecure Connection'] = list(set(idx_insecure))
     
     return anomalies
 
-# ==============================================================================
+# ============================================================================================================================================================
 # 3. NHÓM TECHNICAL ATTACKS (Tấn công kỹ thuật)
-# Bao gồm: SQLi, DoS, High CPU Usage, Scan Efficiency, Config Change, Entropy, Client Mismatch
-# ==============================================================================
+# Bao gồm: SQLi, DoS, High CPU Usage, Scan Efficiency, Config Change, Entropy, Client Mismatch, Disk Temp Table Abuse,
+#          Excessive Locking, Suspicious Comment, Warning Flooding, Password Hash Attack, JSON Data Extraction
+# ============================================================================================================================================================
 def check_technical_attacks(df, rule_config):
     """Nhóm 3: Technical Attacks"""
     anomalies = {}
     thresholds = rule_config.get('thresholds', {})
     signatures = rule_config.get('signatures', {})
     
-    # Rule 9. SQL Injection
+    # Rule 11. SQL Injection
     idx_sqli = []
     sqli_kws = signatures.get('sqli_keywords', [])
     if sqli_kws:
@@ -701,13 +728,13 @@ def check_technical_attacks(df, rule_config):
         idx_sqli.extend(sqli_logs.index.tolist())
     if idx_sqli: anomalies['SQL Injection'] = list(set(idx_sqli))
     
-    # Rule 10. DoS / Resource Exhaustion
+    # Rule 12. DoS / Resource Exhaustion
     idx_dos = []
     max_time = thresholds.get('execution_time_limit_ms', 5000)
     idx_dos.extend(df[df['execution_time_ms'] > max_time].index.tolist())
     if idx_dos: anomalies['DoS / Resource Exhaustion'] = list(set(idx_dos))
     
-    # Rule 11. High CPU Usage 
+    # Rule 13. High CPU Usage 
     idx_cpu = []
     max_cpu_time = thresholds.get('cpu_time_limit_ms', 1000) # 1s CPU
     if 'cpu_time_ms' in df.columns:
@@ -715,7 +742,7 @@ def check_technical_attacks(df, rule_config):
         idx_cpu.extend(high_cpu.index.tolist())
     if idx_cpu: anomalies['High CPU Usage'] = list(set(idx_cpu))
     
-    # Rule 12. Scan Efficiency
+    # Rule 14. Scan Efficiency
     idx_scan = []
     min_eff = thresholds.get('scan_efficiency_min', 0.01)
     min_rows = thresholds.get('scan_efficiency_min_rows', 1000)
@@ -726,7 +753,7 @@ def check_technical_attacks(df, rule_config):
     idx_scan.extend(inefficient.index.tolist())
     if idx_scan: anomalies['Scan Efficiency'] = list(set(idx_scan))
     
-    # Rule 13. Config Change
+    # Rule 15. Config Change
     idx_config = []
     config_change = df[
         df['query'].str.contains("SET GLOBAL|general_log", regex=True, case=False, na=False)
@@ -734,7 +761,7 @@ def check_technical_attacks(df, rule_config):
     idx_config.extend(config_change.index.tolist())
     if idx_config: anomalies['Config Change'] = list(set(idx_config))
     
-    # Rule 14. High Entropy Queries
+    # Rule 16. High Entropy Queries
     idx_entropy = []
     max_entropy = thresholds.get('max_query_entropy', 4.8)
     if 'query_entropy' in df.columns:
@@ -742,7 +769,7 @@ def check_technical_attacks(df, rule_config):
         idx_entropy.extend(high_entropy.index.tolist())
     if idx_entropy: anomalies['High Entropy Query'] = list(set(idx_entropy))
 
-    # Rule 15. Client/OS Mismatch
+    # Rule 17. Client/OS Mismatch
     # Phát hiện tool tấn công trong blacklist (sqlmap, nmap...)
     idx_client = []
     whitelist = signatures.get('allowed_programs', [])
@@ -752,19 +779,80 @@ def check_technical_attacks(df, rule_config):
         idx_client.extend(bad_clients.index.tolist())
     if idx_client: anomalies['Client Mismatch'] = list(set(idx_client))
 
+    # Rule 18. Disk Temp Table Abuse
+    # Logic: Query tạo bảng tạm trên ổ cứng (gây chậm)
+    idx_disk_abuse = []
+    if 'created_tmp_disk_tables' in df.columns:
+        disk_abusers = df[df['created_tmp_disk_tables'] > 0]
+        idx_disk_abuse.extend(disk_abusers.index.tolist())
+    if idx_disk_abuse: anomalies['Disk Temp Table Abuse'] = list(set(idx_disk_abuse))
+
+    # Rule 19. Index Evasion / Full Join
+    # Logic: Không dùng index hoặc Full Join
+    idx_no_index = []
+    if 'no_index_used' in df.columns and 'select_full_join' in df.columns:
+        bad_scans = df[(df['no_index_used'] == 1) | (df['select_full_join'] == 1)]
+        # Chỉ bắt nếu quét nhiều dòng để tránh false positive cho bảng nhỏ
+        bad_scans = bad_scans[bad_scans['rows_examined'] > 100] 
+        idx_no_index.extend(bad_scans.index.tolist())
+    if idx_no_index: anomalies['Index Evasion'] = list(set(idx_no_index))
+
+    # Rule 20. Excessive Locking
+    # Logic: Lock quá lâu
+    idx_locking = []
+    lock_limit = thresholds.get('lock_time_limit_ms', 500) # 0.5s
+    if 'lock_time_ms' in df.columns:
+        long_locks = df[df['lock_time_ms'] > lock_limit]
+        idx_locking.extend(long_locks.index.tolist())
+    if idx_locking: anomalies['Excessive Locking'] = list(set(idx_locking))
+
+    # Rule 21. Suspicious Comment
+    # Logic: Có comment nhưng không phải job hệ thống
+    idx_comments = []
+    if 'has_comment' in df.columns and 'is_system_table' in df.columns:
+        suspicious_cmts = df[
+            (df['has_comment'] == 1) & 
+            (df['is_system_table'] == 0)
+        ]
+        idx_comments.extend(suspicious_cmts.index.tolist())
+    if idx_comments: anomalies['Suspicious Comment'] = list(set(idx_comments))
+
+    # Rule 22. Warning Flooding
+    # Logic: Query sinh ra quá nhiều warning
+    idx_warnings = []
+    warn_thresh = thresholds.get('warning_count_threshold', 5)
+    if 'warning_count' in df.columns:
+        warn_floods = df[df['warning_count'] > warn_thresh]
+        idx_warnings.extend(warn_floods.index.tolist())
+    if idx_warnings: anomalies['Warning Flooding'] = list(set(idx_warnings))
+
+    # Rule 23. Password Hash Attack
+    # Logic: Cố tình select chuỗi xác thực
+    idx_pass_attack = []
+    pass_attack = df[df['query'].str.contains(r'authentication_string|password_expired', regex=True, case=False, na=False)]
+    idx_pass_attack.extend(pass_attack.index.tolist())
+    if idx_pass_attack: anomalies['Password Hash Attack'] = list(set(idx_pass_attack))
+
+    # Rule 24. JSON Data Extraction
+    # Logic: Dùng hàm JSON extract
+    idx_json = []
+    json_extract = df[df['query'].str.contains(r'JSON_EXTRACT|JSON_UNQUOTE|->>', regex=True, case=False, na=False)]
+    idx_json.extend(json_extract.index.tolist())
+    if idx_json: anomalies['JSON Data Extraction'] = list(set(idx_json))
+
     return anomalies
 
-# ==============================================================================
+# ============================================================================================================================================================
 # 4. NHÓM DATA DESTRUCTION (Phá hoại dữ liệu)
-# Bao gồm: Mass Delete, Old Data, Large Dump
-# ==============================================================================
+# Bao gồm: Mass Delete, Old Data, Large Dump, Audit Log Manipulation, Hidden View / Rename
+# ============================================================================================================================================================
 def check_data_destruction(df, rule_config):
     """Nhóm 4: Data Destruction"""
     anomalies = {}
     thresholds = rule_config.get('thresholds', {})
     signatures = rule_config.get('signatures', {})
     
-    # Rule 16. Mass Deletion (Xóa hàng loạt)
+    # Rule 25. Mass Deletion (Xóa hàng loạt)
     idx_delete = []
     limit_rows = thresholds.get('mass_deletion_rows', 500)
     mass_delete = df[
@@ -774,13 +862,13 @@ def check_data_destruction(df, rule_config):
     idx_delete.extend(mass_delete.index.tolist())
     if idx_delete: anomalies['Mass Deletion'] = list(set(idx_delete))
     
-    # Rule 17. Old Data Modification (Sửa dữ liệu cũ)
+    # Rule 26. Old Data Modification (Sửa dữ liệu cũ)
     idx_old_data = []
     old_data_access = df[df['query'].str.contains("2019|2020|2021|2022|2023|2024", regex=True, na=False)]
     idx_old_data.extend(old_data_access.index.tolist())
     if idx_old_data: anomalies['Old Data Modification'] = list(set(idx_old_data))
 
-    # Rule 18. Large Data Dump 
+    # Rule 27. Large Data Dump 
     # Logic: Select bảng quan trọng mà trả về quá nhiều dòng
     idx_dump = []
     large_dump_tables = signatures.get('large_dump_tables', [])
@@ -793,6 +881,26 @@ def check_data_destruction(df, rule_config):
         ]
         idx_dump.extend(dump_logs.index.tolist())
     if idx_dump: anomalies['Large Data Dump'] = list(set(idx_dump))
+
+    # Rule 28. Audit Log Manipulation
+    # Logic: Update/Delete trên bảng log/audit/history
+    idx_audit = []
+    # Regex tìm tên bảng chứa chữ log, audit, history
+    audit_tables_pattern = r'(general_log|audit_log|slow_log|history)'
+    audit_manipulation = df[
+        (df['query'].str.contains(audit_tables_pattern, regex=True, case=False, na=False)) &
+        (df['event_name'].isin(['statement/sql/delete', 'statement/sql/update', 'statement/sql/truncate']))
+    ]
+    idx_audit.extend(audit_manipulation.index.tolist())
+    if idx_audit: anomalies['Audit Log Manipulation'] = list(set(idx_audit))
+
+    # Rule 29. Hidden View / Rename
+    # Logic: Đổi tên bảng hoặc tạo View
+    idx_obfuscation = []
+    # Tìm lệnh RENAME TABLE hoặc CREATE VIEW
+    obfuscation_cmds = df[df['query'].str.contains(r'RENAME\s+TABLE|CREATE\s+VIEW', regex=True, case=False, na=False)]
+    idx_obfuscation.extend(obfuscation_cmds.index.tolist())
+    if idx_obfuscation: anomalies['Hidden View / Rename'] = list(set(idx_obfuscation))
     
     return anomalies
 
@@ -801,7 +909,7 @@ def check_data_destruction(df, rule_config):
 # ==============================================================================
 def check_multi_table_anomalies(df, rule_config):
     """
-    Rule 19: Multi-table Access
+    Rule 30: Multi-table Access
     """
     anomalies = []
     thresholds = rule_config.get('thresholds', {})
@@ -847,7 +955,7 @@ def check_multi_table_anomalies(df, rule_config):
 # ==============================================================================
 def check_unusual_user_activity_time(row, profiles):
     """
-    Rule 20: Unusual User Time
+    Rule 31: Unusual User Time
     """
     user = row.get('user')
     if user not in profiles: return None

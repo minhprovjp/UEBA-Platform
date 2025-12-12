@@ -10,6 +10,7 @@ Việc tập trung tất cả các giá trị này vào một nơi giúp dễ d�
 
 # Import các thư viện cần thiết
 from datetime import time as dt_time
+from datetime import datetime
 import os
 from dotenv import load_dotenv
 
@@ -45,7 +46,7 @@ MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch_mysql")   # Thư m
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://uba_user:password@localhost:5432/uba_db")
 
 # Hãy đảm bảo user/password này có quyền SELECT trên bảng mysql.general_log
-MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost:3306/uba_db"
+MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost/mysql"
 
 # SQLite cũ:
 # DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'app_database.db')}"
@@ -107,10 +108,10 @@ TIME_WINDOW_DEFAULT_MINUTES = 5             # Khung thời gian để xét một
 MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT = 3   # Số lượng bảng riêng biệt tối thiểu để bị coi là bất thường.
 
 # --- LUẬT 4: Truy cập Bảng Nhạy Cảm (Sensitive Table Access) ---
-SENSITIVE_TABLES_DEFAULT = ['sensitive_data', 'customers', 'products'] 
-ALLOWED_USERS_FOR_SENSITIVE_DEFAULT = ['root', 'db_admin', 'data_analyst_trusted']
+SENSITIVE_TABLES_DEFAULT = ['salaries', 'attendance', 'departments', 'employees', "hr_db.salaries", "hr_db.employees", "mysql.user", "information_schema.columns" ] 
+ALLOWED_USERS_FOR_SENSITIVE_DEFAULT = ['dev_user_0', 'dev_user_1', 'dev_user_2', 'hr_user_0', 'hr_user_1']
 SAFE_HOURS_START_DEFAULT = 8                # Giờ làm việc an toàn bắt đầu từ 08:00
-SAFE_HOURS_END_DEFAULT = 18                 # và kết thúc trước 18:00.
+SAFE_HOURS_END_DEFAULT = 17                 # và kết thúc trước 18:00.
 SAFE_WEEKDAYS_DEFAULT = list(range(0, 5))   # Ngày làm việc an toàn: 0=Thứ 2, ..., 4=Thứ 6.
 
 # --- LUẬT 5: Hoạt động User Bất thường (Unusual User Activity) ---
@@ -136,6 +137,10 @@ DEFAULT_OLLAMA_MODEL = 'seneca'                 # Tên model mặc định sẽ 
 OLLAMA_TIMEOUT_SECONDS = 3600                   # Thời gian chờ tối đa (giây) khi gọi AI (1 giờ).
 
 # --- 3. Cấu hình Cảnh báo qua Email ---
+LAST_EMAIL_SENT_TIME = datetime.min
+EMAIL_COOLDOWN_SECONDS = 180  # x second gửi 1 lần
+PENDING_VIOLATIONS = []       # Buffer chứa các vi phạm đang chờ gửi
+
 # Đọc các giá trị từ file .env đã được load ở đầu file.
 # os.getenv("KEY", "default_value") sẽ lấy giá trị của biến môi trường "KEY",
 # nếu không tìm thấy, nó sẽ sử dụng "default_value".
@@ -161,8 +166,8 @@ ALERT_EMAIL_SETTINGS = {
 }
 
 # ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
-# Ngưỡng (số lượng vi phạm) để kích hoạt khóa tài khoản
-ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 5 # Ví dụ: Khóa user nếu có 5 vi phạm trở lên
+# Ngưỡng để kích hoạt khóa tài khoản
+ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 3
 
 # Đọc cấu hình admin MySQL từ .env
 ACTIVE_RESPONSE_SETTINGS = {
@@ -187,3 +192,7 @@ ENGINE_BATCH_MAX_BLOCK_MS  = int(os.getenv("ENGINE_BATCH_MAX_BLOCK_MS", "1000"))
 
 # Các Stream cần lắng nghe (chỉ MySQL)
 STREAMS = {f"{REDIS_STREAM_LOGS}:mysql": ">"} 
+
+SENSITIVE_TABLES = {
+   "salaries", "attendance", "departments", "employees", "hr_db.salaries", "hr_db.employees", "mysql.user", "information_schema.columns"
+}

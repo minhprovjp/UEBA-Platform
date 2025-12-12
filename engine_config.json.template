@@ -1,65 +1,212 @@
 {
-  "engine_sleep_interval_seconds": 60,
-  "llm_config": {
-    "enable_ollama": true,
-    "ollama_host": "http://localhost:11434",
-    "ollama_model": "seneca:latest",
-    "ollama_timeout": 3600,
-    "ollama_max_retries": 3,
-    "ollama_temperature": 0.7,
-    "ollama_max_tokens": 4096,
-    
-    "selected_provider": "none",
-    "openai_api_key": "",
-    "openai_model": "gpt-3.5-turbo",
-    "openai_base_url": "https://api.openai.com/v1",
-    "anthropic_api_key": "",
-    "anthropic_model": "claude-3-sonnet-20240229",
-    "custom_api_key": "",
-    "custom_api_endpoint": "",
-    "custom_model_name": "",
-    "custom_api_type": "openai-compatible",
-    
-    "api_temperature": 0.7,
-    "api_max_tokens": 4096,
-    "api_timeout": 60,
-    
-    "provider_priority": "ollama,api",
-    "enable_fallback": true,
-    "max_fallback_attempts": 3
-  },
-  "active_parsers": [
-    "mysql",
-    "postgres"
-  ],
-  "analysis_params": {
-    "p_late_night_start_time": "00:00:00",
-    "p_late_night_end_time": "05:00:00",
-    "p_known_large_tables": [ "customers", "products", "orders", "order_items", "test_log", "another_table", "sensitive_data" ],
-    "p_time_window_minutes": 5,
-    "p_min_distinct_tables": 3,
-    "p_sensitive_tables": ["users", "customers", "sensitive_data", "employees", "password_history"],
-    "p_allowed_users_sensitive": ["root", "db_admin", "data_analyst_trusted"],
-    "p_safe_hours_start": 8,
-    "p_safe_hours_end": 18,
-    "p_safe_weekdays": [0, 1, 2, 3, 4],
-    "p_quantile_start": 0.15,
-    "p_quantile_end": 0.85,
-    "p_min_queries_for_profile": 10
-  },
-  "llm_analysis_settings": {
-    "enable_two_round_analysis": true,
-    "enable_session_analysis": true,
-    "confidence_threshold": 0.7,
-    "max_concurrent_requests": 5,
-    "request_queue_size": 100
-  },
-  "logging_config": {
-    "log_level": "INFO",
-    "log_to_file": true,
-    "log_file_path": "logs/llm_analysis.log",
-    "max_log_file_size": "10MB",
-    "log_rotation": "daily"
-  }
+    "engine_sleep_interval_seconds": 60,
+    "llm_config": {
+        "enable_ollama": true,
+        "ollama_host": "http://192.168.1.40:11434/",
+        "ollama_model": "deepseek-r1:1.5b",
+        "ollama_timeout": 3600,
+        "ollama_max_retries": 3,
+        "ollama_temperature": 0.7,
+        "ollama_max_tokens": 4096,
+        "selected_provider": "none",
+        "openai_api_key": "",
+        "openai_model": "gpt-3.5-turbo",
+        "openai_base_url": "https://api.openai.com/v1",
+        "anthropic_api_key": "",
+        "anthropic_model": "claude-3-sonnet-20240229",
+        "custom_api_key": "",
+        "custom_api_endpoint": "",
+        "custom_model_name": "",
+        "custom_api_type": "openai-compatible",
+        "api_temperature": 0.7,
+        "api_max_tokens": 4096,
+        "api_timeout": 60,
+        "provider_priority": "ollama,api",
+        "enable_fallback": true,
+        "max_fallback_attempts": 3
+    },
+    "llm_analysis_settings": {
+        "enable_two_round_analysis": true,
+        "enable_session_analysis": true,
+        "confidence_threshold": 0.7,
+        "max_concurrent_requests": 5,
+        "request_queue_size": 100
+    },
+    "logging_config": {
+        "log_level": "INFO",
+        "log_to_file": true,
+        "log_file_path": "logs/llm_analysis.log",
+        "max_log_file_size": "10MB",
+        "log_rotation": "daily"
+    },
+    "security_rules": {
+        "service_accounts": {
+            "backup_user": {
+                "allowed_hours": [
+                    1,
+                    2,
+                    3
+                ],
+                "allowed_ips": [
+                    "192.168.1.100"
+                ]
+            },
+            "etl_user": {
+                "allowed_hours": [
+                    0,
+                    12
+                ],
+                "allowed_ips": [
+                    "192.168.1.101"
+                ]
+            }
+        },
+        "thresholds": {
+            "mass_deletion_rows": 500,
+            "execution_time_limit_ms": 5000,
+            "brute_force_attempts": 5,
+            "concurrent_ips_limit": 1,
+            "scan_efficiency_min": 0.01,
+            "scan_efficiency_min_rows": 1000,
+            "multi_table_window_minutes": 5,
+            "multi_table_min_count": 3,
+            "max_query_entropy": 4.5,
+            "impossible_travel_speed_kmh": 800,
+            "cpu_time_limit_ms": 1000,
+            "lock_time_limit_ms": 500,      
+            "warning_count_threshold": 5
+        },
+        "signatures": {
+            "sqli_keywords": [
+                "UNION SELECT",
+                "UNION ALL SELECT",
+                "SLEEP(",
+                "BENCHMARK(",
+                "OR 1=1",
+                "DROP TABLE",
+                "--",
+                "#",
+                "INFORMATION_SCHEMA",
+                "UPDATEXML",
+                "EXTRACTVALUE",
+                "WHERE 1=1",
+                "GTID_SUBSET",              
+                "JSON_KEYS",                
+                "NAME_CONST",               
+                "UUID_TO_BIN",              
+                "LOAD_FILE",                
+                "INTO OUTFILE",             
+                "INTO DUMPFILE",            
+                "mysql.innodb_table_stats", 
+                "JSON_ARRAYAGG",            
+                "MAKE_SET",                 
+                "EXPORT_SET",               
+                "/*!",
+                "1.e("
+            ],
+            "suspicious_system_tables": [
+                "mysql.user",
+                "mysql.host",
+                "information_schema.schemata"
+            ],
+            "admin_keywords": [
+                "GRANT ALL",
+                "CREATE USER",
+                "DROP USER",
+                "UPDATE mysql.user",
+                "SET GLOBAL"
+            ],
+            "sensitive_tables": [
+                "salaries",
+                "attendance",
+                "employees",
+                "mysql.user",
+                "credit_cards"
+            ],
+            "large_dump_tables": [
+                "customers",
+                "employees",
+                "salaries"
+            ],
+            "allowed_programs": [
+                "MySQL Workbench",
+                "DBeaver",
+                "phpMyAdmin",
+                "myapp_backend"
+            ],
+            "disallowed_programs": [
+                "sqlmap",
+                "nmap",
+                "python-requests",
+                "curl"
+            ],
+            "hr_authorized_users": [
+                "bao.\u0111ang",
+                "anh.hoang.pham",
+                "quy.co.duyen.mai",
+                "duong.le",
+                "co.yen.hoang",
+                "chi.hai.duong",
+                "quang.mai",
+                "chi.hong.le",
+                "nhien.hai.tran",
+                "lam.bui",
+                "ong.phuc.tran",
+                "thanh.nguyen",
+                "anh.le",
+                "anh.tu.hoang",
+                "quang.mai8",
+                "vu.nguyen",
+                "chi.duong",
+                "quy.co.mai.le",
+                "bao.le",
+                "anh.chau.bui",
+                "khoa.nguyen",
+                "hong.tran",
+                "hung.the.vu",
+                "thanh.le",
+                "an.van.le",
+                "duong.hoang",
+                "tung.tran",
+                "co.huong.pham",
+                "quy.co.hanh.\u0111ang",
+                "tung.the.hoang",
+                "ba.nhat.\u0111ang",
+                "bao.nguyen",
+                "linh.vu",
+                "vu.\u0111ang",
+                "hai.pham",
+                "quy.co.anh.mai",
+                "ong.nam.tran"
+            ],
+            "restricted_connection_users": [
+                "root",
+                "admin"
+            ]
+        },
+        "settings": {
+            "late_night_start": "22:00:00",
+            "late_night_end": "05:00:00",
+            "sensitive_allowed_users": [
+                "hung.the.vu",
+                "thanh.le",
+                "an.van.le",
+                "duong.hoang",
+                "tung.tran",
+                "co.huong.pham",
+                "quy.co.hanh.\u0111ang",
+                "tung.the.hoang",
+                "ba.nhat.\u0111ang",
+                "bao.nguyen",
+                "linh.vu",
+                "vu.\u0111ang",
+                "hai.pham",
+                "quy.co.anh.mai",
+                "ong.nam.tran"
+            ],
+            "sensitive_safe_hours_start": 8,
+            "sensitive_safe_hours_end": 17,
+            "geoip_db_path": "engine/geoip/GeoLite2-City.mmdb"
+        }
+    }
 }
-
