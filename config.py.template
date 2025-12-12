@@ -144,26 +144,26 @@ PENDING_VIOLATIONS = []       # Buffer chứa các vi phạm đang chờ gửi
 # Đọc các giá trị từ file .env đã được load ở đầu file.
 # os.getenv("KEY", "default_value") sẽ lấy giá trị của biến môi trường "KEY",
 # nếu không tìm thấy, nó sẽ sử dụng "default_value".
-ALERT_EMAIL_SETTINGS = {
-    # Địa chỉ máy chủ SMTP (ví dụ: 'smtp.gmail.com').
-    "smtp_server": os.getenv("SMTP_SERVER"),
+# ALERT_EMAIL_SETTINGS = {
+#     # Địa chỉ máy chủ SMTP (ví dụ: 'smtp.gmail.com').
+#     "smtp_server": os.getenv("SMTP_SERVER"),
     
-    # Cổng SMTP (thường là 587 cho TLS hoặc 465 cho SSL).
-    "smtp_port": os.getenv("SMTP_PORT"),
+#     # Cổng SMTP (thường là 587 cho TLS hoặc 465 cho SSL).
+#     "smtp_port": os.getenv("SMTP_PORT"),
     
-    # Địa chỉ email người gửi.
-    "sender_email": os.getenv("SENDER_EMAIL"),
+#     # Địa chỉ email người gửi.
+#     "sender_email": os.getenv("SENDER_EMAIL"),
     
-    # Mật khẩu ứng dụng của email người gửi (không phải mật khẩu đăng nhập chính).
-    "sender_password": os.getenv("SENDER_PASSWORD"),
+#     # Mật khẩu ứng dụng của email người gửi (không phải mật khẩu đăng nhập chính).
+#     "sender_password": os.getenv("SENDER_PASSWORD"),
     
-    # Danh sách người nhận chính (To), được phân tách bằng dấu phẩy trong file .env.
-    # Code sẽ tự động tách chuỗi, loại bỏ khoảng trắng và các email rỗng.
-    "to_recipients": [email.strip() for email in os.getenv("TO_RECIPIENTS", "").split(",") if email.strip()],
+#     # Danh sách người nhận chính (To), được phân tách bằng dấu phẩy trong file .env.
+#     # Code sẽ tự động tách chuỗi, loại bỏ khoảng trắng và các email rỗng.
+#     "to_recipients": [email.strip() for email in os.getenv("TO_RECIPIENTS", "").split(",") if email.strip()],
     
-    # Danh sách người nhận ẩn danh (BCC).
-    "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
-}
+#     # Danh sách người nhận ẩn danh (BCC).
+#     "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
+# }
 
 # ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
 # Ngưỡng để kích hoạt khóa tài khoản

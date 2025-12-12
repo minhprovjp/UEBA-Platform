@@ -1,5 +1,5 @@
 {
-    "engine_sleep_interval_seconds": 60,
+    "engine_sleep_interval_seconds": 600,
     "llm_config": {
         "enable_ollama": true,
         "ollama_host": "http://192.168.1.40:11434/",
@@ -39,6 +39,19 @@
         "max_log_file_size": "10MB",
         "log_rotation": "daily"
     },
+    "email_alert_config": {
+        "enable_email_alerts": false,
+        "smtp_server": "smtp.gmail.com",
+        "smtp_port": 587,
+        "sender_email": "daoduyvi2018@gmail.com",
+        "sender_password": "rbknjoodehjniuna",
+        "to_recipients": [
+            "daoduyvi7@gmail.com"
+        ],
+        "bcc_recipients": [
+            "huynhpro2703@gmail.com"
+        ]
+    },
     "security_rules": {
         "service_accounts": {
             "backup_user": {
@@ -68,15 +81,38 @@
             "concurrent_ips_limit": 1,
             "scan_efficiency_min": 0.01,
             "scan_efficiency_min_rows": 1000,
-            "multi_table_window_minutes": 5,
+            "multi_table_window_minutes": 4,
             "multi_table_min_count": 3,
             "max_query_entropy": 4.5,
             "impossible_travel_speed_kmh": 800,
             "cpu_time_limit_ms": 1000,
-            "lock_time_limit_ms": 500,      
+            "lock_time_limit_ms": 500,
             "warning_count_threshold": 5
         },
         "signatures": {
+            "overtime_schedule": [
+                {
+                    "user": "thanh.nguyen",
+                    "date": "2023-12-24",
+                    "start": "22:00",
+                    "end": "23:59",
+                    "reason": "Bao tri he thong dem Noel"
+                },
+                {
+                    "user": "anh.le",
+                    "date": "2023-12-31",
+                    "start": "00:00",
+                    "end": "04:00",
+                    "reason": "Truc Tet Duong Lich"
+                },
+                {
+                    "user": "le.cong.huynh",
+                    "date": "2025-12-20",
+                    "start": "01:00",
+                    "end": "05:00",
+                    "reason": "bao tri"
+                }
+            ],
             "sqli_keywords": [
                 "UNION SELECT",
                 "UNION ALL SELECT",
@@ -90,17 +126,17 @@
                 "UPDATEXML",
                 "EXTRACTVALUE",
                 "WHERE 1=1",
-                "GTID_SUBSET",              
-                "JSON_KEYS",                
-                "NAME_CONST",               
-                "UUID_TO_BIN",              
-                "LOAD_FILE",                
-                "INTO OUTFILE",             
-                "INTO DUMPFILE",            
-                "mysql.innodb_table_stats", 
-                "JSON_ARRAYAGG",            
-                "MAKE_SET",                 
-                "EXPORT_SET",               
+                "GTID_SUBSET",
+                "JSON_KEYS",
+                "NAME_CONST",
+                "UUID_TO_BIN",
+                "LOAD_FILE",
+                "INTO OUTFILE",
+                "INTO DUMPFILE",
+                "mysql.innodb_table_stats",
+                "JSON_ARRAYAGG",
+                "MAKE_SET",
+                "EXPORT_SET",
                 "/*!",
                 "1.e("
             ],
@@ -185,8 +221,8 @@
             ]
         },
         "settings": {
-            "late_night_start": "22:00:00",
-            "late_night_end": "05:00:00",
+            "late_night_start": "20:00:00",
+            "late_night_end": "06:00:00",
             "sensitive_allowed_users": [
                 "hung.the.vu",
                 "thanh.le",
@@ -204,8 +240,8 @@
                 "quy.co.anh.mai",
                 "ong.nam.tran"
             ],
-            "sensitive_safe_hours_start": 8,
-            "sensitive_safe_hours_end": 17,
+            "sensitive_safe_hours_start": 7,
+            "sensitive_safe_hours_end": 20,
             "geoip_db_path": "engine/geoip/GeoLite2-City.mmdb"
         }
     }

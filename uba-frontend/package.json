@@ -27,6 +27,7 @@
     "react": "^19.1.1",
     "react-day-picker": "^9.11.1",
     "react-dom": "^19.1.1",
+    "react-is": "^19.2.1",
     "react-router-dom": "^7.9.5",
     "react-simple-maps": "^3.0.0",
     "recharts": "^3.5.1",

@@ -217,9 +217,32 @@ def aggregate_violations(violation_list):
 def send_email_thread_worker(summary_data):
     """Hàm worker chạy trong thread riêng để gửi email thật."""
     try:
-        # 1. GỌI HÀM GOM NHÓM - summary_data (raw list) -> aggregated_data (grouped list)
+        # --- BƯỚC 1: ĐỌC CẤU HÌNH ĐỘNG TỪ JSON ---
+        # Mỗi lần gửi mail sẽ đọc lại file config mới nhất
+        current_config = load_config()
+        email_settings = current_config.get("email_alert_config", {})
+
+        # Kiểm tra xem tính năng email có được bật không
+        if not email_settings.get("enable_email_alerts", True):
+            logger.info("🚫 Email alerts are disabled in configuration.")
+            return
+
+        # Lấy thông tin đăng nhập
+        smtp_server = email_settings.get("smtp_server")
+        smtp_port = email_settings.get("smtp_port")
+        sender_email = email_settings.get("sender_email")
+        sender_password = email_settings.get("sender_password")
+        to_recipients = email_settings.get("to_recipients", [])
+        bcc_recipients = email_settings.get("bcc_recipients", [])
+
+        if not sender_email or not sender_password or not to_recipients:
+            logger.warning("⚠️ Email configuration is missing in engine_config.json. Skipping alert.")
+            return
+
+        # --- BƯỚC 2: GOM NHÓM DỮ LIỆU ---
         aggregated_data = aggregate_violations(summary_data)
-        # 2. Tạo nội dung Text (Fallback)
+        
+        # --- BƯỚC 3: TẠO NỘI DUNG TEXT (Fallback) ---
         text_content = "[UEBA ALERT]: Detected abnormal behavior:\n\n"
         for item in aggregated_data:
             text_content += f"⚠ {item['title']} ({item['count']} events)\n"
@@ -229,32 +252,32 @@ def send_email_thread_worker(summary_data):
 
         text_content += "──────────────────────────────\nPlease check Dashboard for details."
 
-        # 3. Tạo nội dung HTML
+        # --- BƯỚC 4: TẠO NỘI DUNG HTML ---
         html_content = generate_html_alert(aggregated_data)
 
-        # 4. Tiêu đề email
+        # --- BƯỚC 5: GỬI EMAIL ---
         email_subject = f"[UEBA ALERT] Detect {len(aggregated_data)} type/s of abnormal behavior"
 
-        # 5. Sending
+        # Gọi hàm gửi email với các tham số lấy từ config JSON
         success = send_email_alert(
             subject=email_subject,
             text_content=text_content,
             html_content=html_content,
-            to_recipients=ALERT_EMAIL_SETTINGS["to_recipients"],
-            smtp_server=ALERT_EMAIL_SETTINGS["smtp_server"],
-            smtp_port=ALERT_EMAIL_SETTINGS["smtp_port"],
-            sender_email=ALERT_EMAIL_SETTINGS["sender_email"],
-            sender_password=ALERT_EMAIL_SETTINGS["sender_password"],
-            bcc_recipients=ALERT_EMAIL_SETTINGS["bcc_recipients"]
+            to_recipients=to_recipients,      # Lấy từ JSON
+            smtp_server=smtp_server,          # Lấy từ JSON
+            smtp_port=int(smtp_port),         # Lấy từ JSON (đảm bảo là int)
+            sender_email=sender_email,        # Lấy từ JSON
+            sender_password=sender_password,  # Lấy từ JSON
+            bcc_recipients=bcc_recipients     # Lấy từ JSON
         )
 
         if success is True:
-            logger.info("--> [Security Alert Triggered] Send successfully.")
+            logger.info(f"--> [Security Alert Triggered] Sent successfully to {len(to_recipients)} recipients.")
         else:
             logger.error(f"--> [Security Alert] Send failed: {success}")
 
     except Exception as e:
-        logger.error(f"--> [Security Alert] Exception error: {e}")
+        logger.error(f"--> [Security Alert] Exception error: {e}", exc_info=True)
 
 def handle_active_responses(results: dict):
     """

@@ -270,73 +270,73 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         return False, f"Đã xảy ra lỗi khi lưu phản hồi: {e}"
 
         
-def update_config_file(new_configs: dict):
-    """
-    Đọc file config.py, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
+# def update_config_file(new_configs: dict):
+#     """
+#     Đọc file config.py, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
 
-    Args:
-        new_configs (dict): Một dictionary chứa các giá trị mới cần cập nhật.
+#     Args:
+#         new_configs (dict): Một dictionary chứa các giá trị mới cần cập nhật.
 
-    Returns:
-        tuple: (bool, str) - (Thành công/Thất bại, Thông báo)
-    """
-    config_path = 'config.py' # Đường dẫn đến file config.py trong cùng thư mục
-    try:
-        # Đọc tất cả các dòng của file vào một danh sách
-        with open(config_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+#     Returns:
+#         tuple: (bool, str) - (Thành công/Thất bại, Thông báo)
+#     """
+#     config_path = 'config.py' # Đường dẫn đến file config.py trong cùng thư mục
+#     try:
+#         # Đọc tất cả các dòng của file vào một danh sách
+#         with open(config_path, 'r', encoding='utf-8') as f:
+#             lines = f.readlines()
 
-        new_lines = []
-        # Lặp qua từng dòng để xử lý
-        for line in lines:
-            # Dùng regex để tìm các dòng gán giá trị mặc định
-            # Ví dụ: LATE_NIGHT_START_TIME_DEFAULT = time(0, 0)
-            match = re.match(r'^([A-Z_]+_DEFAULT)\s*=\s*(.*)', line)
+#         new_lines = []
+#         # Lặp qua từng dòng để xử lý
+#         for line in lines:
+#             # Dùng regex để tìm các dòng gán giá trị mặc định
+#             # Ví dụ: LATE_NIGHT_START_TIME_DEFAULT = time(0, 0)
+#             match = re.match(r'^([A-Z_]+_DEFAULT)\s*=\s*(.*)', line)
             
-            # Nếu dòng hiện tại là một dòng gán giá trị mặc định
-            if match:
-                var_name = match.group(1) # Lấy tên biến, ví dụ: LATE_NIGHT_START_TIME_DEFAULT
+#             # Nếu dòng hiện tại là một dòng gán giá trị mặc định
+#             if match:
+#                 var_name = match.group(1) # Lấy tên biến, ví dụ: LATE_NIGHT_START_TIME_DEFAULT
                 
-                # Nếu biến này có trong danh sách cần cập nhật
-                if var_name in new_configs:
-                    new_value = new_configs[var_name]
+#                 # Nếu biến này có trong danh sách cần cập nhật
+#                 if var_name in new_configs:
+#                     new_value = new_configs[var_name]
                     
-                    # Định dạng lại giá trị mới thành một chuỗi Python hợp lệ
-                    if isinstance(new_value, str):
-                        # Chuỗi phải được đặt trong dấu ngoặc kép
-                        new_line = f'{var_name} = r"{new_value}"\n' if '\\' in new_value else f'{var_name} = "{new_value}"\n'
-                    elif isinstance(new_value, dt_time):
-                        # Đối tượng time cần được tái tạo bằng time(...)
-                        new_line = f"{var_name} = dt_time({new_value.hour}, {new_value.minute}, {new_value.second})\n"
-                    elif isinstance(new_value, list):
-                        # str(my_list) sẽ tạo ra một chuỗi như "['item1', 'item2']" trên một dòng.
-                        new_line = f"{var_name} = {str(new_value)}\n"
-                    else:
-                        # Các kiểu dữ liệu khác (int, float)
-                        new_line = f'{var_name} = {new_value}\n'
+#                     # Định dạng lại giá trị mới thành một chuỗi Python hợp lệ
+#                     if isinstance(new_value, str):
+#                         # Chuỗi phải được đặt trong dấu ngoặc kép
+#                         new_line = f'{var_name} = r"{new_value}"\n' if '\\' in new_value else f'{var_name} = "{new_value}"\n'
+#                     elif isinstance(new_value, dt_time):
+#                         # Đối tượng time cần được tái tạo bằng time(...)
+#                         new_line = f"{var_name} = dt_time({new_value.hour}, {new_value.minute}, {new_value.second})\n"
+#                     elif isinstance(new_value, list):
+#                         # str(my_list) sẽ tạo ra một chuỗi như "['item1', 'item2']" trên một dòng.
+#                         new_line = f"{var_name} = {str(new_value)}\n"
+#                     else:
+#                         # Các kiểu dữ liệu khác (int, float)
+#                         new_line = f'{var_name} = {new_value}\n'
                     
-                    # Thêm dòng mới đã được định dạng vào danh sách `new_lines`
-                    new_lines.append(new_line)
-                    print(f"Đang cập nhật {var_name}...")
-                else:
-                    # Nếu biến này không cần cập nhật, giữ nguyên dòng cũ
-                    new_lines.append(line)
-            else:
-                # Giữ nguyên các dòng không phải là dòng gán giá trị (ví dụ: comment, import,...)
-                new_lines.append(line)
+#                     # Thêm dòng mới đã được định dạng vào danh sách `new_lines`
+#                     new_lines.append(new_line)
+#                     print(f"Đang cập nhật {var_name}...")
+#                 else:
+#                     # Nếu biến này không cần cập nhật, giữ nguyên dòng cũ
+#                     new_lines.append(line)
+#             else:
+#                 # Giữ nguyên các dòng không phải là dòng gán giá trị (ví dụ: comment, import,...)
+#                 new_lines.append(line)
 
-        # Ghi đè lại toàn bộ file config.py với nội dung mới
-        # Chế độ 'w' (write) sẽ tự động xóa nội dung cũ trước khi ghi
-        with open(config_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+#         # Ghi đè lại toàn bộ file config.py với nội dung mới
+#         # Chế độ 'w' (write) sẽ tự động xóa nội dung cũ trước khi ghi
+#         with open(config_path, 'w', encoding='utf-8') as f:
+#             f.writelines(new_lines)
             
-        return True, "Lưu cấu hình mặc định thành công!"
+#         return True, "Lưu cấu hình mặc định thành công!"
 
-    except Exception as e:
-        # Bắt lỗi và in ra để dễ dàng gỡ lỗi
-        import traceback
-        traceback.print_exc()
-        return False, f"Lỗi khi lưu cấu hình: {e}"
+#     except Exception as e:
+#         # Bắt lỗi và in ra để dễ dàng gỡ lỗi
+#         import traceback
+#         traceback.print_exc()
+#         return False, f"Lỗi khi lưu cấu hình: {e}"
 
 
 def save_logs_to_parquet(records: list, source_dbms: str) -> int:
@@ -634,17 +634,32 @@ def check_insider_threats(df, rule_config):
     # Rule 6. Sensitive Table Access 
     idx_sensitive = []
     sensitive_tables = signatures.get('sensitive_tables', [])
-    allowed_users = settings.get('sensitive_allowed_users', [])    
+    allowed_users = settings.get('sensitive_allowed_users', [])   
+    safe_start = settings.get('sensitive_safe_hours_start', 8)
+    safe_end = settings.get('sensitive_safe_hours_end', 17) 
     # Hàm check logic
     def is_violation(row):
-        # Nếu user nằm trong whitelist thì bỏ qua
-        if row['user'] in allowed_users: return False
-        
-        # Check nếu query chứa bảng nhạy cảm
+        # 1. Kiểm tra xem query có đụng vào bảng nhạy cảm không?
+        is_sensitive_query = False
         for tbl in sensitive_tables:
             if tbl in str(row['query']):
-                return True # Vi phạm: User không được phép truy cập bảng này
-        return False
+                is_sensitive_query = True
+                break
+        if not is_sensitive_query:
+            return False # Không vi phạm vì không đụng bảng nhạy cảm
+        # 2. Kiểm tra User
+        if row['user'] not in allowed_users:
+            return True # Vi phạm nghiêm trọng: User không có quyền mà truy cập
+        # 3. Kiểm tra Thời gian (Dành cho User ĐÃ CÓ QUYỀN)
+        # Ngay cả khi có quyền, nếu truy cập ngoài giờ hành chính cũng bị coi là bất thường
+        try:
+            hour = row['timestamp'].hour
+            # Nếu giờ hiện tại nhỏ hơn giờ bắt đầu HOẶC lớn hơn giờ kết thúc
+            if hour < safe_start or hour >= safe_end:
+                return True # Vi phạm: User có quyền nhưng truy cập sai giờ (ví dụ: kế toán truy cập bảng lương lúc 3h sáng)
+        except:
+            pass
+        return False # Hợp lệ (Đúng người, đúng giờ)
     if sensitive_tables:
         sensitive_violation = df[df.apply(is_violation, axis=1)]
         idx_sensitive.extend(sensitive_violation.index.tolist())   
@@ -654,19 +669,66 @@ def check_insider_threats(df, rule_config):
     # Logic: Truy cập ngoài giờ hành chính (22h - 5h sáng)
     idx_latenight = []
     try:
+        # Lấy cấu hình giờ khuya
         s_str = settings.get('late_night_start', '22:00:00')
         e_str = settings.get('late_night_end', '05:00:00')
-        start_time = dt_time.fromisoformat(s_str)
-        end_time = dt_time.fromisoformat(e_str)
-        def check_time(ts):
-            t = ts.time()
-            if start_time <= end_time: return start_time <= t <= end_time
-            else: return start_time <= t or t <= end_time # Qua đêm (ví dụ 22h -> 5h)
-        late_night_logs = df[df['timestamp'].apply(check_time)]
-        # Có thể lọc bớt các user chạy job đêm nếu cần
+        start_time_limit = dt_time.fromisoformat(s_str)
+        end_time_limit = dt_time.fromisoformat(e_str)
+
+        # Lấy danh sách đăng ký làm thêm giờ/bảo trì
+        overtime_schedule = signatures.get('overtime_schedule', [])
+
+        def is_late_night_violation(row):
+            ts = row['timestamp']
+            current_time = ts.time()
+            current_date_str = ts.strftime('%Y-%m-%d')
+            user_name = row['user']
+
+            # 1. Kiểm tra xem có phải giờ khuya không?
+            is_night = False
+            if start_time_limit <= end_time_limit:
+                # Ví dụ: 01:00 đến 05:00 (cùng ngày)
+                is_night = start_time_limit <= current_time <= end_time_limit
+            else:
+                # Ví dụ: 22:00 đến 05:00 (qua đêm)
+                is_night = start_time_limit <= current_time or current_time <= end_time_limit
+            
+            if not is_night:
+                return False # Không phải giờ khuya -> Không vi phạm
+
+            # 2. Nếu là giờ khuya, kiểm tra xem có lịch trực/bảo trì hợp lệ không?
+            if overtime_schedule:
+                for shift in overtime_schedule:
+                    # Check đúng User và đúng Ngày
+                    if shift.get('user') == user_name and shift.get('date') == current_date_str:
+                        try:
+                            # Parse giờ cho phép
+                            allowed_start = dt_time.fromisoformat(shift['start'])
+                            allowed_end = dt_time.fromisoformat(shift['end'])
+                            
+                            # Check xem log hiện tại có nằm trong khung giờ xin phép không
+                            # Lưu ý: Xử lý logic qua đêm cho khung giờ xin phép (nếu cần)
+                            is_authorized = False
+                            if allowed_start <= allowed_end:
+                                is_authorized = allowed_start <= current_time <= allowed_end
+                            else:
+                                is_authorized = allowed_start <= current_time or current_time <= allowed_end
+                            
+                            if is_authorized:
+                                return False # Đã được cấp phép -> Bỏ qua, không báo lỗi
+                        except ValueError:
+                            continue # Lỗi format config thì bỏ qua dòng này
+
+            # 3. Nếu là giờ khuya và không có giấy phép -> Vi phạm
+            return True
+
+        # Áp dụng logic lọc
+        late_night_logs = df[df.apply(is_late_night_violation, axis=1)]
         idx_latenight.extend(late_night_logs.index.tolist())
-    except:
-        pass 
+
+    except Exception as e:
+        logging.error(f"Rule 7 Logic Error: {e}")
+    
     if idx_latenight: anomalies['Late Night Query'] = list(set(idx_latenight))
     
     # Rule 8. Ghost Account Creation
