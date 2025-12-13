@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", date
 
 # --- CẤU HÌNH ---
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_creator.state")
-CSV_OUTPUT_FILE = "final_clean_dataset_30d.csv"
+CSV_OUTPUT_FILE = "final_new_dataset_30d.csv"
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0

@@ -14,10 +14,11 @@ class EnhancedSimulationScheduler:
     work patterns, and realistic timing constraints
     """
     
-    def __init__(self, start_time, agents, translator=None, db_state=None):
+    def __init__(self, start_time, agents, sql_generator=None, db_state=None):
         self.current_time = start_time
         self.agents = agents
-        self.translator = translator or EnhancedSQLTranslator(db_state)
+        self.sql_generator = sql_generator
+        self.translator = EnhancedSQLTranslator(db_state)
         
         # Agent cooldowns - when each agent can act next
         self.agent_cooldowns = {}

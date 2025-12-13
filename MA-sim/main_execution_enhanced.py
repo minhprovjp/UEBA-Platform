@@ -20,6 +20,8 @@ from translator import EnhancedSQLTranslator
 from stats_utils import StatisticalGenerator
 from obfuscator import SQLObfuscator
 from enriched_sql_library import EnrichedSQLLibrary  # NEW: Fixed enhanced query library
+from enhanced_scenarios import EnhancedScenarioManager  # NEW: Structured attack scenarios
+from enhanced_scheduler import EnhancedSimulationScheduler  # NEW: Advanced scheduling
 
 # --- CẤU HÌNH TURBO (Enhanced for all users) ---
 NUM_THREADS = 20           # Increased threads to handle more users
@@ -258,7 +260,9 @@ class EnhancedSQLGenerator:
     def __init__(self, db_state=None):
         self.sql_library = EnrichedSQLLibrary()
         self.translator = EnhancedSQLTranslator(db_state)
+        self.scenario_manager = EnhancedScenarioManager(db_state)  # NEW: Scenario management
         self.query_cache = {}  # Cache queries by role and database
+        self.active_scenarios = {}  # Track active attack scenarios by agent
     
     def get_queries_for_role_and_database(self, role, database, complexity='ALL'):
         """Get appropriate queries for role and database combination"""
@@ -313,12 +317,47 @@ class EnhancedSQLGenerator:
             else:
                 return "SELECT 1"
     
-    def generate_malicious_sql(self, attack_type='sql_injection'):
-        """Generate malicious SQL for security testing"""
+    def generate_malicious_sql(self, attack_type='sql_injection', agent_id=None, intent=None):
+        """Generate malicious SQL using structured scenarios or fallback methods"""
+        
+        # NEW: Use structured scenarios for sophisticated attacks
+        if agent_id and intent and intent.get('attack_chain'):
+            attack_chain = intent.get('attack_chain')
+            
+            # Check if agent has an active scenario
+            if agent_id in self.active_scenarios:
+                scenario_name, scenario_steps, current_step = self.active_scenarios[agent_id]
+                
+                # Execute current step
+                if current_step < len(scenario_steps):
+                    step_intent = scenario_steps[current_step]
+                    self.active_scenarios[agent_id] = (scenario_name, scenario_steps, current_step + 1)
+                    
+                    # Generate SQL for this scenario step
+                    return self.translator.translate(step_intent)
+                else:
+                    # Scenario completed, remove from active scenarios
+                    del self.active_scenarios[agent_id]
+            
+            # Start new scenario for rule-bypassing attacks
+            if attack_chain in ['work_hours_bypass', 'network_bypass', 'lunch_exploitation', 
+                              'holiday_backdoor', 'cultural_exploitation']:
+                scenario_name, scenario_steps = self.scenario_manager.get_random_scenario()
+                if scenario_steps:
+                    self.active_scenarios[agent_id] = (scenario_name, scenario_steps, 0)
+                    print(f"🚨 Starting scenario '{scenario_name}' for agent {agent_id}")
+                    
+                    # Execute first step
+                    if scenario_steps:
+                        step_intent = scenario_steps[0]
+                        self.active_scenarios[agent_id] = (scenario_name, scenario_steps, 1)
+                        return self.translator.translate(step_intent)
+        
+        # Fallback to original malicious SQL generation
         try:
             return self.translator._generate_malicious_sql({'attack_chain': attack_type}, {})
         except:
-            return f"SELECT * FROM {attack_type}_attack"  # Fallback malicious query
+            return f"SELECT * FROM {attack_type}_attack"  # Final fallback
 
 def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
     """Enhanced worker with enriched SQL library and 7-database support"""
@@ -437,7 +476,7 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                     if current_date in vietnamese_holidays:
                         pass  # Bypass holiday restriction
                 
-                # Generate sophisticated attack SQL
+                # Generate sophisticated attack SQL using scenarios
                 if bypass_technique:
                     # Use advanced attack patterns for rule bypassing
                     attack_types = ['advanced_sqli', 'privilege_escalation', 'data_exfiltration', 'backdoor_creation']
@@ -447,7 +486,8 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                     attack_types = ['sql_injection', 'privilege_escalation', 'data_exfiltration']
                     attack_type = random.choice(attack_types)
                 
-                sql = sql_generator.generate_malicious_sql(attack_type)
+                # NEW: Pass agent ID and intent for scenario-based attacks
+                sql = sql_generator.generate_malicious_sql(attack_type, agent_template.agent_id, intent)
                 
                 # Enhanced database targeting for bypasses
                 if bypass_technique == "network_segmentation_bypass":
@@ -595,6 +635,9 @@ def main():
     db_state = user_config.get("db_state", {})
     sql_generator = EnhancedSQLGenerator(db_state)
     
+    # NEW: Initialize enhanced scheduler for sophisticated time management
+    enhanced_scheduler = None
+    
     # Create agent pool with Vietnamese users
     pool_agents = []
     insider_count = 0
@@ -666,11 +709,17 @@ def main():
     v_clock = VirtualClock(START_DATE, SIMULATION_SPEED_UP)
     stop_event = threading.Event()
     
-    print(f"\n🚀 Starting enhanced simulation with ALL USERS active...")
+    # NEW: Initialize enhanced scheduler for better time management
+    enhanced_scheduler = EnhancedSimulationScheduler(START_DATE, pool_agents, sql_generator, db_state)
+    
+    print(f"\n🚀 Starting enhanced simulation with INTEGRATED SCHEDULER...")
     print(f"   Total Users: {len(pool_agents)}")
     print(f"   Simulation Speed: {SIMULATION_SPEED_UP}x")
     print(f"   Real Time Duration: {TOTAL_REAL_SECONDS} seconds ({TOTAL_REAL_SECONDS/60:.1f} minutes)")
     print(f"   Simulated Time Duration: {TOTAL_REAL_SECONDS * SIMULATION_SPEED_UP / 3600:.1f} hours")
+    print(f"   🆕 Enhanced Scheduler: Active")
+    print(f"   🆕 Structured Scenarios: Active")
+    print(f"   🆕 Rule-Bypassing Attacks: Active")
     
     # Create a thread for each user to ensure all users are active
     print(f"\n👥 Creating threads for all {len(pool_agents)} users...")
@@ -709,8 +758,10 @@ def main():
         print(f"✅ All {len(threads)} user threads started!")
         print(f"💡 Press Ctrl+C to stop the simulation gracefully")
         
-        # Main monitoring loop
+        # Main monitoring loop with enhanced scheduler integration
         last_report = time.time()
+        last_scheduler_tick = time.time()
+        
         while (time.time() - start_run) < TOTAL_REAL_SECONDS and not stop_event.is_set():
             # Sleep in smaller intervals to be more responsive to Ctrl+C
             for _ in range(10):  # Sleep 1 second total in 0.1s intervals
@@ -721,6 +772,16 @@ def main():
             if stop_event.is_set():
                 break
             
+            # NEW: Enhanced scheduler tick every 5 seconds for scenario management
+            if time.time() - last_scheduler_tick >= 5:
+                try:
+                    scheduler_logs = enhanced_scheduler.tick(5)  # 5-minute tick
+                    if scheduler_logs and random.random() < 0.1:  # Log 10% of scheduler activities
+                        print(f"📅 Scheduler: {len(scheduler_logs)} activities processed")
+                except Exception as e:
+                    pass  # Scheduler is supplementary, don't break main simulation
+                last_scheduler_tick = time.time()
+            
             # Report progress every 30 seconds
             if time.time() - last_report >= 30:
                 curr_sim = v_clock.get_current_sim_time()
@@ -728,12 +789,17 @@ def main():
                 elapsed = time.time() - start_run
                 remaining = TOTAL_REAL_SECONDS - elapsed
                 
-                print(f"\n📊 Progress Report:")
+                # NEW: Get scheduler statistics
+                scheduler_stats = enhanced_scheduler.get_simulation_stats()
+                
+                print(f"\n📊 Enhanced Progress Report:")
                 print(f"   Elapsed: {elapsed/60:.1f}min | Remaining: {remaining/60:.1f}min")
                 print(f"   Active Threads: {active_threads}/{len(threads)}")
                 print(f"   Total Queries: {total_queries_sent:,}")
                 print(f"   Query Rate: {total_queries_sent/elapsed:.1f}/sec")
                 print(f"   Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
+                print(f"   📅 Scheduler Active Agents: {scheduler_stats.get('active_agents', 0)}")
+                print(f"   🚨 Active Scenarios: {len(sql_generator.active_scenarios)}")
                 print(f"💡 Press Ctrl+C to stop gracefully")
                 
                 last_report = time.time()

@@ -23,7 +23,7 @@ class DatasetAnalyzer:
     """Comprehensive dataset analyzer for Vietnamese Enterprise UBA simulation"""
     
     def __init__(self, dataset_file=None):
-        self.dataset_file = dataset_file or "final_clean_dataset_30d.csv"
+        self.dataset_file = dataset_file or "final_test_dataset_30d.csv"
         self.df = None
         self.quality_score = 0
         self.issues = []
@@ -292,7 +292,16 @@ class DatasetAnalyzer:
         
         # Check timestamp validity
         if 'timestamp' in self.df.columns:
-            future_timestamps = self.df['timestamp'] > datetime.now()
+            # Handle timezone-aware comparison
+            if self.df['timestamp'].dt.tz is not None:
+                # Timestamps are timezone-aware, use UTC for comparison
+                from datetime import timezone
+                current_time = datetime.now(timezone.utc)
+            else:
+                # Timestamps are timezone-naive
+                current_time = datetime.now()
+            
+            future_timestamps = self.df['timestamp'] > current_time
             if future_timestamps.any():
                 validity_score -= 10
                 self.issues.append("Future timestamps detected")

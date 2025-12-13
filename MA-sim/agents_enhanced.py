@@ -406,6 +406,11 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
             "common_names": ["nguyen_van", "tran_thi", "le_minh", "pham_thi", "hoang_van"]
         }
         
+        # NEW: Scenario integration
+        self.active_scenario = None
+        self.scenario_step = 0
+        self.scenario_success_rate = 0.0
+        
     def get_next_action(self):
         """Get next action for the malicious agent - compatibility method for simulation runner"""
         return self.step()
@@ -464,6 +469,9 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
         
         target_db = random.choice(target_databases)
         
+        # Track bypass technique for reaction method
+        self.last_bypass_technique = bypass_technique
+        
         intent = {
             "user": self._get_attack_username(),
             "role": attack_role,
@@ -482,7 +490,8 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
             # NEW: Rule-bypassing metadata
             "bypass_technique": bypass_technique,
             "timing_context": timing_context,
-            "evasion_level": self.detection_avoidance
+            "evasion_level": self.detection_avoidance,
+            "scenario_success_rate": getattr(self, 'scenario_success_rate', 0.0)
         }
         
         return intent
@@ -524,17 +533,29 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
         }
     
     def react(self, success):
-        """Enhanced reaction with attack adaptation"""
+        """Enhanced reaction with attack adaptation and scenario tracking"""
         if success:
             self.attack_success_rate = min(1.0, self.attack_success_rate + 0.1)
+            self.scenario_success_rate = min(1.0, self.scenario_success_rate + 0.1)
+            
             # Successful attacks may reduce obfuscation (overconfidence)
             if random.random() < 0.3:
                 self.obfuscation_mode = False
+                
+            # Track successful bypass techniques
+            if hasattr(self, 'last_bypass_technique') and self.last_bypass_technique:
+                self.successful_bypasses.add(self.last_bypass_technique)
         else:
             self.attack_success_rate = max(0.0, self.attack_success_rate - 0.05)
+            self.scenario_success_rate = max(0.0, self.scenario_success_rate - 0.05)
+            
             # Failed attacks increase obfuscation and detection avoidance
             self.obfuscation_mode = True
             self.detection_avoidance = min(1.0, self.detection_avoidance + 0.1)
+            
+            # Track detected techniques
+            if hasattr(self, 'last_bypass_technique') and self.last_bypass_technique:
+                self.detected_techniques.add(self.last_bypass_technique)
             
             # Advanced attackers adapt their chains after failures
             if self.skill_level == "advanced" and random.random() < 0.4:
