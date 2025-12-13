@@ -16,15 +16,16 @@ from concurrent.futures import ThreadPoolExecutor
 
 from agents_enhanced import EnhancedEmployeeAgent, EnhancedMaliciousAgent
 from executor import SQLExecutor
+from translator import EnhancedSQLTranslator
 from stats_utils import StatisticalGenerator
 from obfuscator import SQLObfuscator
-from corrected_enhanced_sql_library import CORRECTED_SQL_LIBRARY  # NEW: Fixed enhanced query library
+from enriched_sql_library import EnrichedSQLLibrary  # NEW: Fixed enhanced query library
 
 # --- CẤU HÌNH TURBO (Enhanced for all users) ---
 NUM_THREADS = 20           # Increased threads to handle more users
 SIMULATION_SPEED_UP = 1800 # 30 minutes simulated per 1 second real (slower for better coverage)
 START_DATE = datetime(2025, 12, 1, 5, 0, 0)
-TOTAL_REAL_SECONDS = 3600  # Run for 1 hour real time (30 hours simulated time)
+TOTAL_REAL_SECONDS = 300  # Run for 1 hour real time (30 hours simulated time)
 DB_PASSWORD = "password"
 
 # User rotation settings for comprehensive coverage
@@ -43,7 +44,7 @@ ENHANCED_DATABASES = [
     'support_db', 'hr_db', 'admin_db'
 ]
 
-# Role to database mapping for enhanced system
+# Role to database mapping for enhanced system (matches actual permissions)
 ROLE_DATABASE_ACCESS = {
     'SALES': ['sales_db', 'marketing_db', 'support_db'],
     'MARKETING': ['marketing_db', 'sales_db', 'support_db'],
@@ -51,7 +52,7 @@ ROLE_DATABASE_ACCESS = {
     'HR': ['hr_db', 'finance_db', 'admin_db'],
     'FINANCE': ['finance_db', 'sales_db', 'hr_db', 'inventory_db'],
     'DEV': ENHANCED_DATABASES,  # Full access
-    'MANAGEMENT': ENHANCED_DATABASES,  # Full access
+    'MANAGEMENT': ['sales_db', 'hr_db', 'finance_db', 'marketing_db', 'support_db', 'inventory_db', 'admin_db'],
     'ADMIN': ENHANCED_DATABASES,  # Full access
     'BAD_ACTOR': ['sales_db', 'marketing_db'],  # Limited access for insider threats
     'VULNERABLE': ['sales_db']  # Very limited access
@@ -252,10 +253,11 @@ def configure_anomaly_scenario(scenario="balanced"):
         print(f"Available scenarios: {list(scenarios.keys())}")
 
 class EnhancedSQLGenerator:
-    """Enhanced SQL generator using the enriched query library"""
+    """Enhanced SQL generator using both enriched query library and translator"""
     
-    def __init__(self):
-        self.sql_library = CORRECTED_SQL_LIBRARY
+    def __init__(self, db_state=None):
+        self.sql_library = EnrichedSQLLibrary()
+        self.translator = EnhancedSQLTranslator(db_state)
         self.query_cache = {}  # Cache queries by role and database
     
     def get_queries_for_role_and_database(self, role, database, complexity='ALL'):
@@ -269,35 +271,54 @@ class EnhancedSQLGenerator:
         return self.query_cache[cache_key]
     
     def generate_sql_for_intent(self, intent, user_role):
-        """Generate SQL based on intent and user role using enriched library"""
+        """Generate SQL based on intent and user role using both enriched library and translator"""
         action = intent.get('action', 'SELECT')
+        target_database = intent.get('target_database', 'sales_db')
         
-        # Determine appropriate database based on role and action
-        accessible_databases = ROLE_DATABASE_ACCESS.get(user_role, ['sales_db'])
-        target_database = random.choice(accessible_databases)
+        # First try using the enhanced translator for better context-aware SQL
+        try:
+            sql = self.translator.translate(intent)
+            if sql and not sql.startswith("SELECT 'Missing") and not sql.startswith("SELECT 'Error"):
+                return sql
+        except Exception as e:
+            # Fall back to library-based generation
+            pass
         
-        # Determine query complexity based on role and action
-        complexity = 'SIMPLE'
-        if user_role in ['MANAGEMENT', 'ADMIN']:
-            complexity = random.choice(['MEDIUM', 'COMPLEX'])
-        elif user_role in ['FINANCE', 'DEV']:
-            complexity = random.choice(['SIMPLE', 'MEDIUM'])
+        # Fallback to enriched library - use enhanced SQL templates
+        from enhanced_sql_templates import EnhancedSQLTemplates
+        templates = EnhancedSQLTemplates()
         
-        # Get appropriate queries
-        queries = self.get_queries_for_role_and_database(user_role, target_database, complexity)
+        # Get appropriate queries for the specific database and role
+        queries = templates.get_queries_by_database_and_role(target_database, user_role)
         
         if queries:
             sql = random.choice(queries)
-            # Add database context to intent
-            intent['target_database'] = target_database
             return sql
         else:
-            # Fallback to basic query if no enhanced queries available
-            return f"SELECT COUNT(*) FROM {target_database}.customers"
+            # Final fallback to basic safe query based on database
+            if target_database == 'sales_db':
+                return "SELECT COUNT(*) FROM sales_db.customers WHERE status = 'active'"
+            elif target_database == 'marketing_db':
+                return "SELECT COUNT(*) FROM marketing_db.campaigns WHERE status = 'active'"
+            elif target_database == 'support_db':
+                return "SELECT COUNT(*) FROM support_db.support_tickets WHERE status = 'open'"
+            elif target_database == 'hr_db':
+                return "SELECT COUNT(*) FROM hr_db.employees WHERE status = 'active'"
+            elif target_database == 'finance_db':
+                return "SELECT COUNT(*) FROM finance_db.invoices WHERE status = 'paid'"
+            elif target_database == 'inventory_db':
+                return "SELECT COUNT(*) FROM inventory_db.inventory_levels WHERE current_stock > 0"
+            elif target_database == 'admin_db':
+                return "SELECT COUNT(*) FROM admin_db.system_logs WHERE log_level = 'info'"
+            else:
+                return "SELECT 1"
     
     def generate_malicious_sql(self, attack_type='sql_injection'):
         """Generate malicious SQL for security testing"""
-        return random.choice(self.sql_library.get_malicious_queries_enriched(attack_type))
+        try:
+            return self.translator._generate_malicious_sql({'attack_chain': attack_type}, {})
+        except:
+            return f"SELECT * FROM {attack_type}_attack"  # Fallback malicious query
 
 def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
     """Enhanced worker with enriched SQL library and 7-database support"""
@@ -311,52 +332,178 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
     
     while not stop_event.is_set():
         try:
+            # Check stop event more frequently
+            if stop_event.is_set():
+                break
+                
             # Get virtual time
             sim_time = v_clock.get_current_sim_time()
             hour = sim_time.hour
 
-            # Business hours and weekday check (unless malicious)
+            # Strict Vietnamese business hours enforcement (unless malicious)
             if not agent_template.is_malicious:
                 # Check if it's weekend (Saturday=5, Sunday=6)
                 day_of_week = sim_time.weekday()
                 if day_of_week >= 5:  # Weekend
-                    # Minimal weekend activity (20% chance for better coverage)
-                    if random.random() > 0.2:
-                        time.sleep(0.01)  # Shorter sleep for better responsiveness
+                    # Absolutely no weekend activity for normal employees
+                    time.sleep(0.1)
+                    continue
+                
+                # Check if it's a Vietnamese holiday
+                current_date = sim_time.date().isoformat()
+                vietnamese_holidays = [
+                    "2025-01-01",  # New Year
+                    "2025-01-29",  # Tet (Lunar New Year)
+                    "2025-04-30",  # Liberation Day
+                    "2025-05-01",  # Labor Day
+                    "2025-09-02"   # Independence Day
+                ]
+                if current_date in vietnamese_holidays:
+                    # No activity on Vietnamese holidays for normal employees
+                    time.sleep(0.1)
+                    continue
+                
+                # Strict business hours check (8AM-6PM with lunch break 12-1PM)
+                if not agent_template.is_work_hours(hour):
+                    # Absolutely no activity outside work hours for normal employees
+                    time.sleep(0.1)
+                    continue
+                
+                # Vietnamese lunch break patterns (more realistic)
+                # Traditional: 12-1PM strict break
+                # Extended: 11:30AM-1:30PM flexible break  
+                # Modern: Some activity during lunch but reduced
+                if 12 <= hour < 13:
+                    # Core lunch hour: 20% activity (some employees work through lunch)
+                    if random.random() > 0.20:
+                        time.sleep(0.05)
+                        continue
+                elif hour == 11 and sim_time.minute >= 30:
+                    # Late morning lunch (11:30-12:00): 40% activity
+                    if random.random() > 0.40:
+                        time.sleep(0.03)
+                        continue
+                elif hour == 13 and sim_time.minute < 30:
+                    # Extended lunch (1:00-1:30PM): 30% activity  
+                    if random.random() > 0.30:
+                        time.sleep(0.04)
                         continue
                 
-                # Check business hours activity level
+                # Check activity level during work hours
                 activity_level = agent_template.get_activity_level(hour)
-                if activity_level == 0.0:
-                    # Even during off-hours, allow some activity (10% chance)
-                    if random.random() > 0.1:
-                        time.sleep(0.01)
+                if activity_level < 0.5:  # During low-activity periods
+                    if random.random() > activity_level:
+                        time.sleep(0.02)
                         continue
-                # Reduce activity during low-activity periods but keep users active
-                elif activity_level < 0.5:
-                    if random.random() > (activity_level + 0.3):  # Boost activity level
-                        time.sleep(0.005)  # Very short sleep
+            else:
+                # Malicious agents can work outside hours but with very low probability
+                day_of_week = sim_time.weekday()
+                if day_of_week >= 5:  # Weekend
+                    if random.random() > 0.05:  # Only 5% chance on weekends
+                        time.sleep(0.1)
                         continue
+                
+                # Very low activity outside business hours for malicious agents
+                if not (8 <= hour < 18):  # Outside 8AM-6PM
+                    if random.random() > 0.1:  # Only 10% chance outside hours
+                        time.sleep(0.1)
+                        continue
+
+            # Check stop event before generating action
+            if stop_event.is_set():
+                break
 
             # Generate action intent
             intent = agent_template.step()
             if intent['action'] in ["START", "LOGOUT"]:
                 continue
 
-            # Generate SQL using enhanced library
+            # Enhanced malicious behavior with rule-bypassing
             if agent_template.is_malicious:
-                # Malicious agents use attack queries
-                attack_types = ['sql_injection', 'privilege_escalation', 'data_exfiltration']
-                attack_type = random.choice(attack_types)
+                # Check for rule-bypassing scenarios
+                bypass_technique = intent.get('bypass_technique')
+                timing_context = intent.get('timing_context')
+                
+                # Apply timing-based bypasses
+                if timing_context == "off_hours" and (hour < 8 or hour > 18):
+                    # Allow off-hours activity for sophisticated attackers
+                    pass  # Bypass work hours restriction
+                elif timing_context == "lunch_break" and (12 <= hour < 13):
+                    # Exploit lunch break low monitoring
+                    pass  # Bypass lunch break restriction
+                elif timing_context == "vietnamese_holiday":
+                    current_date = sim_time.date().isoformat()
+                    vietnamese_holidays = ["2025-01-01", "2025-01-29", "2025-04-30", "2025-05-01", "2025-09-02"]
+                    if current_date in vietnamese_holidays:
+                        pass  # Bypass holiday restriction
+                
+                # Generate sophisticated attack SQL
+                if bypass_technique:
+                    # Use advanced attack patterns for rule bypassing
+                    attack_types = ['advanced_sqli', 'privilege_escalation', 'data_exfiltration', 'backdoor_creation']
+                    attack_type = random.choice(attack_types)
+                else:
+                    # Standard attack patterns
+                    attack_types = ['sql_injection', 'privilege_escalation', 'data_exfiltration']
+                    attack_type = random.choice(attack_types)
+                
                 sql = sql_generator.generate_malicious_sql(attack_type)
-                intent['target_database'] = random.choice(ENHANCED_DATABASES)
+                
+                # Enhanced database targeting for bypasses
+                if bypass_technique == "network_segmentation_bypass":
+                    # Target high-value databases across network segments
+                    intent['target_database'] = random.choice(['hr_db', 'finance_db', 'admin_db'])
+                else:
+                    intent['target_database'] = random.choice(ENHANCED_DATABASES)
             else:
-                # Normal users use business queries
+                # Normal users use business queries - ensure they only access allowed databases
+                accessible_databases = ROLE_DATABASE_ACCESS.get(agent_template.role, ['sales_db'])
+                
+                # Map actions to appropriate databases to avoid permission failures
+                action = intent.get('action', 'SELECT')
+                if action in ['CREATE_ORDER', 'VIEW_ORDER', 'UPDATE_ORDER_STATUS', 'ADD_ITEM', 'SEARCH_ORDER', 'VIEW_CUSTOMER', 'SEARCH_CUSTOMER', 'UPDATE_CUSTOMER']:
+                    # Order and customer operations should only happen in sales_db
+                    if 'sales_db' in accessible_databases:
+                        intent['target_database'] = 'sales_db'
+                    else:
+                        intent['target_database'] = accessible_databases[0]
+                elif action in ['SEARCH_CAMPAIGN', 'VIEW_CAMPAIGN', 'UPDATE_CAMPAIGN', 'CREATE_CAMPAIGN', 'VIEW_LEADS', 'CREATE_LEAD', 'UPDATE_LEAD']:
+                    # Campaign and lead operations should only happen in marketing_db
+                    if 'marketing_db' in accessible_databases:
+                        intent['target_database'] = 'marketing_db'
+                    else:
+                        intent['target_database'] = accessible_databases[0]
+                elif action in ['VIEW_TICKET', 'CREATE_TICKET', 'UPDATE_TICKET', 'SEARCH_TICKET']:
+                    # Support operations should only happen in support_db
+                    if 'support_db' in accessible_databases:
+                        intent['target_database'] = 'support_db'
+                    else:
+                        intent['target_database'] = accessible_databases[0]
+                elif action in ['VIEW_EMPLOYEE', 'UPDATE_EMPLOYEE', 'CREATE_EMPLOYEE', 'SEARCH_EMPLOYEE', 'VIEW_PROFILE', 'CHECK_ATTENDANCE', 'UPDATE_SALARY']:
+                    # HR operations should only happen in hr_db
+                    if 'hr_db' in accessible_databases:
+                        intent['target_database'] = 'hr_db'
+                    else:
+                        intent['target_database'] = accessible_databases[0]
+                elif action in ['VIEW_INVOICE', 'CREATE_INVOICE', 'UPDATE_INVOICE', 'VIEW_EXPENSES', 'VIEW_REPORT']:
+                    # Finance operations should only happen in finance_db
+                    if 'finance_db' in accessible_databases:
+                        intent['target_database'] = 'finance_db'
+                    else:
+                        intent['target_database'] = accessible_databases[0]
+                else:
+                    # For generic actions, use the primary database for the role
+                    intent['target_database'] = accessible_databases[0]
+                
                 sql = sql_generator.generate_sql_for_intent(intent, agent_template.role)
             
             # Apply obfuscation if needed
             if intent.get('obfuscate', False) or (agent_template.is_malicious and ENABLE_OBFUSCATION):
                 sql = SQLObfuscator.obfuscate(sql)
+            
+            # Check stop event before executing
+            if stop_event.is_set():
+                break
             
             # Execute query
             ts_str = sim_time.isoformat()
@@ -407,10 +554,19 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
             sim_wait = StatisticalGenerator.generate_pareto_delay(min_wait, mode_wait)
             real_wait = sim_wait / v_clock.speed_up
             
-            # Ensure minimum activity with shorter waits
-            time.sleep(max(real_wait, 0.001))
+            # Ensure minimum activity with shorter waits and check stop event during sleep
+            sleep_time = max(real_wait, 0.001)
+            sleep_intervals = max(1, int(sleep_time / 0.1))  # Sleep in 0.1s intervals
+            for _ in range(sleep_intervals):
+                if stop_event.is_set():
+                    break
+                time.sleep(min(0.1, sleep_time / sleep_intervals))
 
+        except KeyboardInterrupt:
+            break
         except Exception as e:
+            if stop_event.is_set():
+                break
             time.sleep(0.1)
 
 def main():
@@ -435,8 +591,9 @@ def main():
     user_config = load_enhanced_config()
     users_map = user_config.get("users", {})
     
-    # Initialize enhanced SQL generator
-    sql_generator = EnhancedSQLGenerator()
+    # Initialize enhanced SQL generator with database state
+    db_state = user_config.get("db_state", {})
+    sql_generator = EnhancedSQLGenerator(db_state)
     
     # Create agent pool with Vietnamese users
     pool_agents = []
@@ -456,15 +613,33 @@ def main():
             
             pool_agents.append(agent)
     
-    # Add external hackers
+    # Add external hackers with rule-bypassing capabilities
     hacker_count = 0
     for i in range(EXTERNAL_HACKER_COUNT):
         hacker = EnhancedMaliciousAgent(999 + i, {})  # Empty db_state for enhanced system
+        
+        # Assign different skill levels and bypass capabilities
+        if i == 0:
+            hacker.skill_level = "advanced"
+            hacker.attack_origin = "international"
+            hacker.detection_avoidance = 0.8
+            print(f"🔴 Advanced APT hacker: advanced_persistent_threat")
+        elif i == 1:
+            hacker.skill_level = "intermediate"
+            hacker.attack_origin = "domestic"
+            hacker.detection_avoidance = 0.6
+            print(f"🔴 Rule-bypassing hacker: rule_bypass_specialist")
+        else:
+            hacker.skill_level = "script_kiddie"
+            hacker.attack_origin = "unknown"
+            hacker.detection_avoidance = 0.3
+            print(f"🔴 Script kiddie: script_kiddie_{i}")
+        
         if ENABLE_OBFUSCATION and i > 0:
             hacker.obfuscation_mode = True
+        
         pool_agents.append(hacker)
         hacker_count += 1
-        print(f"🔴 External hacker: hacker_{i+1}")
     
     # Print comprehensive statistics
     total_agents = len(pool_agents)
@@ -500,67 +675,111 @@ def main():
     # Create a thread for each user to ensure all users are active
     print(f"\n👥 Creating threads for all {len(pool_agents)} users...")
     
+    # Set up signal handler for immediate Ctrl+C response
+    import signal
+    
+    def signal_handler(signum, frame):
+        stop_event.set()
+        # Use os.write to avoid reentrant call issues
+        import os
+        os.write(1, b"\n\nCtrl+C detected - stopping simulation gracefully...\n")
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    
     try:
         start_run = time.time()
         
-        # Start a thread for each user
-        with ThreadPoolExecutor(max_workers=len(pool_agents)) as executor:
-            futures = []
+        # Start daemon threads manually instead of ThreadPoolExecutor
+        threads = []
+        
+        print(f"✅ Starting {len(pool_agents)} user threads...")
+        for i, agent in enumerate(pool_agents):
+            thread = threading.Thread(
+                target=enhanced_user_worker, 
+                args=(agent, sql_generator, v_clock, stop_event),
+                daemon=True  # Daemon threads will exit when main thread exits
+            )
+            thread.start()
+            threads.append((agent.username, thread))
             
-            # Submit each user to the thread pool
-            for i, agent in enumerate(pool_agents):
-                future = executor.submit(enhanced_user_worker, agent, sql_generator, v_clock, stop_event)
-                futures.append((agent.username, future))
-                
-                # Add small delay to stagger thread starts
-                if i % 10 == 0 and i > 0:
-                    time.sleep(0.1)
+            # Add small delay to stagger thread starts
+            if i % 10 == 0 and i > 0:
+                time.sleep(0.1)
+        
+        print(f"✅ All {len(threads)} user threads started!")
+        print(f"💡 Press Ctrl+C to stop the simulation gracefully")
+        
+        # Main monitoring loop
+        last_report = time.time()
+        while (time.time() - start_run) < TOTAL_REAL_SECONDS and not stop_event.is_set():
+            # Sleep in smaller intervals to be more responsive to Ctrl+C
+            for _ in range(10):  # Sleep 1 second total in 0.1s intervals
+                if stop_event.is_set():
+                    break
+                time.sleep(0.1)
             
-            print(f"✅ All {len(futures)} user threads started!")
+            if stop_event.is_set():
+                break
             
-            # Main monitoring loop
-            last_report = time.time()
-            while (time.time() - start_run) < TOTAL_REAL_SECONDS:
-                time.sleep(1)
-                
-                # Report progress every 30 seconds
-                if time.time() - last_report >= 30:
-                    curr_sim = v_clock.get_current_sim_time()
-                    active_threads = len([f for _, f in futures if not f.done()])
-                    elapsed = time.time() - start_run
-                    remaining = TOTAL_REAL_SECONDS - elapsed
-                    
-                    print(f"\n📊 Progress Report:")
-                    print(f"   Elapsed: {elapsed/60:.1f}min | Remaining: {remaining/60:.1f}min")
-                    print(f"   Active Threads: {active_threads}/{len(futures)}")
-                    print(f"   Total Queries: {total_queries_sent:,}")
-                    print(f"   Query Rate: {total_queries_sent/elapsed:.1f}/sec")
-                    print(f"   Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
-                    
-                    last_report = time.time()
-                
-                # Update status line
+            # Report progress every 30 seconds
+            if time.time() - last_report >= 30:
                 curr_sim = v_clock.get_current_sim_time()
-                active_count = len([f for _, f in futures if not f.done()])
+                active_threads = len([t for _, t in threads if t.is_alive()])
                 elapsed = time.time() - start_run
-                sys.stdout.write(f"\r⚡ Queries: {total_queries_sent:,} | Active: {active_count}/{len(futures)} | Elapsed: {elapsed/60:.1f}min | Sim: {curr_sim.strftime('%H:%M')} ")
-                sys.stdout.flush()
+                remaining = TOTAL_REAL_SECONDS - elapsed
+                
+                print(f"\n📊 Progress Report:")
+                print(f"   Elapsed: {elapsed/60:.1f}min | Remaining: {remaining/60:.1f}min")
+                print(f"   Active Threads: {active_threads}/{len(threads)}")
+                print(f"   Total Queries: {total_queries_sent:,}")
+                print(f"   Query Rate: {total_queries_sent/elapsed:.1f}/sec")
+                print(f"   Sim Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
+                print(f"💡 Press Ctrl+C to stop gracefully")
+                
+                last_report = time.time()
             
+            # Update status line
+            curr_sim = v_clock.get_current_sim_time()
+            active_count = len([t for _, t in threads if t.is_alive()])
+            elapsed = time.time() - start_run
+            sys.stdout.write(f"\r⚡ Queries: {total_queries_sent:,} | Active: {active_count}/{len(threads)} | Elapsed: {elapsed/60:.1f}min | Sim: {curr_sim.strftime('%H:%M')} [Ctrl+C to stop]")
+            sys.stdout.flush()
+        
+        if not stop_event.is_set():
             print(f"\n⏰ Simulation time completed!")
             
     except KeyboardInterrupt:
-        print("\n🛑 Stopping simulation...")
+        print("\n🛑 Keyboard interrupt - stopping simulation...")
+        stop_event.set()
+    except Exception as e:
+        print(f"\n❌ Simulation error: {e}")
+        stop_event.set()
     finally:
+        # Signal all threads to stop
         stop_event.set()
         
+        # Wait a moment for threads to finish gracefully
+        print("🔄 Waiting for threads to finish...")
+        time.sleep(1)
+        
+        # Check if threads are still alive
+        if 'threads' in locals():
+            alive_threads = [name for name, t in threads if t.is_alive()]
+            if alive_threads:
+                print(f"⚠️ {len(alive_threads)} threads still running (will exit with main process)")
+            else:
+                print("✅ All threads stopped gracefully")
+        
         # Final statistics
-        elapsed_time = time.time() - start_run
+        elapsed_time = time.time() - start_run if 'start_run' in locals() else 0
         print(f"\n✅ SIMULATION COMPLETED")
         print(f"   Duration: {elapsed_time:.1f} seconds")
         print(f"   Total Queries: {total_queries_sent:,}")
-        print(f"   Average Rate: {total_queries_sent/elapsed_time:.1f} queries/second")
+        if elapsed_time > 0:
+            print(f"   Average Rate: {total_queries_sent/elapsed_time:.1f} queries/second")
         if 'curr_sim' in locals():
             print(f"   Simulated Time: {curr_sim.strftime('%Y-%m-%d %H:%M')}")
+        print(f"🎯 Simulation stopped successfully")
 
 if __name__ == "__main__":
     main()

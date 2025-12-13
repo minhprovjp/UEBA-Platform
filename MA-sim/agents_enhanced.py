@@ -75,32 +75,32 @@ class EnhancedEmployeeAgent:
         return base_schedule
 
     def _get_database_preferences(self):
-        """Define database access preferences based on role"""
+        """Define database access preferences based on role and actual permissions"""
         preferences = {
             'SALES': {
-                'primary': ['sales_db', 'marketing_db'],
-                'secondary': ['support_db'],
-                'rare': ['inventory_db']
+                'primary': ['sales_db'],
+                'secondary': ['marketing_db', 'support_db'],
+                'rare': []  # Only access databases they have permissions for
             },
             'MARKETING': {
                 'primary': ['marketing_db'],
                 'secondary': ['sales_db', 'support_db'],
-                'rare': ['finance_db']
+                'rare': []
             },
             'CUSTOMER_SERVICE': {
                 'primary': ['support_db'],
                 'secondary': ['sales_db', 'marketing_db'],
-                'rare': ['hr_db']
+                'rare': []
             },
             'HR': {
                 'primary': ['hr_db'],
                 'secondary': ['finance_db', 'admin_db'],
-                'rare': ['sales_db']
+                'rare': []
             },
             'FINANCE': {
                 'primary': ['finance_db'],
                 'secondary': ['sales_db', 'hr_db', 'inventory_db'],
-                'rare': ['marketing_db', 'support_db']
+                'rare': []
             },
             'DEV': {
                 'primary': ['admin_db'],
@@ -108,9 +108,9 @@ class EnhancedEmployeeAgent:
                 'rare': ['marketing_db', 'support_db', 'inventory_db']
             },
             'MANAGEMENT': {
-                'primary': ['sales_db', 'finance_db'],
-                'secondary': ['hr_db', 'marketing_db', 'inventory_db'],
-                'rare': ['support_db', 'admin_db']
+                'primary': ['sales_db'],
+                'secondary': ['hr_db', 'finance_db', 'marketing_db'],
+                'rare': ['support_db', 'inventory_db', 'admin_db']
             },
             'ADMIN': {
                 'primary': ['admin_db'],
@@ -154,9 +154,10 @@ class EnhancedEmployeeAgent:
         if current_hour < schedule['start_hour'] or current_hour > schedule['end_hour']:
             return False
         
-        # Lunch break
-        if schedule['lunch_start'] <= current_hour < schedule['lunch_end']:
-            return False
+        # Vietnamese lunch break is more flexible - some employees work through lunch
+        # Core lunch hour (12-1PM) is still considered work hours but with reduced activity
+        # This allows for realistic Vietnamese business patterns where some employees
+        # work through lunch or have flexible lunch schedules
         
         return True
 
@@ -183,7 +184,7 @@ class EnhancedEmployeeAgent:
             return random.choice(prefs['primary'])
         elif choice < 0.9:  # 20% secondary databases
             return random.choice(prefs['secondary']) if prefs['secondary'] else random.choice(prefs['primary'])
-        else:  # 10% rare databases
+        else:  # 10% rare databases (only if user has permissions)
             return random.choice(prefs['rare']) if prefs['rare'] else random.choice(prefs['primary'])
 
     def get_next_action(self):
@@ -344,18 +345,35 @@ class EnhancedEmployeeAgent:
         return random.randint(1, 1000)  # Fallback with reasonable range
 
 class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
-    """Enhanced malicious agent with sophisticated attack patterns"""
+    """Enhanced malicious agent with sophisticated attack patterns and rule-bypassing capabilities"""
     
-    def __init__(self, agent_id, db_data=None):
-        super().__init__(agent_id, "unknown_hacker", "ATTACKER", db_data)
+    def __init__(self, agent_id, username=None, role=None, db_data=None, is_insider=False):
+        # Handle insider vs external attacker
+        if is_insider and username and role:
+            # Insider threat - use provided username and role
+            super().__init__(agent_id, username, role, db_data)
+            self.is_insider = True
+            self.is_malicious = True
+        else:
+            # External attacker
+            super().__init__(agent_id, "unknown_hacker", "ATTACKER", db_data)
+            self.is_insider = False
+            self.is_malicious = True
         
-        # Enhanced attack capabilities
+        # Enhanced attack capabilities with rule-bypassing techniques
         self.attack_chains = {
             "reconnaissance": ["LOGIN", "RECON_SCHEMA", "ENUM_TABLES", "ENUM_COLUMNS"],
             "sql_injection": ["LOGIN", "SQLI_CLASSIC", "SQLI_UNION", "SQLI_BLIND"],
             "data_exfiltration": ["LOGIN", "DUMP_CUSTOMERS", "DUMP_ORDERS", "DUMP_EMPLOYEES"],
             "privilege_escalation": ["LOGIN", "CHECK_PRIVILEGES", "ESCALATE_PRIVS", "ADMIN_ACCESS"],
-            "persistence": ["LOGIN", "CREATE_BACKDOOR", "MODIFY_DATA", "COVER_TRACKS"]
+            "persistence": ["LOGIN", "CREATE_BACKDOOR", "MODIFY_DATA", "COVER_TRACKS"],
+            
+            # NEW: Rule-bypassing attack chains
+            "work_hours_bypass": ["ESTABLISH_PATTERN", "OFF_HOURS_LOGIN", "MAINTENANCE_EXCUSE", "MALICIOUS_ACTIVITY"],
+            "network_bypass": ["LEGITIMATE_ACCESS", "ROLE_ABUSE", "NETWORK_HOP", "CROSS_SEGMENT_ATTACK"],
+            "lunch_exploitation": ["MORNING_NORMAL", "LUNCH_RECON", "LUNCH_ATTACK", "AFTERNOON_NORMAL"],
+            "holiday_backdoor": ["PRE_HOLIDAY_PREP", "HOLIDAY_ATTACK", "BACKDOOR_INSTALL", "POST_HOLIDAY_NORMAL"],
+            "cultural_exploitation": ["TET_PREPARATION", "HIERARCHY_ABUSE", "OVERTIME_EXCUSE", "CULTURAL_BLEND"]
         }
         
         self.current_chain = random.choice(list(self.attack_chains.keys()))
@@ -368,17 +386,49 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
         self.attack_origin = random.choice(["domestic", "international"])
         self.skill_level = random.choice(["script_kiddie", "intermediate", "advanced"])
         
+        # NEW: Rule-bypassing capabilities
+        self.bypass_techniques = {
+            "work_hours": ["maintenance_excuse", "emergency_access", "system_monitoring"],
+            "network_segmentation": ["role_privilege_abuse", "cross_department_access", "admin_impersonation"],
+            "lunch_break": ["low_monitoring_window", "reduced_activity_exploitation"],
+            "holidays": ["zero_monitoring", "cultural_timing"],
+            "role_access": ["privilege_escalation", "role_chaining", "impersonation"]
+        }
+        
+        # Adaptive behavior based on detection
+        self.detected_techniques = set()
+        self.successful_bypasses = set()
+        
+        # Vietnamese cultural knowledge for better blending
+        self.vietnamese_context = {
+            "holidays": ["2025-01-01", "2025-01-29", "2025-04-30", "2025-05-01", "2025-09-02"],
+            "business_culture": ["hierarchy_respect", "overtime_acceptance", "tet_preparation"],
+            "common_names": ["nguyen_van", "tran_thi", "le_minh", "pham_thi", "hoang_van"]
+        }
+        
     def get_next_action(self):
         """Get next action for the malicious agent - compatibility method for simulation runner"""
         return self.step()
     
     def step(self):
-        """Enhanced attack step with sophisticated patterns"""
+        """Enhanced attack step with sophisticated patterns and rule-bypassing"""
         chain = self.attack_chains[self.current_chain]
         
         if self.step_index >= len(chain):
-            # Switch to different attack chain
-            self.current_chain = random.choice(list(self.attack_chains.keys()))
+            # Switch to different attack chain, prefer rule-bypassing chains
+            available_chains = list(self.attack_chains.keys())
+            
+            # Prioritize rule-bypassing chains if not detected
+            bypass_chains = ["work_hours_bypass", "network_bypass", "lunch_exploitation", 
+                           "holiday_backdoor", "cultural_exploitation"]
+            
+            undetected_bypasses = [c for c in bypass_chains if c not in self.detected_techniques]
+            
+            if undetected_bypasses and random.random() < 0.6:  # 60% chance to use bypass
+                self.current_chain = random.choice(undetected_bypasses)
+            else:
+                self.current_chain = random.choice(available_chains)
+            
             self.step_index = 0
             chain = self.attack_chains[self.current_chain]
         
@@ -388,13 +438,35 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
         if action == "LOGIN":
             self.assign_new_session()
         
-        # Select target database for attack
-        target_databases = ['sales_db', 'hr_db', 'finance_db', 'admin_db']  # High-value targets
+        # Enhanced target selection with rule-bypassing logic
+        target_databases = ['sales_db', 'hr_db', 'finance_db', 'admin_db']
+        
+        # Apply bypass techniques based on current chain
+        bypass_technique = None
+        timing_context = None
+        
+        if "work_hours_bypass" in self.current_chain:
+            bypass_technique = "off_hours_exploitation"
+            timing_context = "off_hours"
+        elif "lunch_exploitation" in self.current_chain:
+            bypass_technique = "lunch_break_timing"
+            timing_context = "lunch_break"
+        elif "holiday_backdoor" in self.current_chain:
+            bypass_technique = "holiday_zero_monitoring"
+            timing_context = "vietnamese_holiday"
+        elif "network_bypass" in self.current_chain:
+            bypass_technique = "network_segmentation_bypass"
+        elif "cultural_exploitation" in self.current_chain:
+            bypass_technique = "vietnamese_cultural_exploitation"
+        
+        # Select appropriate role for bypass
+        attack_role = self._select_bypass_role(bypass_technique)
+        
         target_db = random.choice(target_databases)
         
-        return {
+        intent = {
             "user": self._get_attack_username(),
-            "role": "ATTACKER", 
+            "role": attack_role,
             "action": action,
             "params": self._get_attack_params(),
             "session_id": self.session_context.get("session_id"),
@@ -403,13 +475,39 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
             "is_anomaly": 1,
             "obfuscate": self.obfuscation_mode,
             "attack_chain": self.current_chain,
-            "skill_level": self.skill_level,
-            "attack_origin": self.attack_origin
+            "skill_level": getattr(self, 'skill_level', 'intermediate'),
+            "attack_origin": getattr(self, 'attack_origin', 'unknown'),
+            "is_insider": self.is_insider,
+            
+            # NEW: Rule-bypassing metadata
+            "bypass_technique": bypass_technique,
+            "timing_context": timing_context,
+            "evasion_level": self.detection_avoidance
         }
+        
+        return intent
+    
+    def _select_bypass_role(self, bypass_technique):
+        """Select appropriate role for bypassing specific rules"""
+        if bypass_technique == "network_segmentation_bypass":
+            # Use roles with cross-network access
+            return random.choice(["DEV", "ADMIN", "MANAGEMENT"])
+        elif bypass_technique == "off_hours_exploitation":
+            # Use maintenance/IT roles for off-hours access
+            return random.choice(["DEV", "ADMIN"])
+        elif bypass_technique == "vietnamese_cultural_exploitation":
+            # Use management roles to exploit hierarchy respect
+            return random.choice(["MANAGEMENT", "ADMIN"])
+        else:
+            # Default to attacker role
+            return self.role if self.is_insider else "ATTACKER"
     
     def _get_attack_username(self):
-        """Get username for attack based on skill level"""
-        if self.skill_level == "advanced":
+        """Get username for attack based on insider status and skill level"""
+        if self.is_insider:
+            # Insider threat - use the legitimate username
+            return self.username
+        elif hasattr(self, 'skill_level') and self.skill_level == "advanced":
             # Advanced attackers may use compromised legitimate accounts
             legitimate_users = ["nguyen_van_nam", "tran_thi_lan", "le_minh_duc"]
             return random.choice(legitimate_users)

@@ -199,9 +199,12 @@ def setup_enhanced_database_structure():
     conn = get_conn("inventory_db")
     cursor = conn.cursor()
     
-    tables_to_drop = ["stock_movements", "inventory_adjustments", "warehouse_locations", "inventory_levels"]
+    # Disable foreign key checks and drop tables in correct order
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+    tables_to_drop = ["stock_movements", "inventory_adjustments", "inventory_levels", "warehouse_locations"]
     for table in tables_to_drop:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
     
     cursor.execute("""
         CREATE TABLE warehouse_locations (
@@ -282,9 +285,12 @@ def setup_enhanced_database_structure():
     conn = get_conn("finance_db")
     cursor = conn.cursor()
     
+    # Disable foreign key checks and drop tables
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     tables_to_drop = ["journal_entries", "accounts", "invoices", "expense_reports", "budget_plans"]
     for table in tables_to_drop:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
     
     cursor.execute("""
         CREATE TABLE accounts (
@@ -365,9 +371,12 @@ def setup_enhanced_database_structure():
     conn = get_conn("marketing_db")
     cursor = conn.cursor()
     
+    # Disable foreign key checks and drop tables
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     tables_to_drop = ["campaign_results", "lead_activities", "leads", "campaigns"]
     for table in tables_to_drop:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
     
     cursor.execute("""
         CREATE TABLE campaigns (
@@ -437,9 +446,12 @@ def setup_enhanced_database_structure():
     conn = get_conn("support_db")
     cursor = conn.cursor()
     
+    # Disable foreign key checks and drop tables
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     tables_to_drop = ["ticket_responses", "support_tickets", "knowledge_base"]
     for table in tables_to_drop:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
     
     cursor.execute("""
         CREATE TABLE support_tickets (
@@ -496,15 +508,106 @@ def setup_enhanced_database_structure():
         )
     """)
     
-    # 6. ADMIN DATABASE - System administration and reporting
+    # 6. HR DATABASE - Human Resources Management
+    print(f"\n👥 Setting up HR_DB (Human Resources Management)...")
+    conn.close()
+    conn = get_conn("hr_db")
+    cursor = conn.cursor()
+    
+    # Disable foreign key checks and drop tables
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+    tables_to_drop = ["salaries", "attendance", "employees", "departments"]
+    for table in tables_to_drop:
+        cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+    
+    cursor.execute("""
+        CREATE TABLE departments (
+            dept_id INT AUTO_INCREMENT PRIMARY KEY,
+            dept_name VARCHAR(100) NOT NULL,
+            dept_code VARCHAR(20) UNIQUE,
+            manager_id INT,
+            budget DECIMAL(15,2),
+            location VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_code (dept_code)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE employees (
+            employee_id INT AUTO_INCREMENT PRIMARY KEY,
+            id INT UNIQUE,
+            name VARCHAR(100) NOT NULL,
+            email VARCHAR(100),
+            position VARCHAR(100),
+            dept_id INT,
+            salary DECIMAL(15,2),
+            hire_date DATE,
+            status ENUM('active', 'inactive', 'terminated') DEFAULT 'active',
+            phone VARCHAR(20),
+            address TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            FOREIGN KEY (dept_id) REFERENCES departments(dept_id),
+            INDEX idx_dept (dept_id),
+            INDEX idx_status (status),
+            INDEX idx_hire_date (hire_date)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE attendance (
+            record_id INT AUTO_INCREMENT PRIMARY KEY,
+            employee_id INT,
+            date DATE NOT NULL,
+            attendance_date DATE GENERATED ALWAYS AS (date) STORED,
+            check_in_time TIME,
+            check_out_time TIME,
+            status ENUM('present', 'absent', 'late', 'half_day', 'sick_leave', 'vacation') DEFAULT 'present',
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (employee_id) REFERENCES employees(employee_id),
+            UNIQUE KEY unique_employee_date (employee_id, date),
+            INDEX idx_employee (employee_id),
+            INDEX idx_date (date),
+            INDEX idx_attendance_date (attendance_date),
+            INDEX idx_status (status)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE salaries (
+            salary_id INT AUTO_INCREMENT PRIMARY KEY,
+            employee_id INT,
+            amount DECIMAL(15,2),
+            bonus DECIMAL(15,2) DEFAULT 0,
+            deductions DECIMAL(15,2) DEFAULT 0,
+            net_amount DECIMAL(15,2) GENERATED ALWAYS AS (amount + bonus - deductions) STORED,
+            payment_date DATE,
+            salary_month TINYINT,
+            salary_year YEAR,
+            status ENUM('pending', 'paid', 'cancelled') DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (employee_id) REFERENCES employees(employee_id),
+            INDEX idx_employee (employee_id),
+            INDEX idx_payment_date (payment_date),
+            INDEX idx_month_year (salary_month, salary_year)
+        )
+    """)
+
+    # 7. ADMIN DATABASE - System administration and reporting
     print(f"\n⚙️ Setting up ADMIN_DB (System Administration & Reporting)...")
     conn.close()
     conn = get_conn("admin_db")
     cursor = conn.cursor()
     
+    # Disable foreign key checks and drop tables
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     tables_to_drop = ["system_logs", "user_sessions", "report_schedules"]
     for table in tables_to_drop:
         cursor.execute(f"DROP TABLE IF EXISTS {table}")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
     
     cursor.execute("""
         CREATE TABLE system_logs (
@@ -565,104 +668,29 @@ def setup_enhanced_database_structure():
 
 def update_user_permissions_for_enhanced_structure():
     """
-    Update user permissions to work with the enhanced database structure
+    Verify that user permissions are compatible with enhanced database structure
     """
-    print(f"\n🔐 UPDATING USER PERMISSIONS FOR ENHANCED STRUCTURE")
+    print(f"\n🔐 VERIFYING USER PERMISSIONS FOR ENHANCED STRUCTURE")
     print("=" * 60)
     
-    # Enhanced role permissions for medium-sized company
-    enhanced_permissions = {
-        "SALES": {
-            "sales_db": ["SELECT", "INSERT", "UPDATE"],
-            "marketing_db": ["SELECT", "INSERT", "UPDATE"],
-            "support_db": ["SELECT", "INSERT", "UPDATE"],
-            "description": "Nhân viên kinh doanh - truy cập bán hàng, marketing, hỗ trợ khách hàng"
-        },
-        "MARKETING": {
-            "sales_db": ["SELECT"],
-            "marketing_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-            "support_db": ["SELECT"],
-            "description": "Nhân viên marketing - quản lý chiến dịch và leads"
-        },
-        "CUSTOMER_SERVICE": {
-            "sales_db": ["SELECT"],
-            "support_db": ["SELECT", "INSERT", "UPDATE"],
-            "marketing_db": ["SELECT"],
-            "description": "Nhân viên chăm sóc khách hàng - xử lý tickets và hỗ trợ"
-        },
-        "HR": {
-            "hr_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-            "finance_db": ["SELECT"],
-            "admin_db": ["SELECT"],
-            "description": "Nhân viên nhân sự - quản lý nhân sự và lương"
-        },
-        "FINANCE": {
-            "finance_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-            "sales_db": ["SELECT"],
-            "hr_db": ["SELECT"],
-            "inventory_db": ["SELECT"],
-            "description": "Nhân viên tài chính - quản lý tài chính và kế toán"
-        },
-        "DEV": {
-            "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "hr_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "inventory_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "finance_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "marketing_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "support_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "admin_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
-            "mysql": ["SELECT"],
-            "description": "Nhân viên IT/Phát triển - truy cập toàn bộ hệ thống"
-        },
-        "MANAGEMENT": {
-            "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
-            "hr_db": ["SELECT"],
-            "finance_db": ["SELECT"],
-            "marketing_db": ["SELECT", "INSERT", "UPDATE"],
-            "support_db": ["SELECT"],
-            "inventory_db": ["SELECT"],
-            "admin_db": ["SELECT"],
-            "description": "Quản lý cấp trung và cao - truy cập đa hệ thống"
-        },
-        "ADMIN": {
-            "*": ["ALL"],
-            "description": "Quản trị viên hệ thống - toàn quyền"
-        },
-        "BAD_ACTOR": {
-            "sales_db": ["SELECT"],
-            "marketing_db": ["SELECT"],
-            "description": "Tài khoản có nguy cơ bảo mật"
-        },
-        "VULNERABLE": {
-            "description": "Tài khoản dễ bị tấn công"
-        }
-    }
-    
-    # Update the users config file
+    # Check if users config file exists and has proper structure
     config_file = "simulation/users_config.json"
     if os.path.exists(config_file):
         with open(config_file, 'r', encoding='utf-8') as f:
             config = json.load(f)
         
-        # Update company info
-        config["company_info"]["databases"] = 7
-        config["company_info"]["database_list"] = [
-            "sales_db", "hr_db", "inventory_db", "finance_db", 
-            "marketing_db", "support_db", "admin_db"
-        ]
-        
-        # Update roles with enhanced permissions
-        config["roles"] = enhanced_permissions
-        
-        # Save updated config
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        
-        print(f"✅ Updated user permissions configuration")
-        print(f"📊 Enhanced permissions for {len(enhanced_permissions)} roles")
-        print(f"🗄️ Covering 7 specialized databases")
+        # Check if config has enhanced structure
+        if "company_info" in config and config["company_info"].get("databases") == 7:
+            print(f"✅ User configuration already has enhanced 7-database structure")
+            print(f"👥 Company: {config['company_info']['name']}")
+            print(f"👤 Employees: {len(config.get('users', {}))}")
+            print(f"🗄️ Databases: {config['company_info']['databases']}")
+        else:
+            print(f"⚠️ User configuration needs to be updated")
+            print(f"💡 Run 'python create_sandbox_user.py' to create users with proper permissions")
     else:
         print(f"⚠️ Users config file not found: {config_file}")
+        print(f"💡 Run 'python create_sandbox_user.py' to create users and permissions")
 
 if __name__ == "__main__":
     databases = setup_enhanced_database_structure()

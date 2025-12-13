@@ -204,57 +204,83 @@ def setup_real_users():
     cur.execute("FLUSH PRIVILEGES")
     conn.close()
     
-    # Save configuration with Vietnamese company role permissions
+    # Save configuration with enhanced 7-database Vietnamese company role permissions
     config_data = {
         "company_info": {
             "name": "Công ty TNHH Thương mại ABC",
             "type": "Vietnamese Medium-Sized Sales Company",
             "size": "80-120 employees",
-            "industry": "Sales & Trading"
+            "industry": "Sales & Trading",
+            "databases": 7,
+            "database_list": [
+                "sales_db", "hr_db", "inventory_db", "finance_db", 
+                "marketing_db", "support_db", "admin_db"
+            ]
         },
         "roles": {
             "SALES": {
                 "sales_db": ["SELECT", "INSERT", "UPDATE"],
-                "description": "Nhân viên kinh doanh - truy cập dữ liệu bán hàng"
+                "marketing_db": ["SELECT", "INSERT", "UPDATE"],
+                "support_db": ["SELECT", "INSERT", "UPDATE"],
+                "description": "Nhân viên kinh doanh - truy cập bán hàng, marketing, hỗ trợ khách hàng"
             },
             "MARKETING": {
-                "sales_db": ["SELECT", "INSERT", "UPDATE"],
-                "description": "Nhân viên marketing - hỗ trợ bán hàng"
+                "sales_db": ["SELECT"],
+                "marketing_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+                "support_db": ["SELECT"],
+                "description": "Nhân viên marketing - quản lý chiến dịch và leads"
             },
             "CUSTOMER_SERVICE": {
-                "sales_db": ["SELECT", "INSERT", "UPDATE"],
-                "description": "Nhân viên chăm sóc khách hàng"
+                "sales_db": ["SELECT"],
+                "support_db": ["SELECT", "INSERT", "UPDATE"],
+                "marketing_db": ["SELECT"],
+                "description": "Nhân viên chăm sóc khách hàng - xử lý tickets và hỗ trợ"
             },
             "HR": {
-                "sales_db": ["SELECT"],
-                "hr_db": ["SELECT", "INSERT", "UPDATE"],
-                "description": "Nhân viên nhân sự"
+                "hr_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
+                "finance_db": ["SELECT"],
+                "admin_db": ["SELECT"],
+                "description": "Nhân viên nhân sự - quản lý nhân sự và lương"
             },
             "FINANCE": {
+                "finance_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
                 "sales_db": ["SELECT"],
                 "hr_db": ["SELECT"],
-                "description": "Nhân viên tài chính"
+                "inventory_db": ["SELECT"],
+                "description": "Nhân viên tài chính - quản lý tài chính và kế toán"
             },
             "DEV": {
-                "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER"],
-                "hr_db": ["SELECT", "INSERT", "UPDATE"],
+                "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "hr_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "inventory_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "finance_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "marketing_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "support_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
+                "admin_db": ["SELECT", "INSERT", "UPDATE", "DELETE", "ALTER"],
                 "mysql": ["SELECT"],
-                "description": "Nhân viên IT/Phát triển"
+                "description": "Nhân viên IT/Phát triển - truy cập toàn bộ hệ thống"
             },
             "MANAGEMENT": {
                 "sales_db": ["SELECT", "INSERT", "UPDATE", "DELETE"],
                 "hr_db": ["SELECT"],
-                "description": "Quản lý cấp trung và cao"
+                "finance_db": ["SELECT"],
+                "marketing_db": ["SELECT", "INSERT", "UPDATE"],
+                "support_db": ["SELECT"],
+                "inventory_db": ["SELECT"],
+                "admin_db": ["SELECT"],
+                "description": "Quản lý cấp trung và cao - truy cập đa hệ thống"
             },
             "ADMIN": {
                 "*": ["ALL"],
-                "description": "Quản trị viên hệ thống"
+                "description": "Quản trị viên hệ thống - toàn quyền"
             },
             "BAD_ACTOR": {
                 "sales_db": ["SELECT"],
+                "marketing_db": ["SELECT"],
                 "description": "Tài khoản có nguy cơ bảo mật"
             },
             "VULNERABLE": {
+                "sales_db": ["SELECT"],
                 "description": "Tài khoản dễ bị tấn công"
             }
         },

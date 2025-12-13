@@ -23,7 +23,7 @@ class DatasetAnalyzer:
     """Comprehensive dataset analyzer for Vietnamese Enterprise UBA simulation"""
     
     def __init__(self, dataset_file=None):
-        self.dataset_file = dataset_file or "simulation_dataset.csv"
+        self.dataset_file = dataset_file or "final_clean_dataset_30d.csv"
         self.df = None
         self.quality_score = 0
         self.issues = []

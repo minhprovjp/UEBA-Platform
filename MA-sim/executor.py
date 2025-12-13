@@ -143,36 +143,103 @@ class SQLExecutor:
         action_type = action.get("action", "LOGIN")
         database = action.get("target_database", "sales_db")
         
+        # Database-specific table mappings
+        db_tables = {
+            'sales_db': {
+                'customers': 'customers',
+                'orders': 'orders',
+                'products': 'products'
+            },
+            'marketing_db': {
+                'campaigns': 'campaigns',
+                'leads': 'leads'
+            },
+            'support_db': {
+                'tickets': 'support_tickets',
+                'categories': 'ticket_categories'
+            },
+            'hr_db': {
+                'employees': 'employees',
+                'departments': 'departments'
+            },
+            'finance_db': {
+                'invoices': 'invoices',
+                'payments': 'payments'
+            },
+            'inventory_db': {
+                'levels': 'inventory_levels',
+                'movements': 'stock_movements'
+            },
+            'admin_db': {
+                'logs': 'system_logs',
+                'sessions': 'user_sessions'
+            }
+        }
+        
         # Simple query generation based on action type
         if action_type == "LOGIN":
             return f"SELECT 1"
+        elif action_type == "LOGOUT":
+            return f"SELECT 1"
+        elif action_type == "START":
+            return f"SELECT 1"
         elif action_type == "SEARCH_CUSTOMER":
-            return f"SELECT customer_id, company_name FROM {database}.customers LIMIT 10"
+            if database == 'sales_db':
+                return f"SELECT customer_id, company_name FROM {database}.customers LIMIT 10"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "VIEW_CUSTOMER":
-            customer_id = action.get("params", {}).get("customer_id", 1)
-            return f"SELECT * FROM {database}.customers WHERE customer_id = {customer_id}"
+            if database == 'sales_db':
+                customer_id = action.get("params", {}).get("customer_id", 1)
+                return f"SELECT * FROM {database}.customers WHERE customer_id = {customer_id}"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "SEARCH_ORDER":
-            return f"SELECT order_id, customer_id, total_amount FROM {database}.orders LIMIT 10"
+            if database == 'sales_db':
+                return f"SELECT order_id, customer_id, total_amount FROM {database}.orders LIMIT 10"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "VIEW_ORDER":
-            order_id = action.get("params", {}).get("order_id", 1)
-            return f"SELECT * FROM {database}.orders WHERE order_id = {order_id}"
+            if database == 'sales_db':
+                order_id = action.get("params", {}).get("order_id", 1)
+                return f"SELECT * FROM {database}.orders WHERE order_id = {order_id}"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "SEARCH_EMPLOYEE":
-            return f"SELECT employee_id, full_name, department FROM {database}.employees LIMIT 10"
+            if database == 'hr_db':
+                return f"SELECT employee_id, full_name, department FROM {database}.employees LIMIT 10"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "VIEW_PROFILE":
-            employee_id = action.get("params", {}).get("employee_id", 1)
-            return f"SELECT * FROM {database}.employees WHERE employee_id = {employee_id}"
+            if database == 'hr_db':
+                employee_id = action.get("params", {}).get("employee_id", 1)
+                return f"SELECT * FROM {database}.employees WHERE employee_id = {employee_id}"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "SEARCH_CAMPAIGN":
-            return f"SELECT campaign_id, campaign_name, status FROM {database}.campaigns LIMIT 10"
+            if database == 'marketing_db':
+                return f"SELECT campaign_id, campaign_name, status FROM {database}.campaigns LIMIT 10"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "VIEW_CAMPAIGN":
-            campaign_id = action.get("params", {}).get("campaign_id", 1)
-            return f"SELECT * FROM {database}.campaigns WHERE campaign_id = {campaign_id}"
+            if database == 'marketing_db':
+                campaign_id = action.get("params", {}).get("campaign_id", 1)
+                return f"SELECT * FROM {database}.campaigns WHERE campaign_id = {campaign_id}"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "SEARCH_TICKET":
-            return f"SELECT ticket_id, subject, status FROM {database}.support_tickets LIMIT 10"
+            if database == 'support_db':
+                return f"SELECT ticket_id, subject, status FROM {database}.support_tickets LIMIT 10"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         elif action_type == "VIEW_TICKET":
-            ticket_id = action.get("params", {}).get("ticket_id", 1)
-            return f"SELECT * FROM {database}.support_tickets WHERE ticket_id = {ticket_id}"
+            if database == 'support_db':
+                ticket_id = action.get("params", {}).get("ticket_id", 1)
+                return f"SELECT * FROM {database}.support_tickets WHERE ticket_id = {ticket_id}"
+            else:
+                return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
         else:
-            # Default query
+            # Default query - safe fallback
             return f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '{database}'"
 
     def execute(self, intent, sql, sim_timestamp=None, client_profile=None):
@@ -186,18 +253,27 @@ class SQLExecutor:
         if not client_profile:
             client_profile = {}
 
-        # Fallback DB target
+        # Fallback DB target - Enhanced for 7-database structure
         if not db_target:
             if "sales_db" in sql: db_target = "sales_db"
             elif "hr_db" in sql: db_target = "hr_db"
+            elif "inventory_db" in sql: db_target = "inventory_db"
+            elif "finance_db" in sql: db_target = "finance_db"
+            elif "marketing_db" in sql: db_target = "marketing_db"
+            elif "support_db" in sql: db_target = "support_db"
+            elif "admin_db" in sql: db_target = "admin_db"
             
-        # [NEW] Latency Injection
-        # Hacker/Remote: 50ms - 200ms
-        # Local: 1ms - 5ms
+        # [NEW] Enhanced Latency Injection with Vietnamese network patterns
+        # Hacker/Remote: 50ms - 200ms (international attacks)
+        # Local: 1ms - 5ms (local network)
+        # Insider threats: 2ms - 10ms (internal but suspicious)
         if is_anomaly:
-            latency = random.uniform(0.05, 0.2)
+            if intent.get('is_insider', False):
+                latency = random.uniform(0.002, 0.01)  # Insider threats - internal network
+            else:
+                latency = random.uniform(0.05, 0.2)    # External attacks
         else:
-            latency = random.uniform(0.001, 0.005)
+            latency = random.uniform(0.001, 0.005)     # Normal business operations
         
         # Sleep để giả lập độ trễ mạng TRƯỚC KHI gửi query
         time.sleep(latency)
@@ -206,7 +282,7 @@ class SQLExecutor:
         sim_id = uuid.uuid4().hex[:6]
         
         # Lấy thông tin giả lập từ Profile
-        fake_ip = client_profile.get("source_host", "192.168.1.100")
+        fake_ip = client_profile.get("source_ip", "192.168.1.100")  # Fixed: use source_ip instead of source_host
         fake_prog = client_profile.get("program_name", "Unknown")
         fake_os = client_profile.get("client_os", "Windows")
         fake_conn = client_profile.get("connector_name", "mysql-connector")
