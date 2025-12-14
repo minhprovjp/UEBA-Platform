@@ -554,48 +554,68 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # ========================================================
     users_to_lock_list = []
 
-    # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM MỚI
+    # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM
     list_of_violation_dfs = []
 
     # Danh sách các DataFrame chứa vi phạm (Point-in-time)
     violation_sources = [
-        df_rule_access,  # Nhóm Access
-        df_rule_insider,  # Nhóm Insider
-        df_rule_technical,  # Nhóm Technical
-        df_rule_destruction,  # Nhóm Destruction
-        anomalies_user_time,  # Nhóm Profile
+        df_rule_access,
+        df_rule_insider,
+        df_rule_technical,
+        df_rule_destruction
     ]
 
     for df in violation_sources:
-        if not df.empty and 'user' in df.columns and 'client_ip' in df.columns:
-            # Chỉ lấy các cột cần thiết để đếm
-            list_of_violation_dfs.append(df[['user', 'client_ip']])
+        if not df.empty and 'user' in df.columns:
+            # Lấy thêm client_ip để xử lý
+            cols = ['user']
+            if 'client_ip' in df.columns: cols.append('client_ip')
+            list_of_violation_dfs.append(df[cols].copy())
 
-    # 2. Xử lý riêng cho Multi-table
-    if not anomalies_multi_table_agg.empty:
-        # anomalies_multi_table_agg là kết quả aggregated, mỗi dòng là 1 session vi phạm
-        if 'user' in anomalies_multi_table_agg.columns:
-            # Cần client_ip cho Active Response
-            temp_df = anomalies_multi_table_agg[['user']].copy()
-            temp_df['client_ip'] = 'unknown'  # Placeholder nếu không có IP
-            list_of_violation_dfs.append(temp_df)
+    # Xử lý riêng cho Multi-table (Session based)
+    if not anomalies_multi_table_agg.empty and 'user' in anomalies_multi_table_agg.columns:
+        temp_df = anomalies_multi_table_agg[['user']].copy()
+        if 'client_ip' not in temp_df.columns: temp_df['client_ip'] = 'unknown'
+        list_of_violation_dfs.append(temp_df)
 
-    # 3. Tổng hợp, đếm và lọc các user vượt ngưỡng
+    # 2. USER VI PHẠM NGHIÊM TRỌNG (ZERO TOLERANCE)
+    critical_users = set()
+
+    # Nhóm Technical Attacks
+    if not df_rule_technical.empty and 'user' in df_rule_technical.columns:
+        critical_users.update(df_rule_technical['user'].unique())
+
+    # Nhóm Data Destruction
+    if not df_rule_destruction.empty and 'user' in df_rule_destruction.columns:
+        critical_users.update(df_rule_destruction['user'].unique())
+
+
+    # 3. TỔNG HỢP VÀ RA QUYẾT ĐỊNH
     if list_of_violation_dfs:
         all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
 
-        # Tổng hợp vi phạm THEO USER
+        # Đếm tổng số vi phạm của mỗi user
         user_violation_counts = all_violations_df.groupby('user', observed=False).size().reset_index(
             name='total_violation_count')
 
-        # Lọc ra các user vượt ngưỡng TỔNG
+        # --- LOGIC QUYẾT ĐỊNH KHÓA ---
         offenders = user_violation_counts[
-            user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD
-            ]
+            (user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD) |
+            (user_violation_counts['user'].isin(critical_users))
+            ].copy()
+        # Đánh dấu lý do
+        def get_lock_reason(row):
+            if row['user'] in critical_users:
+                return f"CRITICAL VIOLATION (Zero Tolerance) - Count: {row['total_violation_count']}"
+            return f"Threshold Exceeded - Count: {row['total_violation_count']}"
 
-        # Chuyển thành list dictionary để truyền đi
         if not offenders.empty:
+            # Thêm cột lý do cụ thể
+            offenders['lock_reason'] = offenders.apply(get_lock_reason, axis=1)
+
+            # Chuyển thành list dictionary
             users_to_lock_list = offenders.to_dict('records')
+
 
     # ========================================================
     # TỔNG HỢP KẾT QUẢ CUỐI CÙNG
