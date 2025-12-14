@@ -394,7 +394,7 @@ def generate_html_alert(violation_summary: list):
                 <table width="100%">
                     <thead>
                         <tr>
-                            <th>Anomaly Type</th>
+                            <th>Type of Violation</th>
                             <th style="text-align: center;">Count</th>
                             <th>Entity (User@IP)</th>
                             <th>Occurrence (First - Last)</th>
