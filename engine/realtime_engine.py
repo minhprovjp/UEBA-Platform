@@ -300,7 +300,12 @@ def handle_active_responses(results: dict):
         if admin_user and user_name == admin_user:
             continue
 
-        reason = f"Automatic response: Over the threshold ({total_count})"
+        custom_reason = offender.get('lock_reason')
+
+        if custom_reason:
+            reason = f"Automatic response: {custom_reason}"
+        else:
+            reason = f"Automatic response: Over the threshold ({total_count})"
 
         try:
             execute_lock_and_kill_strategy(user_name, ACTIVE_RESPONSE_SETTINGS, reason)
