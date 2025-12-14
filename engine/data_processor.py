@@ -23,6 +23,7 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
+from redis import Redis
 
 # --- Tắt log rác của thư viện parser SQL ---
 logging.getLogger('sqlglot').setLevel(logging.ERROR)
@@ -39,12 +40,13 @@ from sklearn.preprocessing import StandardScaler
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD
+from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, REDIS_URL
 from engine.features import enhance_features_batch
 from utils import (
-    check_unusual_user_activity_time, get_normalized_query,
+    get_normalized_query,
     check_access_anomalies, check_insider_threats, check_technical_attacks,
-    check_data_destruction, check_multi_table_anomalies
+    check_data_destruction, check_multi_table_anomalies,
+    update_behavior_redis, check_behavior_redis
 )
 
 # --- Logging ---
@@ -442,22 +444,41 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     p_min_queries = 10
     anomalies_user_time = pd.DataFrame()
     # Tính profile đơn giản
-    user_profiles = {}
-    for user, g in df_logs.groupby('user', observed=False):
-        if len(g) >= p_min_queries:
-            hours = g['timestamp'].dt.hour
-            user_profiles[user] = {
-                'active_start': int(hours.quantile(0.15)),
-                'active_end': int(hours.quantile(0.85))
-            }
-    if user_profiles:
-        df_logs['unusual_activity_reason'] = df_logs.apply(
-            lambda row: check_unusual_user_activity_time(row, user_profiles), axis=1
+    try:
+        redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+        
+        # 1. Lấy ngưỡng từ Config (Mặc định là 5 nếu không tìm thấy)
+        profile_threshold = combined_rules_config.get('thresholds', {}).get('min_occurrences_threshold', 5)
+
+        # 2. KIỂM TRA (DETECTION)
+        current_indices_to_check = df_logs.index.difference(
+            set(df_rule_access.index).union(df_rule_insider.index).union(df_rule_technical.index)
         )
-        anomalies_user_time = df_logs[df_logs['unusual_activity_reason'].notna()].copy()
-        if not anomalies_user_time.empty:
-            anomalies_user_time['behavior_group'] = 'UNUSUAL_BEHAVIOR'
-            anomalies_user_time['specific_rule'] = 'Unusual Login Time'
+        df_to_check = df_logs.loc[current_indices_to_check]
+        
+        if not df_to_check.empty:
+            # Truyền profile_threshold vào hàm check
+            bad_indices = check_behavior_redis(redis_client, df_to_check, min_threshold=profile_threshold)
+            
+            if bad_indices:
+                anomalies_user_time = df_logs.loc[bad_indices].copy()
+                anomalies_user_time['behavior_group'] = 'UNUSUAL_BEHAVIOR'
+                anomalies_user_time['specific_rule'] = 'Rare Access Time (Profile Mismatch)'
+                
+                anomalies_user_time['unusual_activity_reason'] = anomalies_user_time['timestamp'].apply(
+                    lambda x: f"Access at {x.hour}h is rare (< {profile_threshold} times in history)"
+                )
+
+        # 3. HỌC (LEARNING)
+        df_to_learn = df_logs[~df_logs.index.isin(df_rule_technical.index)]
+        update_behavior_redis(redis_client, df_to_learn)
+        
+        redis_client.close()
+        
+    except Exception as e:
+        logging.error(f"Redis Behavioral Profiling Failed: {e}")
+        # Fallback: Nếu lỗi Redis, bỏ qua rule này, không làm crash hệ thống
+        anomalies_user_time = pd.DataFrame()
 
     # GOM TẤT CẢ LOG VI PHẠM
     rule_caught_indices = set(
@@ -533,48 +554,68 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     # ========================================================
     users_to_lock_list = []
 
-    # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM MỚI
+    # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM
     list_of_violation_dfs = []
 
     # Danh sách các DataFrame chứa vi phạm (Point-in-time)
     violation_sources = [
-        df_rule_access,  # Nhóm Access
-        df_rule_insider,  # Nhóm Insider
-        df_rule_technical,  # Nhóm Technical
-        df_rule_destruction,  # Nhóm Destruction
-        anomalies_user_time,  # Nhóm Profile
+        df_rule_access,
+        df_rule_insider,
+        df_rule_technical,
+        df_rule_destruction
     ]
 
     for df in violation_sources:
-        if not df.empty and 'user' in df.columns and 'client_ip' in df.columns:
-            # Chỉ lấy các cột cần thiết để đếm
-            list_of_violation_dfs.append(df[['user', 'client_ip']])
+        if not df.empty and 'user' in df.columns:
+            # Lấy thêm client_ip để xử lý
+            cols = ['user']
+            if 'client_ip' in df.columns: cols.append('client_ip')
+            list_of_violation_dfs.append(df[cols].copy())
 
-    # 2. Xử lý riêng cho Multi-table
-    if not anomalies_multi_table_agg.empty:
-        # anomalies_multi_table_agg là kết quả aggregated, mỗi dòng là 1 session vi phạm
-        if 'user' in anomalies_multi_table_agg.columns:
-            # Cần client_ip cho Active Response
-            temp_df = anomalies_multi_table_agg[['user']].copy()
-            temp_df['client_ip'] = 'unknown'  # Placeholder nếu không có IP
-            list_of_violation_dfs.append(temp_df)
+    # Xử lý riêng cho Multi-table (Session based)
+    if not anomalies_multi_table_agg.empty and 'user' in anomalies_multi_table_agg.columns:
+        temp_df = anomalies_multi_table_agg[['user']].copy()
+        if 'client_ip' not in temp_df.columns: temp_df['client_ip'] = 'unknown'
+        list_of_violation_dfs.append(temp_df)
 
-    # 3. Tổng hợp, đếm và lọc các user vượt ngưỡng
+    # 2. USER VI PHẠM NGHIÊM TRỌNG (ZERO TOLERANCE)
+    critical_users = set()
+
+    # Nhóm Technical Attacks
+    if not df_rule_technical.empty and 'user' in df_rule_technical.columns:
+        critical_users.update(df_rule_technical['user'].unique())
+
+    # Nhóm Data Destruction
+    if not df_rule_destruction.empty and 'user' in df_rule_destruction.columns:
+        critical_users.update(df_rule_destruction['user'].unique())
+
+
+    # 3. TỔNG HỢP VÀ RA QUYẾT ĐỊNH
     if list_of_violation_dfs:
         all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
 
-        # Tổng hợp vi phạm THEO USER
+        # Đếm tổng số vi phạm của mỗi user
         user_violation_counts = all_violations_df.groupby('user', observed=False).size().reset_index(
             name='total_violation_count')
 
-        # Lọc ra các user vượt ngưỡng TỔNG
+        # --- LOGIC QUYẾT ĐỊNH KHÓA ---
         offenders = user_violation_counts[
-            user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD
-            ]
+            (user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD) |
+            (user_violation_counts['user'].isin(critical_users))
+            ].copy()
+        # Đánh dấu lý do
+        def get_lock_reason(row):
+            if row['user'] in critical_users:
+                return f"CRITICAL VIOLATION (Zero Tolerance) - Count: {row['total_violation_count']}"
+            return f"Threshold Exceeded - Count: {row['total_violation_count']}"
 
-        # Chuyển thành list dictionary để truyền đi
         if not offenders.empty:
+            # Thêm cột lý do cụ thể
+            offenders['lock_reason'] = offenders.apply(get_lock_reason, axis=1)
+
+            # Chuyển thành list dictionary
             users_to_lock_list = offenders.to_dict('records')
+
 
     # ========================================================
     # TỔNG HỢP KẾT QUẢ CUỐI CÙNG

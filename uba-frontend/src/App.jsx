@@ -1,19 +1,20 @@
 // uba_frontend/src/App.jsx
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Database, ShieldAlert, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, User } from "lucide-react";
+import { Database, ShieldAlert, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, User, ShieldCheck } from "lucide-react";
 import React, { useState, useEffect } from 'react';
 
 import LogExplorer from "./pages/LogExplorer";
 import Dashboard from './pages/Dashboard';
 import AnomalyTriage from './pages/AnomalyTriage';
 import SettingsPage from './pages/SettingsPage';
+import AccessControlPage from './pages/AccessControlPage';
 import LoginPage from './pages/LoginPage';
-import { Button } from "@/components/ui/button";
 
 const navItems = [
   { name: "Dashboard", icon: LayoutDashboard, path: "/" },
   { name: "Log Explorer", icon: Database, path: "/logs" },
   { name: "Anomaly Triage", icon: ShieldAlert, path: "/anomalies" },
+  { name: "Access Control", icon: ShieldCheck, path: "/access-control" }
 ];
 
 export default function App() {
@@ -124,6 +125,7 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/logs" element={<LogExplorer />} />
             <Route path="/anomalies" element={<AnomalyTriage />} />
+            <Route path="/access-control" element={<AccessControlPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             </Routes>
         </div>
