@@ -39,6 +39,65 @@ class EnhancedSimulationScheduler:
             14: 0.8, 15: 1.0, 16: 0.9, 17: 0.7,        # Afternoon peak
             18: 0.4, 19: 0.2, 20: 0.1, 21: 0.05        # Evening wind-down
         }
+        # [NEW] Sự kiện doanh nghiệp (Hợp lệ nhưng volume cao)
+        self.active_projects = {
+            "MONTHLY_CLOSING": False, # Quyết toán tháng (Finance/Sales peak)
+            "MARKETING_PUSH": False   # Chiến dịch MKT lớn
+        }
+        
+    def check_business_events(self):
+        """Kích hoạt sự kiện dựa trên ngày"""
+        day = self.current_time.day
+        
+        # Cuối tháng (ngày 28-31): Quyết toán
+        if day >= 28:
+            self.active_projects["MONTHLY_CLOSING"] = True
+        else:
+            self.active_projects["MONTHLY_CLOSING"] = False
+                
+    def _get_dynamic_intensity(self, current_time):
+        hour = current_time.hour
+        minute = current_time.minute
+        
+        # --- 1. TÍNH BASE INTENSITY THEO GIỜ (Circadian Rhythm) ---
+        intensity = 0.1 # Mặc định (đêm/OT vắng)
+
+        # 1. ĐẦU GIỜ SÁNG (8:00 - 9:00)
+        if hour == 8:
+            intensity = 0.3 + (minute / 60) * 0.6
+            
+        # 2. CA SÁNG CAO ĐIỂM (9:00 - 11:00)
+        elif 9 <= hour < 11:
+            intensity = random.uniform(0.9, 1.0)
+            
+        # 3. GẦN TRƯA (11:00 - 12:00)
+        elif hour == 11:
+            intensity = max(0.1, 0.9 - (minute / 60) * 0.8)
+            
+        # 4. NGHỈ TRƯA (12:00 - 13:30)
+        elif hour == 12:
+            intensity = 0.05
+        elif hour == 13 and minute < 30:
+            intensity = 0.1 + (minute / 30) * 0.4
+            
+        # 5. CA CHIỀU & TAN TẦM (13:30 - 17:30)
+        elif (hour == 13 and minute >= 30) or (14 <= hour < 16):
+            intensity = random.uniform(0.85, 1.0)
+        elif hour == 16:
+            intensity = 0.9 - (minute / 60) * 0.3
+        elif hour == 17:
+            if minute < 30: intensity = 0.6 - (minute / 30) * 0.2
+            else: intensity = 0.4 - ((minute - 30) / 30) * 0.3
+
+        # --- 2. ÁP DỤNG LOGIC DỰ ÁN (Business Events) ---
+        # Nếu đang quyết toán tháng, mọi người làm việc căng hơn (tăng 50%)
+        # Nhưng vẫn phải tuân thủ giới hạn max là 1.0 (hoặc 1.2 nếu muốn overload)
+        if self.active_projects.get("MONTHLY_CLOSING", False):
+            # Chỉ tăng cường độ vào giờ làm việc, không tăng vào giờ nghỉ trưa/đêm
+            if intensity > 0.2: 
+                intensity = min(1.0, intensity * 1.5)
+
+        return intensity
 
     def tick(self, minutes=1):
         """
@@ -53,15 +112,20 @@ class EnhancedSimulationScheduler:
         self.current_time += timedelta(minutes=minutes)
         logs = []
         
+        # [NEW] Cập nhật trạng thái sự kiện mỗi khi qua ngày mới hoặc mỗi tick
+        if self.current_time.hour == 0 and self.current_time.minute == 0:
+            self.check_business_events()
+        
         # Current time context
         current_hour = self.current_time.hour
         current_date = self.current_time.date().isoformat()
         is_weekend = self.current_time.weekday() >= 5
         is_holiday = current_date in self.vietnamese_holidays
+        current_intensity = self._get_dynamic_intensity(self.current_time)
         
         for agent in self.agents:
             # Check if agent should be active
-            if not self._should_agent_be_active(agent, current_hour, is_weekend, is_holiday):
+            if not self._should_agent_be_active(agent, current_hour, is_weekend, is_holiday, current_intensity):
                 # Force logout if agent was active but shouldn't be now
                 if agent.current_state != "START":
                     agent.current_state = "START"
@@ -93,18 +157,19 @@ class EnhancedSimulationScheduler:
                 "query": sql,
                 "is_anomaly": intent.get('is_anomaly', 0),
                 "session_id": intent.get('session_id'),
-                "client_port": intent.get('client_port', 0)
+                "client_port": intent.get('client_port', 0),
+                "work_intensity": round(current_intensity, 2)
             }
             
             logs.append(log_entry)
             
             # Set cooldown for next action
-            wait_minutes = self._calculate_wait_time(intent, agent, current_hour)
+            wait_minutes = self._calculate_wait_time(intent, agent, current_intensity)
             self.agent_cooldowns[agent.agent_id] = self.current_time + timedelta(minutes=wait_minutes)
         
         return logs
 
-    def _should_agent_be_active(self, agent, current_hour, is_weekend, is_holiday):
+    def _should_agent_be_active(self, agent, current_hour, is_weekend, is_holiday, intensity):
         """
         Determine if an agent should be active based on Vietnamese business patterns
         """
@@ -134,6 +199,15 @@ class EnhancedSimulationScheduler:
         
         # Apply hourly intensity
         intensity = self.hourly_intensity.get(current_hour, 0.5)
+        
+        # Giữ ngoại lệ cho CS (trực trưa) và Dev (OT)
+        if agent.role == "CUSTOMER_SERVICE" and 12 <= current_hour < 13:
+            return random.random() < 0.4
+        if agent.role == "DEV" and 18 <= current_hour < 21:
+            return random.random() < 0.3
+
+        # So sánh random với intensity hiện tại (đã tính theo phút)
+        # Intensity thấp (vd: 11:55) -> Khả năng active thấp
         return random.random() < intensity
 
     def _get_work_schedule(self, role):
@@ -175,7 +249,7 @@ class EnhancedSimulationScheduler:
         
         return schedules.get(role, schedules['SALES'])
 
-    def _calculate_wait_time(self, intent, agent, current_hour):
+    def _calculate_wait_time(self, intent, agent, intensity):
         """
         Calculate realistic wait time between actions based on Vietnamese business patterns
         """
@@ -242,19 +316,38 @@ class EnhancedSimulationScheduler:
         action = intent.get('action', 'LOGIN')
         role = agent.role
         
-        wait_time = base_wait
-        wait_time *= action_multipliers.get(action, 1.0)
-        wait_time *= role_multipliers.get(role, 1.0)
-        wait_time *= hour_multipliers.get(current_hour, 1.0)
+        # wait_time = base_wait
+        # wait_time *= action_multipliers.get(action, 1.0)
+        # wait_time *= role_multipliers.get(role, 1.0)
+        # wait_time *= hour_multipliers.get(current_hour, 1.0)
         
-        # Add randomness (±50%)
-        wait_time *= random.uniform(0.5, 1.5)
+        # # Add randomness (±50%)
+        # wait_time *= random.uniform(0.5, 1.5)
         
-        # Malicious agents act faster (more urgent)
-        if agent.is_malicious:
-            wait_time *= 0.7
+        # # Malicious agents act faster (more urgent)
+        # if agent.is_malicious:
+        #     wait_time *= 0.7
         
-        return max(1, int(wait_time))  # Minimum 1 minute
+        wait = base_wait * action_multipliers.get(intent.get('action'), 1.0)
+        
+        # [LOGIC MỚI] Điều chỉnh theo Intensity
+        if intensity > 0:
+            # Intensity 0.9 (Cao điểm) -> wait nhỏ -> spam query nhiều
+            # Intensity 0.2 (Gần nghỉ) -> wait lớn -> ít query
+            wait = wait / intensity
+        else:
+            wait = wait * 5
+            
+        # Add randomness
+        wait *= random.uniform(0.7, 1.3)
+        
+        # [NEW] Low-and-Slow Attack Logic
+        # Nếu là Hacker chế độ tàng hình -> Nghỉ rất lâu giữa các lệnh
+        if agent.is_malicious and getattr(agent, 'attack_mode', '') == 'low_slow':
+            # Nghỉ từ 10 đến 60 phút ảo giữa các lần query
+            return random.randint(10, 60) 
+        
+        return max(1, int(wait))
 
     def get_simulation_stats(self):
         """Get current simulation statistics"""

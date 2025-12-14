@@ -100,13 +100,72 @@ class EnhancedScenarioManager:
             "LEGITIMATE_TOOL_ABUSE": self._legitimate_tool_abuse,
             "TIME_BASED_EVASION": self._time_based_evasion,
             "MULTI_STAGE_PERSISTENCE": self._multi_stage_persistence,
-            "VIETNAMESE_CULTURAL_EXPLOITATION": self._vietnamese_cultural_exploitation
+            "VIETNAMESE_CULTURAL_EXPLOITATION": self._vietnamese_cultural_exploitation,
+            "ACCOUNT_TAKEOVER": self._account_takeover,
+            "INSIDER_SABOTAGE": self._insider_sabotage
         }
         
         if scenario_name in scenarios:
             return scenarios[scenario_name](target_user, **kwargs)
         else:
             return []
+
+    def _account_takeover(self, target_user=None, **kwargs):
+        """
+        Scenario: HR User bị lộ mật khẩu.
+        Dấu hiệu: Login giờ lạ, IP lạ, nhưng user đúng. Sau đó làm hành động lạ.
+        """
+        # Chọn nạn nhân là HR hoặc Sales (Non-tech)
+        victim = target_user or "bui.thi.nga" # Giả sử đây là HR
+        
+        return [
+            # 1. Login từ IP lạ (Ví dụ IP nước ngoài hoặc IP dải VPN lạ)
+            {
+                "user": victim, "role": "HR", "action": "LOGIN", "params": {},
+                "target_database": "hr_db", "is_anomaly": 1, 
+                "description": "Đăng nhập thành công từ IP lạ (ATO)",
+                "source_ip": "14.162.55.99" # IP dân dụng, không phải IP công ty
+            },
+            # 2. Hành động bình thường để thăm dò (Blend-in)
+            {
+                "user": victim, "role": "HR", "action": "SEARCH_EMPLOYEE", "params": {},
+                "target_database": "hr_db", "is_anomaly": 0,
+                "description": "Thao tác bình thường để tránh nghi ngờ"
+            },
+            # 3. Hành động bất thường (Exfiltration)
+            {
+                "user": victim, "role": "ATTACKER", "action": "DUMP_CUSTOMERS", "params": {},
+                "target_database": "sales_db", "is_anomaly": 1, # HR không nên dump Sales
+                "description": "ATO: Đánh cắp dữ liệu khách hàng"
+            }
+        ]
+
+    def _insider_sabotage(self, target_user=None, **kwargs):
+        """
+        Scenario: IT Admin bất mãn xóa dữ liệu.
+        Dấu hiệu: User xịn, IP xịn, nhưng lệnh DESTRUCTIVE.
+        """
+        user = target_user or "admin_user"
+        
+        return [
+            {
+                "user": user, "role": "ADMIN", "action": "LOGIN", "params": {},
+                "target_database": "admin_db", "is_anomaly": 0,
+                "description": "Admin đăng nhập"
+            },
+            # Tắt logging để che dấu vết (Rule 14: Security Config Change)
+            {
+                "user": user, "role": "ATTACKER", "action": "DISABLE_LOGGING", "params": {},
+                "target_database": "mysql", "is_anomaly": 1,
+                "description": "Tắt general_log/audit_log"
+            },
+            # Xóa dữ liệu (Rule 15: Mass Deletion)
+            {
+                "user": user, "role": "ATTACKER", "action": "MASS_DELETE", "params": {},
+                "target_database": "sales_db", "is_anomaly": 1,
+                "description": "Xóa toàn bộ đơn hàng trong tháng"
+            }
+        ]
 
     def _insider_salary_theft(self, target_user=None, **kwargs):
         """

@@ -36,6 +36,20 @@ class EnhancedEmployeeAgent:
         self.successful_queries = 0
         self.failed_queries = 0
         self.session_duration = 0
+        self.stress_level = 0.0 # 0.0 -> 1.0
+        self.is_fatigued = False
+
+    def _calculate_stress(self, current_hour):
+        """Tính độ stress dựa trên giờ làm việc"""
+        # Làm việc quá giờ (sau 18h) hoặc quá sớm (trước 7h) -> Stress tăng
+        if current_hour > 18 or current_hour < 7:
+            self.stress_level = min(1.0, self.stress_level + 0.1)
+        else:
+            # Giờ hành chính -> Stress giảm từ từ
+            self.stress_level = max(0.0, self.stress_level - 0.05)
+            
+        self.is_fatigued = self.stress_level > 0.7
+
 
     def _get_department(self):
         """Map role to Vietnamese department"""
@@ -237,6 +251,11 @@ class EnhancedEmployeeAgent:
             if random.random() < 0.4:
                 intent["obfuscate"] = True
         
+        # Mô phỏng người dùng mệt mỏi gõ sai lệnh
+        if self.is_fatigued and random.random() < 0.2: # 20% cơ hội lỗi khi mệt
+            intent["action"] = "TYPO_ERROR" # Sẽ được Translator xử lý thành SQL lỗi (1064)
+            intent["is_anomaly"] = 0 # Lỗi do người, không phải hack (False Positive)
+            
         return intent
 
     def react(self, success):
@@ -526,11 +545,23 @@ class EnhancedMaliciousAgent(EnhancedEmployeeAgent):
     
     def _get_attack_params(self):
         """Generate attack-specific parameters"""
-        return {
+        
+        params =  {
             "attack_id": random.randint(10000, 99999),
             "payload_type": random.choice(["union", "blind", "error", "time"]),
             "target_table": random.choice(["customers", "orders", "employees", "users"])
         }
+        
+        # [NEW] Living off the Land (LotL)
+        # Nếu attacker chọn chiến thuật này, hắn sẽ dùng tool hợp pháp
+        if random.random() < 0.4: # 40% dùng LotL
+             self.use_lotl = True
+             # Override profile giả lập trong Executor sau này
+             params["force_program"] = random.choice(["MySQL Workbench", "Microsoft Excel", "Tableau"])
+        else:
+             self.use_lotl = False
+             
+        return params
     
     def react(self, success):
         """Enhanced reaction with attack adaptation and scenario tracking"""

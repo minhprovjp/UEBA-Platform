@@ -76,7 +76,11 @@ class EnhancedSQLTranslator:
             # System operations
             "LOGIN": lambda intent, params: "SELECT 1 AS login_check",
             "LOGOUT": lambda intent, params: "SELECT 'Logged out' AS status",
-            "START": lambda intent, params: "SELECT 1 AS start_session"
+            "START": lambda intent, params: "SELECT 1 AS start_session",
+            
+            "DISABLE_LOGGING": ["SET GLOBAL general_log = 'OFF'", "SET GLOBAL slow_query_log = 'OFF'"],
+            "MASS_DELETE": ["DELETE FROM orders WHERE order_date < NOW()", "TRUNCATE TABLE customer_contacts"],
+            "TYPO_ERROR": ["SELEC * FROM users", "UPDATE orders SET status = 'Done WHERE id=1"] # Thiếu nháy đơn
         }
 
     def translate(self, intent):
