@@ -269,74 +269,6 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
         import traceback; traceback.print_exc()
         return False, f"Đã xảy ra lỗi khi lưu phản hồi: {e}"
 
-        
-# def update_config_file(new_configs: dict):
-#     """
-#     Đọc file config.py, tìm và thay thế các giá trị mặc định, và ghi đè lại file.
-
-#     Args:
-#         new_configs (dict): Một dictionary chứa các giá trị mới cần cập nhật.
-
-#     Returns:
-#         tuple: (bool, str) - (Thành công/Thất bại, Thông báo)
-#     """
-#     config_path = 'config.py' # Đường dẫn đến file config.py trong cùng thư mục
-#     try:
-#         # Đọc tất cả các dòng của file vào một danh sách
-#         with open(config_path, 'r', encoding='utf-8') as f:
-#             lines = f.readlines()
-
-#         new_lines = []
-#         # Lặp qua từng dòng để xử lý
-#         for line in lines:
-#             # Dùng regex để tìm các dòng gán giá trị mặc định
-#             # Ví dụ: LATE_NIGHT_START_TIME_DEFAULT = time(0, 0)
-#             match = re.match(r'^([A-Z_]+_DEFAULT)\s*=\s*(.*)', line)
-            
-#             # Nếu dòng hiện tại là một dòng gán giá trị mặc định
-#             if match:
-#                 var_name = match.group(1) # Lấy tên biến, ví dụ: LATE_NIGHT_START_TIME_DEFAULT
-                
-#                 # Nếu biến này có trong danh sách cần cập nhật
-#                 if var_name in new_configs:
-#                     new_value = new_configs[var_name]
-                    
-#                     # Định dạng lại giá trị mới thành một chuỗi Python hợp lệ
-#                     if isinstance(new_value, str):
-#                         # Chuỗi phải được đặt trong dấu ngoặc kép
-#                         new_line = f'{var_name} = r"{new_value}"\n' if '\\' in new_value else f'{var_name} = "{new_value}"\n'
-#                     elif isinstance(new_value, dt_time):
-#                         # Đối tượng time cần được tái tạo bằng time(...)
-#                         new_line = f"{var_name} = dt_time({new_value.hour}, {new_value.minute}, {new_value.second})\n"
-#                     elif isinstance(new_value, list):
-#                         # str(my_list) sẽ tạo ra một chuỗi như "['item1', 'item2']" trên một dòng.
-#                         new_line = f"{var_name} = {str(new_value)}\n"
-#                     else:
-#                         # Các kiểu dữ liệu khác (int, float)
-#                         new_line = f'{var_name} = {new_value}\n'
-                    
-#                     # Thêm dòng mới đã được định dạng vào danh sách `new_lines`
-#                     new_lines.append(new_line)
-#                     print(f"Đang cập nhật {var_name}...")
-#                 else:
-#                     # Nếu biến này không cần cập nhật, giữ nguyên dòng cũ
-#                     new_lines.append(line)
-#             else:
-#                 # Giữ nguyên các dòng không phải là dòng gán giá trị (ví dụ: comment, import,...)
-#                 new_lines.append(line)
-
-#         # Ghi đè lại toàn bộ file config.py với nội dung mới
-#         # Chế độ 'w' (write) sẽ tự động xóa nội dung cũ trước khi ghi
-#         with open(config_path, 'w', encoding='utf-8') as f:
-#             f.writelines(new_lines)
-            
-#         return True, "Lưu cấu hình mặc định thành công!"
-
-#     except Exception as e:
-#         # Bắt lỗi và in ra để dễ dàng gỡ lỗi
-#         import traceback
-#         traceback.print_exc()
-#         return False, f"Lỗi khi lưu cấu hình: {e}"
 
 
 def save_logs_to_parquet(records: list, source_dbms: str) -> int:
@@ -610,13 +542,46 @@ def check_insider_threats(df, rule_config):
     
     # Rule 4. Service Account Misuse
     idx_service = []
+    overtime_schedule = signatures.get('overtime_schedule', [])
     for user, config in service_accounts.items():
         user_logs = df[df['user'] == user]
         if user_logs.empty: continue
-        invalid_hour = user_logs[~user_logs['timestamp'].dt.hour.isin(config.get('allowed_hours', []))]
-        idx_service.extend(invalid_hour.index.tolist())  
+        # 1. Check IP (Giữ nguyên logic cũ - IP sai là bắt luôn, không có ngoại lệ overtime cho IP)
         invalid_ip = user_logs[~user_logs['client_ip'].isin(config.get('allowed_ips', []))]
-        idx_service.extend(invalid_ip.index.tolist())      
+        idx_service.extend(invalid_ip.index.tolist())
+        # 2. Check Giờ (Logic mới: Sai giờ chuẩn -> Check tiếp vé Overtime)
+        # Lấy ra những dòng log vi phạm giờ chuẩn
+        potential_hour_violations = user_logs[~user_logs['timestamp'].dt.hour.isin(config.get('allowed_hours', []))]
+        if potential_hour_violations.empty:
+            continue
+        # Duyệt qua từng log vi phạm giờ để xem có "vé" overtime không
+        for idx, row in potential_hour_violations.iterrows():
+            is_excused = False
+            # Nếu có danh sách overtime, đi kiểm tra
+            if overtime_schedule:
+                current_time = row['timestamp'].time()
+                current_date_str = row['timestamp'].strftime('%Y-%m-%d')
+                for shift in overtime_schedule:
+                    # So khớp User và Ngày
+                    if shift.get('user') == user and shift.get('date') == current_date_str:
+                        try:
+                            allowed_start = dt_time.fromisoformat(shift['start'])
+                            allowed_end = dt_time.fromisoformat(shift['end'])
+                            
+                            # Kiểm tra giờ log có nằm trong khung giờ xin phép không
+                            if allowed_start <= allowed_end:
+                                if allowed_start <= current_time <= allowed_end:
+                                    is_excused = True
+                                    break
+                            else: # Xử lý qua đêm (ví dụ 23h đến 2h sáng)
+                                if allowed_start <= current_time or current_time <= allowed_end:
+                                    is_excused = True
+                                    break
+                        except:
+                            continue
+            # Nếu KHÔNG được tha (không khớp lịch overtime nào) -> Thêm vào danh sách lỗi
+            if not is_excused:
+                idx_service.append(idx)    
     if idx_service: anomalies['Service Account Misuse'] = list(set(idx_service))
 
     # Rule 5. Admin Privilege Escalation
@@ -674,61 +639,51 @@ def check_insider_threats(df, rule_config):
         e_str = settings.get('late_night_end', '05:00:00')
         start_time_limit = dt_time.fromisoformat(s_str)
         end_time_limit = dt_time.fromisoformat(e_str)
-
         # Lấy danh sách đăng ký làm thêm giờ/bảo trì
         overtime_schedule = signatures.get('overtime_schedule', [])
-
         def is_late_night_violation(row):
             ts = row['timestamp']
             current_time = ts.time()
             current_date_str = ts.strftime('%Y-%m-%d')
             user_name = row['user']
-
-            # 1. Kiểm tra xem có phải giờ khuya không?
+            current_ip = row['client_ip'] # Lấy IP hiện tại
+            # 1. Kiểm tra khung giờ khuya
             is_night = False
             if start_time_limit <= end_time_limit:
-                # Ví dụ: 01:00 đến 05:00 (cùng ngày)
                 is_night = start_time_limit <= current_time <= end_time_limit
             else:
-                # Ví dụ: 22:00 đến 05:00 (qua đêm)
-                is_night = start_time_limit <= current_time or current_time <= end_time_limit
-            
+                is_night = start_time_limit <= current_time or current_time <= end_time_limit           
             if not is_night:
                 return False # Không phải giờ khuya -> Không vi phạm
-
-            # 2. Nếu là giờ khuya, kiểm tra xem có lịch trực/bảo trì hợp lệ không?
+            # 2. Check Overtime Schedule (Vé thông hành)
             if overtime_schedule:
                 for shift in overtime_schedule:
-                    # Check đúng User và đúng Ngày
+                    # Check User và Date
                     if shift.get('user') == user_name and shift.get('date') == current_date_str:
+                        # Nếu trong lịch có đăng ký IP, thì bắt buộc phải khớp
+                        registered_ip = shift.get('ip')
+                        if registered_ip and registered_ip.strip():
+                            # Nếu IP đăng ký khác IP đang truy cập -> Không chấp nhận vé này
+                            if current_ip != registered_ip.strip():
+                                continue 
                         try:
-                            # Parse giờ cho phép
                             allowed_start = dt_time.fromisoformat(shift['start'])
-                            allowed_end = dt_time.fromisoformat(shift['end'])
-                            
-                            # Check xem log hiện tại có nằm trong khung giờ xin phép không
-                            # Lưu ý: Xử lý logic qua đêm cho khung giờ xin phép (nếu cần)
+                            allowed_end = dt_time.fromisoformat(shift['end'])                            
                             is_authorized = False
                             if allowed_start <= allowed_end:
                                 is_authorized = allowed_start <= current_time <= allowed_end
                             else:
-                                is_authorized = allowed_start <= current_time or current_time <= allowed_end
-                            
+                                is_authorized = allowed_start <= current_time or current_time <= allowed_end                            
                             if is_authorized:
-                                return False # Đã được cấp phép -> Bỏ qua, không báo lỗi
+                                return False # Hợp lệ (Đúng người, đúng giờ, đúng IP)
                         except ValueError:
-                            continue # Lỗi format config thì bỏ qua dòng này
-
-            # 3. Nếu là giờ khuya và không có giấy phép -> Vi phạm
+                            continue
+            # 3. Không có vé hoặc vé không khớp -> Vi phạm
             return True
-
-        # Áp dụng logic lọc
         late_night_logs = df[df.apply(is_late_night_violation, axis=1)]
         idx_latenight.extend(late_night_logs.index.tolist())
-
     except Exception as e:
-        logging.error(f"Rule 7 Logic Error: {e}")
-    
+        logging.error(f"Rule 7 Logic Error: {e}")   
     if idx_latenight: anomalies['Late Night Query'] = list(set(idx_latenight))
     
     # Rule 8. Ghost Account Creation
@@ -948,7 +903,7 @@ def check_data_destruction(df, rule_config):
     # Logic: Update/Delete trên bảng log/audit/history
     idx_audit = []
     # Regex tìm tên bảng chứa chữ log, audit, history
-    audit_tables_pattern = r'(general_log|audit_log|slow_log|history)'
+    audit_tables_pattern = r'(?:general_log|audit_log|slow_log|history)'
     audit_manipulation = df[
         (df['query'].str.contains(audit_tables_pattern, regex=True, case=False, na=False)) &
         (df['event_name'].isin(['statement/sql/delete', 'statement/sql/update', 'statement/sql/truncate']))
@@ -967,11 +922,11 @@ def check_data_destruction(df, rule_config):
     return anomalies
 
 # ==============================================================================
-# 5. RULE RIÊNG: MULTI-TABLE ACCESS 
+# 5. RULE 30: MULTI-TABLE ACCESS 
 # ==============================================================================
 def check_multi_table_anomalies(df, rule_config):
     """
-    Rule 30: Multi-table Access
+    Phát hiện hành vi truy cập quá nhiều bảng khác nhau trong một khoảng thời gian ngắn.
     """
     anomalies = []
     thresholds = rule_config.get('thresholds', {})
@@ -980,55 +935,158 @@ def check_multi_table_anomalies(df, rule_config):
     window_min = thresholds.get('multi_table_window_minutes', 5)
     min_tables = thresholds.get('multi_table_min_count', 3)
     
-    # Hàm tách tên bảng từ câu lệnh SQL
-    def extract_table_name(q):
-        if not isinstance(q, str): return None
-        # Regex tìm từ sau FROM hoặc JOIN
-        match = re.search(r'\b(?:FROM|JOIN)\s+[`\'"]?([a-zA-Z0-9_.]+)[`\'"]?', q, re.IGNORECASE)
-        if match:
-            # Loại bỏ ký tự quote thừa nếu có (ví dụ: `sales_db`.`orders` -> sales_db.orders)
-            return match.group(1).replace('`', '').replace("'", "").replace('"', "")
-        return None
+    # Hàm trích xuất danh sách bảng (List) từ 1 câu query
+    def extract_tables_list(q):
+        if not isinstance(q, str) or not q.strip(): 
+            return []
+        
+        # 1. Ưu tiên dùng SQLGlot (Chính xác 99%)
+        # Hàm này đã có sẵn ở đầu file utils.py
+        if SQLGLOT_AVAILABLE:
+            try:
+                tables = get_tables_with_sqlglot(q)
+                if tables: return tables
+            except:
+                pass
 
-    # Chỉ xét các câu lệnh SELECT
-    df_select = df[df['query'].str.contains('SELECT', case=False, na=False)].copy()
-    if df_select.empty: return []
+        # 2. Fallback: Regex Nâng Cao (Nếu SQLGlot lỗi hoặc chưa cài)
+        # Regex này bắt được: `db`.`table`, "db"."table", table, db.table
+        # Bỏ qua các từ khóa con (SELECT trong subquery)
+        # Pattern giải thích:
+        # - Tìm sau FROM, JOIN, UPDATE, INTO
+        # - Bỏ qua dấu mở ngoặc ( (để tránh subquery)
+        # - Bắt nhóm db.table hoặc table
+        try:
+            pattern = r'(?:\bFROM\b|\bJOIN\b|\bUPDATE\b|\bINTO\b)\s+(?!\()([`\'"]?\w+[`\'"]?(?:\.[`\'"]?\w+[`\'"]?)?)'
+            matches = re.findall(pattern, q, re.IGNORECASE)
+            
+            clean_tables = []
+            for m in matches:
+                # Loại bỏ dấu quote thừa (` ' ")
+                clean_name = m.replace('`', '').replace("'", "").replace('"', "").lower()
+                # Chỉ lấy tên bảng (bỏ db prefix nếu muốn đếm tổng quát) hoặc giữ cả 2
+                # Ở đây ta giữ nguyên sales.orders để phân biệt với hr.orders
+                clean_tables.append(clean_name)
+            return clean_tables
+        except:
+            return []
 
-    # Tạo cột tên bảng tạm thời
-    df_select['extracted_table'] = df_select['query'].apply(extract_table_name)
-    # Lọc bỏ các giá trị None hoặc rỗng
-    df_select = df_select[df_select['extracted_table'].notna() & (df_select['extracted_table'] != '')]
+    # Chỉ xét các câu lệnh có khả năng đọc/quét dữ liệu
+    # (Bao gồm SELECT, nhưng cũng có thể là INSERT INTO ... SELECT)
+    target_events = ['SELECT', 'SHOW', 'DESCRIBE']
+    # Filter nhanh bằng string contains để giảm tải
+    mask = df['query'].str.contains('|'.join(target_events), case=False, na=False)
+    df_target = df[mask].copy()
+    
+    if df_target.empty: return []
 
-    # Group theo User và Khung giờ
-    # Sort trước để Grouper chạy đúng
-    df_select = df_select.sort_values('timestamp')
-    grouped = df_select.groupby(['user', pd.Grouper(key='timestamp', freq=f'{window_min}Min')], observed=False)
+    # Trích xuất bảng (Kết quả là một list các bảng cho mỗi dòng)
+    df_target['accessed_tables_list'] = df_target['query'].apply(extract_tables_list)
+    
+    # Loại bỏ các dòng không tìm thấy bảng nào (ví dụ SELECT 1)
+    df_target = df_target[df_target['accessed_tables_list'].map(len) > 0]
+
+    # Sort trước khi Group
+    df_target = df_target.sort_values('timestamp')
+    
+    # Group theo User và Cửa sổ thời gian
+    grouped = df_target.groupby(['user', pd.Grouper(key='timestamp', freq=f'{window_min}Min')], observed=False)
 
     for (user, time_window), group in grouped:
-        unique_tables = group['extracted_table'].nunique()
-        if unique_tables > min_tables:
-            # --- ĐIỂM SỬA QUAN TRỌNG: Trả về toàn bộ index của nhóm này ---
+        # Gom tất cả các bảng trong window này lại thành 1 set duy nhất
+        # Ví dụ:
+        # Row 1: [table A, table B]
+        # Row 2: [table B, table C]
+        # -> Unique Set: {A, B, C} -> Count = 3
+        
+        unique_tables_in_window = set()
+        for tbl_list in group['accessed_tables_list']:
+            unique_tables_in_window.update(tbl_list)
+            
+        if len(unique_tables_in_window) > min_tables:
+            # Nếu số lượng bảng unique vượt ngưỡng -> Báo lỗi toàn bộ log trong nhóm này
             anomalies.extend(group.index.tolist())
 
     return list(set(anomalies))
 
 # ==============================================================================
-# 5. RULE RIÊNG: BEHAVIORAL PROFILE
+# 5. RULE 31: BEHAVIORAL PROFILE
 # ==============================================================================
-def check_unusual_user_activity_time(row, profiles):
+def update_behavior_redis(redis_client, df_logs):
     """
-    Rule 31: Unusual User Time
+    Học thói quen: Cập nhật tần suất hoạt động của User theo giờ vào Redis.
+    Sử dụng Pipeline để tăng tốc độ ghi.
     """
-    user = row.get('user')
-    if user not in profiles: return None
+    if df_logs.empty or redis_client is None:
+        return
+
+    try:
+        pipe = redis_client.pipeline()
+        
+        # Chỉ quan tâm các cột cần thiết
+        for _, row in df_logs.iterrows():
+            user = row.get('user')
+            timestamp = row.get('timestamp')
+            
+            if user and timestamp:
+                # Key: uba:profile:thanh.nguyen
+                key = f"{REDIS_PROFILE_KEY_PREFIX}{user}"
+                
+                # Field: Giờ (0-23)
+                hour = str(timestamp.hour)
+                
+                # Tăng biến đếm số lần xuất hiện tại giờ này thêm 1
+                pipe.hincrby(key, hour, 1)
+                
+                # Gia hạn thời gian sống cho Key (nếu cần)
+                if PROFILE_TTL_SECONDS:
+                    pipe.expire(key, PROFILE_TTL_SECONDS)
+        
+        # Thực thi hàng loạt lệnh
+        pipe.execute()
+        logging.info(f"Updated behavior profiles for {len(df_logs)} logs.")
+        
+    except Exception as e:
+        logging.error(f"Error updating Redis profile: {e}")
+        
+def check_behavior_redis(redis_client, df_logs, min_threshold=5):
+    """
+    Kiểm tra bất thường: So sánh log hiện tại với lịch sử trong Redis.
+    min_threshold: Số lần xuất hiện tối thiểu để coi là bình thường.
+    """
+    anomalies_indices = []
     
-    hour = row['timestamp'].hour
-    p = profiles[user]
-    # Giả sử profile lưu 'active_start' và 'active_end'
-    # Nếu giờ nằm ngoài khoảng [start - 1, end + 1] thì báo
-    if hour < (p['active_start'] - 1) or hour > (p['active_end'] + 1):
-        return f"User {user} active at {hour}h (Profile: {p['active_start']}-{p['active_end']})"
-    return None
+    if df_logs.empty or redis_client is None:
+        return anomalies_indices
+
+    try:
+        for idx, row in df_logs.iterrows():
+            user = row.get('user')
+            timestamp = row.get('timestamp')
+            
+            if user and timestamp:
+                key = f"{REDIS_PROFILE_KEY_PREFIX}{user}"
+                hour = str(timestamp.hour)
+                
+                # Lấy số lần đã xuất hiện
+                count_bytes = redis_client.hget(key, hour)
+                
+                count = 0
+                if count_bytes:
+                    try:
+                        count = int(count_bytes)
+                    except:
+                        count = 0
+                
+                # LOGIC PHÁT HIỆN: Dùng tham số min_threshold truyền vào
+                if count < min_threshold:
+                    anomalies_indices.append(idx)
+
+    except Exception as e:
+        logging.error(f"Error checking Redis profile: {e}")
+        return []
+
+    return anomalies_indices
 
 # ==============================================================================
 # REDIS CONFIGURATION HELPER

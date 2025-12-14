@@ -23,6 +23,7 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
+from redis import Redis
 
 # --- Tắt log rác của thư viện parser SQL ---
 logging.getLogger('sqlglot').setLevel(logging.ERROR)
@@ -39,12 +40,13 @@ from sklearn.preprocessing import StandardScaler
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD
+from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, REDIS_URL
 from engine.features import enhance_features_batch
 from utils import (
-    check_unusual_user_activity_time, get_normalized_query,
+    get_normalized_query,
     check_access_anomalies, check_insider_threats, check_technical_attacks,
-    check_data_destruction, check_multi_table_anomalies
+    check_data_destruction, check_multi_table_anomalies,
+    update_behavior_redis, check_behavior_redis
 )
 
 # --- Logging ---
@@ -442,22 +444,41 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     p_min_queries = 10
     anomalies_user_time = pd.DataFrame()
     # Tính profile đơn giản
-    user_profiles = {}
-    for user, g in df_logs.groupby('user', observed=False):
-        if len(g) >= p_min_queries:
-            hours = g['timestamp'].dt.hour
-            user_profiles[user] = {
-                'active_start': int(hours.quantile(0.15)),
-                'active_end': int(hours.quantile(0.85))
-            }
-    if user_profiles:
-        df_logs['unusual_activity_reason'] = df_logs.apply(
-            lambda row: check_unusual_user_activity_time(row, user_profiles), axis=1
+    try:
+        redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
+        
+        # 1. Lấy ngưỡng từ Config (Mặc định là 5 nếu không tìm thấy)
+        profile_threshold = combined_rules_config.get('thresholds', {}).get('min_occurrences_threshold', 5)
+
+        # 2. KIỂM TRA (DETECTION)
+        current_indices_to_check = df_logs.index.difference(
+            set(df_rule_access.index).union(df_rule_insider.index).union(df_rule_technical.index)
         )
-        anomalies_user_time = df_logs[df_logs['unusual_activity_reason'].notna()].copy()
-        if not anomalies_user_time.empty:
-            anomalies_user_time['behavior_group'] = 'UNUSUAL_BEHAVIOR'
-            anomalies_user_time['specific_rule'] = 'Unusual Login Time'
+        df_to_check = df_logs.loc[current_indices_to_check]
+        
+        if not df_to_check.empty:
+            # Truyền profile_threshold vào hàm check
+            bad_indices = check_behavior_redis(redis_client, df_to_check, min_threshold=profile_threshold)
+            
+            if bad_indices:
+                anomalies_user_time = df_logs.loc[bad_indices].copy()
+                anomalies_user_time['behavior_group'] = 'UNUSUAL_BEHAVIOR'
+                anomalies_user_time['specific_rule'] = 'Rare Access Time (Profile Mismatch)'
+                
+                anomalies_user_time['unusual_activity_reason'] = anomalies_user_time['timestamp'].apply(
+                    lambda x: f"Access at {x.hour}h is rare (< {profile_threshold} times in history)"
+                )
+
+        # 3. HỌC (LEARNING)
+        df_to_learn = df_logs[~df_logs.index.isin(df_rule_technical.index)]
+        update_behavior_redis(redis_client, df_to_learn)
+        
+        redis_client.close()
+        
+    except Exception as e:
+        logging.error(f"Redis Behavioral Profiling Failed: {e}")
+        # Fallback: Nếu lỗi Redis, bỏ qua rule này, không làm crash hệ thống
+        anomalies_user_time = pd.DataFrame()
 
     # GOM TẤT CẢ LOG VI PHẠM
     rule_caught_indices = set(
