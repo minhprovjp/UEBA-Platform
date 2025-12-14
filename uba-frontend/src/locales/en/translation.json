@@ -1,0 +1,26 @@
+{
+  "sidebar": {
+    "dashboard": "Dashboard",
+    "logs": "Log Explorer",
+    "anomalies": "Anomaly Triage",
+    "access_control": "Access Control",
+    "settings": "Settings",
+    "logout": "Sign Out"
+  },
+  "access_control": {
+    "title": "Access Control & Defense",
+    "subtitle": "Manage access permissions and automated defense responses.",
+    "active_response": "Automated Defense (Active Response)",
+    "enable_ar": "Enable Active Response",
+    "overtime_title": "Overtime Schedule",
+    "service_account_title": "Service Accounts"
+  },
+  "common": {
+    "save": "Save Changes",
+    "saved": "Saved",
+    "add": "Add",
+    "delete": "Delete",
+    "user": "User",
+    "date": "Date"
+  }
+}

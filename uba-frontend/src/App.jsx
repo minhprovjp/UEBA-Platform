@@ -2,6 +2,8 @@
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Database, ShieldAlert, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, User, ShieldCheck } from "lucide-react";
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import LanguageSwitcher from './components/LanguageSwitcher';
 
 import LogExplorer from "./pages/LogExplorer";
 import Dashboard from './pages/Dashboard';
@@ -10,18 +12,18 @@ import SettingsPage from './pages/SettingsPage';
 import AccessControlPage from './pages/AccessControlPage';
 import LoginPage from './pages/LoginPage';
 
-const navItems = [
-  { name: "Dashboard", icon: LayoutDashboard, path: "/" },
-  { name: "Log Explorer", icon: Database, path: "/logs" },
-  { name: "Anomaly Triage", icon: ShieldAlert, path: "/anomalies" },
-  { name: "Access Control", icon: ShieldCheck, path: "/access-control" }
-];
-
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const location = useLocation();
+  const { t } = useTranslation();
+  const navItems = [
+  { name: t('sidebar.dashboard'), icon: LayoutDashboard, path: "/" },
+  { name: t('sidebar.logs'), icon: Database, path: "/logs" },
+  { name: t('sidebar.anomalies'), icon: ShieldAlert, path: "/anomalies" },
+  { name: t('sidebar.access_control'), icon: ShieldCheck, path: "/access-control" }
+  ];
 
   useEffect(() => {
     const token = localStorage.getItem('uba_token');
@@ -98,7 +100,8 @@ export default function App() {
 
         {/* Bottom Navigation (Settings & User) */}
         <div className="flex flex-col space-y-1.5 mt-auto pt-4 border-t border-zinc-900">
-            <NavItem item={{ name: "Settings", icon: Settings, path: "/settings" }} />
+            {!isCollapsed && <div className="px-2 mb-2"><LanguageSwitcher /></div>}
+            <NavItem item={{ name: t('sidebar.settings'), icon: Settings, path: "/settings" }} />
             
             {/* User Profile Mini (Optional) */}
             {!isCollapsed && (

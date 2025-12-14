@@ -166,9 +166,6 @@ PENDING_VIOLATIONS = []       # Buffer chứa các vi phạm đang chờ gửi
 # }
 
 # ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
-# Ngưỡng để kích hoạt khóa tài khoản
-ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 3
-
 # Đọc cấu hình admin MySQL từ .env
 ACTIVE_RESPONSE_SETTINGS = {
     "mysql_host": os.getenv("MYSQL_ADMIN_HOST"),
@@ -192,6 +189,13 @@ ENGINE_BATCH_MAX_BLOCK_MS  = int(os.getenv("ENGINE_BATCH_MAX_BLOCK_MS", "1000"))
 
 # Các Stream cần lắng nghe (chỉ MySQL)
 STREAMS = {f"{REDIS_STREAM_LOGS}:mysql": ">"} 
+
+# --- [NEW] CẤU HÌNH BEHAVIOR PROFILING (REDIS) ---
+# Prefix cho Key lưu profile user. Ví dụ: uba:profile:thanh.nguyen
+REDIS_PROFILE_KEY_PREFIX = "uba:profile:"
+
+# Thời gian lưu trữ profile (giây). 30 ngày = 2592000. Để None nếu muốn lưu vĩnh viễn.
+PROFILE_TTL_SECONDS = 2592000
 
 SENSITIVE_TABLES = {
    "salaries", "attendance", "departments", "employees", "hr_db.salaries", "hr_db.employees", "mysql.user", "information_schema.columns"

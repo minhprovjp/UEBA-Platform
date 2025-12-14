@@ -1,0 +1,26 @@
+{
+  "sidebar": {
+    "dashboard": "Bảng Điều Khiển",
+    "logs": "Tra Cứu Log",
+    "anomalies": "Phân Loại Bất Thường",
+    "access_control": "Kiểm Soát Truy Cập",
+    "settings": "Cài Đặt",
+    "logout": "Đăng Xuất"
+  },
+  "access_control": {
+    "title": "Kiểm Soát & Phòng Thủ",
+    "subtitle": "Quản lý quyền truy cập và cấu hình phản ứng tự động.",
+    "active_response": "Phòng Thủ Tự Động (Active Response)",
+    "enable_ar": "Bật Phản Ứng Chủ Động",
+    "overtime_title": "Lịch Làm Ngoài Giờ",
+    "service_account_title": "Tài Khoản Dịch Vụ"
+  },
+  "common": {
+    "save": "Lưu Thay Đổi",
+    "saved": "Đã Lưu",
+    "add": "Thêm",
+    "delete": "Xóa",
+    "user": "Người dùng",
+    "date": "Ngày"
+  }
+}

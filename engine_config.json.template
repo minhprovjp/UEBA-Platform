@@ -2,26 +2,15 @@
     "engine_sleep_interval_seconds": 600,
     "llm_config": {
         "enable_ollama": true,
-        "ollama_host": "http://192.168.1.40:11434/",
-        "ollama_model": "deepseek-r1:1.5b",
-        "ollama_timeout": 3600,
-        "ollama_max_retries": 3,
-        "ollama_temperature": 0.7,
-        "ollama_max_tokens": 4096,
-        "selected_provider": "none",
-        "openai_api_key": "",
-        "openai_model": "gpt-3.5-turbo",
-        "openai_base_url": "https://api.openai.com/v1",
-        "anthropic_api_key": "",
-        "anthropic_model": "claude-3-sonnet-20240229",
-        "custom_api_key": "",
-        "custom_api_endpoint": "",
-        "custom_model_name": "",
-        "custom_api_type": "openai-compatible",
-        "api_temperature": 0.7,
-        "api_max_tokens": 4096,
-        "api_timeout": 60,
-        "provider_priority": "ollama,api",
+        "ollama_host": "http://100.92.147.73:11434",
+        "ollama_timeout": 360,
+        "max_retries": 3,
+        "retry_delay": 2,
+        "enable_connection_testing": true,
+        "fallback_model": "seneca:latest",
+        "temperature": 0.7,
+        "max_tokens": 4096,
+        "ollama_model": "uba-expert",
         "enable_fallback": true,
         "max_fallback_attempts": 3
     },
@@ -52,6 +41,10 @@
             "huynhpro2703@gmail.com"
         ]
     },
+    "active_response_config": {
+        "enable_active_response": false,
+        "max_violation_threshold": 3
+    },
     "security_rules": {
         "service_accounts": {
             "backup_user": {
@@ -62,15 +55,6 @@
                 ],
                 "allowed_ips": [
                     "192.168.1.100"
-                ]
-            },
-            "etl_user": {
-                "allowed_hours": [
-                    0,
-                    12
-                ],
-                "allowed_ips": [
-                    "192.168.1.101"
                 ]
             }
         },
@@ -83,33 +67,21 @@
             "scan_efficiency_min_rows": 1000,
             "multi_table_window_minutes": 4,
             "multi_table_min_count": 3,
-            "max_query_entropy": 4.5,
+            "max_query_entropy": 5.8,
             "impossible_travel_speed_kmh": 800,
             "cpu_time_limit_ms": 1000,
             "lock_time_limit_ms": 500,
-            "warning_count_threshold": 5
+            "warning_count_threshold": 5,
+            "min_occurrences_threshold": 5
         },
         "signatures": {
             "overtime_schedule": [
                 {
-                    "user": "thanh.nguyen",
-                    "date": "2023-12-24",
-                    "start": "22:00",
-                    "end": "23:59",
-                    "reason": "Bao tri he thong dem Noel"
-                },
-                {
-                    "user": "anh.le",
-                    "date": "2023-12-31",
-                    "start": "00:00",
-                    "end": "04:00",
-                    "reason": "Truc Tet Duong Lich"
-                },
-                {
-                    "user": "le.cong.huynh",
-                    "date": "2025-12-20",
+                    "user": "thanh.huyen",
+                    "date": "2025-12-15",
                     "start": "01:00",
                     "end": "05:00",
+                    "ip": "192.168.1.100",
                     "reason": "bao tri"
                 }
             ],

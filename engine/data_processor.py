@@ -40,8 +40,9 @@ from sklearn.preprocessing import StandardScaler
 
 # --- Paths ---
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import MODELS_DIR, USER_MODELS_DIR, ACTIVE_RESPONSE_TRIGGER_THRESHOLD, REDIS_URL
+from config import MODELS_DIR, USER_MODELS_DIR, REDIS_URL
 from engine.features import enhance_features_batch
+from engine.config_manager import load_config
 from utils import (
     get_normalized_query,
     check_access_anomalies, check_insider_threats, check_technical_attacks,
@@ -441,7 +442,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         logging.error(f"Rule Engine Error: {e}", exc_info=True)
         df_rule_access = df_rule_insider = df_rule_technical = df_rule_destruction = df_rule_multi = pd.DataFrame()
 
-    p_min_queries = 10
     anomalies_user_time = pd.DataFrame()
     # Tính profile đơn giản
     try:
@@ -556,6 +556,9 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
 
     # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM
     list_of_violation_dfs = []
+    
+    ar_config = full_config.get("active_response_config", {})
+    threshold = ar_config.get("max_violation_threshold", 3)
 
     # Danh sách các DataFrame chứa vi phạm (Point-in-time)
     violation_sources = [
@@ -600,7 +603,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
 
         # --- LOGIC QUYẾT ĐỊNH KHÓA ---
         offenders = user_violation_counts[
-            (user_violation_counts['total_violation_count'] >= ACTIVE_RESPONSE_TRIGGER_THRESHOLD) |
+            (user_violation_counts['total_violation_count'] >= threshold) |
             (user_violation_counts['user'].isin(critical_users))
             ].copy()
         # Đánh dấu lý do

@@ -2,15 +2,18 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Toaster, toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useConfig, useUpdateConfigMutation } from '@/api/queries';
-import { Save, ShieldCheck, Clock, Server, PlusCircle, Trash2, Calendar } from 'lucide-react';
+import { Save, ShieldCheck, Clock, Server, PlusCircle, Trash2, Calendar, Zap, AlertTriangle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export default function AccessControlPage() {
   const [localConfig, setLocalConfig] = useState(null);
   const [isDirty, setIsDirty] = useState(false);
+  const { t } = useTranslation();
 
   // State cho Form thêm mới Overtime
   const [newOvertime, setNewOvertime] = useState({ user: '', date: '', start: '', end: '', ip: '', reason: '' });
@@ -110,26 +113,71 @@ export default function AccessControlPage() {
             <ShieldCheck className="w-6 h-6 text-green-500"/> Access Control Policies
           </h2>
           <p className="text-zinc-400 text-sm mt-1">
-            Quản lý quyền truy cập đặc biệt (Overtime) và tài khoản hệ thống (Service Accounts).
+            Quản lý quyền truy cập đặc biệt (Overtime), tài khoản hệ thống (Service Accounts)và cấu hình phản ứng tự động (Active Response).
           </p>
         </div>
         <div className="flex gap-2">
             <Button onClick={handleSave} disabled={!isDirty || updateConfigMutation.isPending}
                 className={`min-w-[120px] transition-all ${isDirty ? 'bg-primary-600 hover:bg-primary-700' : 'bg-zinc-800 text-zinc-500'}`}>
-                <Save className="w-4 h-4 mr-2"/> {updateConfigMutation.isPending ? "Saving..." : (isDirty ? "Lưu Thay Đổi" : "Đã Lưu")}
+                <Save className="w-4 h-4 mr-2"/> {updateConfigMutation.isPending ? "Saving..." : (isDirty ? t('common.save') : t('common.saved'))}
             </Button>
         </div>
       </header>
 
-      {/* CONTENT: 2 CỘT CHÍNH */}
+      {/* CONTENT */}
       <div className="flex-1 overflow-y-auto custom-scrollbar pb-10">
+        
+        {/* ACTIVE RESPONSE */}
+        <div className="mb-6">
+            <Card className="bg-red-950/20 border-red-900/30">
+                <CardHeader className="pb-3 border-b border-red-900/20 mb-3">
+                    <CardTitle className="text-base font-semibold text-red-400 flex items-center gap-2">
+                        <Zap className="w-5 h-5"/> Automated Defense (Active Response)
+                    </CardTitle>
+                    <CardDescription className="text-zinc-400">
+                        Hệ thống sẽ tự động <b>Khóa Tài Khoản (LOCK)</b> và <b>Ngắt Kết Nối (KILL)</b> nếu phát hiện vi phạm nghiêm trọng.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                            <div className="flex items-center space-x-2 border border-red-900/50 p-3 rounded bg-red-950/30">
+                                <Switch id="ar-enable" 
+                                    checked={getVal('active_response_config.enable_active_response', true)}
+                                    onCheckedChange={c => updateField('active_response_config.enable_active_response', c)}
+                                />
+                                <Label htmlFor="ar-enable" className="text-white font-bold cursor-pointer">
+                                    Bật Phản Ứng Chủ Động
+                                </Label>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <AlertTriangle className="w-4 h-4 text-orange-500"/>
+                                <span className="text-sm text-zinc-400">Cẩn trọng: Tính năng này sẽ tác động trực tiếp đến Database User.</span>
+                            </div>
+                        </div>
+
+                        {/* Config ngưỡng kích hoạt */}
+                        <div className="flex items-center gap-2">
+                            <Label className="text-sm text-zinc-300">Ngưỡng vi phạm (lần):</Label>
+                            <Input 
+                                type="number" 
+                                className="w-20 h-9 bg-zinc-950 border-red-900/50 focus:border-red-500 text-center"
+                                value={getVal('active_response_config.max_violation_threshold', 3)}
+                                onChange={e => updateField('active_response_config.max_violation_threshold', parseInt(e.target.value))}
+                            />
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             
-            {/* CỘT 1: OVERTIME SCHEDULE */}
+            {/* OVERTIME SCHEDULE */}
             <div className="space-y-4">
                 <div className="flex items-center gap-2 mb-2">
                     <Clock className="w-5 h-5 text-blue-400"/>
-                    <h3 className="text-lg font-semibold text-white">Lịch Làm Ngoài Giờ (Overtime)</h3>
+                    <h3 className="text-lg font-semibold text-white">{t('access_control.overtime_title')}</h3>
                 </div>
                 
                 <ConfigCard 
@@ -173,7 +221,7 @@ export default function AccessControlPage() {
                                         value={newOvertime.reason} onChange={e => setNewOvertime({...newOvertime, reason: e.target.value})}/>
                                     </FormItem>
                                 </div>
-                                <Button size="sm" onClick={handleAddOvertime} className="h-8 mb-0.5 bg-blue-600 hover:bg-blue-700">Thêm</Button>
+                                <Button size="sm" onClick={handleAddOvertime} className="h-8 mb-0.5 bg-blue-600 hover:bg-blue-700">{t('common.add')}</Button>
                             </div>
                         </div>
 
@@ -224,7 +272,7 @@ export default function AccessControlPage() {
                 </ConfigCard>
             </div>
 
-            {/* CỘT 2: SERVICE ACCOUNTS */}
+            {/* SERVICE ACCOUNTS */}
             <div className="space-y-4">
                 <div className="flex items-center gap-2 mb-2">
                     <Server className="w-5 h-5 text-orange-400"/>
@@ -258,7 +306,7 @@ export default function AccessControlPage() {
                                             value={newServiceAccount.ips} onChange={e => setNewServiceAccount({...newServiceAccount, ips: e.target.value})} />
                                     </FormItem>
                                 </div>
-                                <Button size="sm" onClick={handleAddServiceAccount} className="h-8 mb-0.5 bg-orange-600 hover:bg-orange-700">Thêm</Button>
+                                <Button size="sm" onClick={handleAddServiceAccount} className="h-8 mb-6 bg-orange-600 hover:bg-orange-700">{t('common.add')}</Button>
                             </div>
                         </div>
 

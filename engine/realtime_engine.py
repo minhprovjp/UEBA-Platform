@@ -290,6 +290,14 @@ def handle_active_responses(results: dict):
     if not users_to_lock:
         return  # Không có user nào cần xử lý
 
+    current_config = load_config()
+    ar_config = current_config.get("active_response_config", {})
+    
+    # Kiểm tra công tắc Bật/Tắt
+    if not ar_config.get("enable_active_response", True):
+        logger.info(f"🚫 Active Response is DISABLED. Skipping action for {len(users_to_lock)} users.")
+        return
+
     admin_user = ACTIVE_RESPONSE_SETTINGS.get('mysql_user', '')
 
     for offender in users_to_lock:
@@ -298,6 +306,7 @@ def handle_active_responses(results: dict):
 
         # === SAFETY SWITCH ===
         if admin_user and user_name == admin_user:
+            logger.warning(f"⚠️ Detected violation on ADMIN user '{user_name}' but ignoring due to safety switch.")
             continue
 
         custom_reason = offender.get('lock_reason')
@@ -364,15 +373,15 @@ def start_engine():
                 # Save to DB
                 save_results_to_db(results)
                        
-                # try:
-                #     handle_email_alerts_async(results)    # Sending Alert (nếu có nội dung)
-                # except Exception as e:
-                #     logging.error(f"[Email Error] Error creating email sending thread: {e}", exc_info=True)
+                try:
+                    handle_email_alerts_async(results)    # Sending Alert (nếu có nội dung)
+                except Exception as e:
+                    logging.error(f"[Email Error] Error creating email sending thread: {e}", exc_info=True)
                 
-                # try:
-                #     handle_active_responses(results)   # Active Response (nếu có user vượt ngưỡng)
-                # except Exception as e:
-                #     logging.error(f"[Active Response Error] Error while executing Lock/Kill: {e}", exc_info=True)
+                try:
+                    handle_active_responses(results)   # Active Response (nếu có user vượt ngưỡng)
+                except Exception as e:
+                    logging.error(f"[Active Response Error] Error while executing Lock/Kill: {e}", exc_info=True)
                 
                 # ACK messages
                 for stream, msg_id in ack_ids:
