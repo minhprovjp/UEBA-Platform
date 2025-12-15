@@ -926,88 +926,63 @@ def check_data_destruction(df, rule_config):
 # ==============================================================================
 def check_multi_table_anomalies(df, rule_config):
     """
-    Phát hiện hành vi truy cập quá nhiều bảng khác nhau trong một khoảng thời gian ngắn.
+    Rule 30: Multi-table Access
     """
     anomalies = []
     thresholds = rule_config.get('thresholds', {})
     
-    # Lấy tham số (Mặc định 5 phút, 3 bảng)
-    window_min = thresholds.get('multi_table_window_minutes', 5)
+    # Lấy tham số
+    window_min = thresholds.get('multi_table_window_minutes', 4)
     min_tables = thresholds.get('multi_table_min_count', 3)
     
-    # Hàm trích xuất danh sách bảng (List) từ 1 câu query
     def extract_tables_list(q):
-        if not isinstance(q, str) or not q.strip(): 
-            return []
+        if not isinstance(q, str) or not q.strip(): return []
         
-        # 1. Ưu tiên dùng SQLGlot (Chính xác 99%)
-        # Hàm này đã có sẵn ở đầu file utils.py
+        # 1. Ưu tiên SQLGlot
         if SQLGLOT_AVAILABLE:
             try:
                 tables = get_tables_with_sqlglot(q)
                 if tables: return tables
-            except:
-                pass
+            except: pass
 
-        # 2. Fallback: Regex Nâng Cao (Nếu SQLGlot lỗi hoặc chưa cài)
-        # Regex này bắt được: `db`.`table`, "db"."table", table, db.table
-        # Bỏ qua các từ khóa con (SELECT trong subquery)
-        # Pattern giải thích:
-        # - Tìm sau FROM, JOIN, UPDATE, INTO
-        # - Bỏ qua dấu mở ngoặc ( (để tránh subquery)
-        # - Bắt nhóm db.table hoặc table
+        # 2. Fallback Regex
         try:
             pattern = r'(?:\bFROM\b|\bJOIN\b|\bUPDATE\b|\bINTO\b)\s+(?!\()([`\'"]?\w+[`\'"]?(?:\.[`\'"]?\w+[`\'"]?)?)'
             matches = re.findall(pattern, q, re.IGNORECASE)
-            
             clean_tables = []
             for m in matches:
-                # Loại bỏ dấu quote thừa (` ' ")
                 clean_name = m.replace('`', '').replace("'", "").replace('"', "").lower()
-                # Chỉ lấy tên bảng (bỏ db prefix nếu muốn đếm tổng quát) hoặc giữ cả 2
-                # Ở đây ta giữ nguyên sales.orders để phân biệt với hr.orders
                 clean_tables.append(clean_name)
             return clean_tables
         except:
             return []
 
-    # Chỉ xét các câu lệnh có khả năng đọc/quét dữ liệu
-    # (Bao gồm SELECT, nhưng cũng có thể là INSERT INTO ... SELECT)
     target_events = ['SELECT', 'SHOW', 'DESCRIBE']
-    # Filter nhanh bằng string contains để giảm tải
     mask = df['query'].str.contains('|'.join(target_events), case=False, na=False)
     df_target = df[mask].copy()
     
-    if df_target.empty: return []
+    if df_target.empty: return {} # <-- SỬA: Trả về dict rỗng thay vì list rỗng
 
-    # Trích xuất bảng (Kết quả là một list các bảng cho mỗi dòng)
     df_target['accessed_tables_list'] = df_target['query'].apply(extract_tables_list)
-    
-    # Loại bỏ các dòng không tìm thấy bảng nào (ví dụ SELECT 1)
     df_target = df_target[df_target['accessed_tables_list'].map(len) > 0]
-
-    # Sort trước khi Group
     df_target = df_target.sort_values('timestamp')
     
-    # Group theo User và Cửa sổ thời gian
     grouped = df_target.groupby(['user', pd.Grouper(key='timestamp', freq=f'{window_min}Min')], observed=False)
 
     for (user, time_window), group in grouped:
-        # Gom tất cả các bảng trong window này lại thành 1 set duy nhất
-        # Ví dụ:
-        # Row 1: [table A, table B]
-        # Row 2: [table B, table C]
-        # -> Unique Set: {A, B, C} -> Count = 3
-        
         unique_tables_in_window = set()
         for tbl_list in group['accessed_tables_list']:
             unique_tables_in_window.update(tbl_list)
             
         if len(unique_tables_in_window) > min_tables:
-            # Nếu số lượng bảng unique vượt ngưỡng -> Báo lỗi toàn bộ log trong nhóm này
             anomalies.extend(group.index.tolist())
 
-    return list(set(anomalies))
+    # --- [QUAN TRỌNG] SỬA ĐOẠN RETURN TẠI ĐÂY ---
+    if anomalies:
+        # Trả về Dictionary: { 'Tên Rule': [Danh sách Index] }
+        return {'Multi-Table Access': list(set(anomalies))}
+    
+    return {}
 
 # ==============================================================================
 # 5. RULE 31: BEHAVIORAL PROFILE

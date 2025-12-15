@@ -114,9 +114,20 @@ export const AnomalyDetailModal = ({
         </div>
         
         {/* 5. Footer Info */}
-        <div className="flex justify-between items-center text-[10px] text-zinc-500 pt-2 border-t border-zinc-800/50">
-             <span>Model: Ollama (DeepSeek-R1)</span>
-             <span>Type: {data.anomaly_type || data.behavior_type || "Generic"}</span>
+        <div className="flex flex-col gap-1 pt-3 border-t border-zinc-800/50">
+             <div className="flex justify-between items-center text-[10px] text-zinc-500">
+                 <span>Model: Ollama (DeepSeek-R1)</span>
+                 <span>Analysis Time: {new Date().toLocaleTimeString()}</span>
+             </div>
+             
+             {/* Hiển thị loại tấn công / Rule cụ thể */}
+             <div className="mt-2 bg-zinc-900/80 p-2 rounded border border-zinc-800 flex items-center justify-between">
+                <span className="text-xs text-zinc-400 font-medium">Detected Pattern / Rule:</span>
+                <Badge variant="outline" className="text-xs font-mono border-purple-500/30 text-purple-300 bg-purple-500/10">
+                    {/* Ưu tiên hiển thị kết quả từ AI, nếu không có mới hiện loại gốc */}
+                    {data.anomaly_type || data.behavior_type || log.anomaly_type || "Unknown Pattern"}
+                </Badge>
+             </div>
         </div>
       </div>
     );
@@ -187,6 +198,28 @@ export const AnomalyDetailModal = ({
                                     {t}
                                     </Badge>
                                 ))}
+                                </div>
+                            </div>
+                            <div>
+                                <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase flex items-center gap-2">
+                                  <FileText className="w-3 h-3"/> Evidence Queries
+                                </h4>
+                                <div className="space-y-2">
+                                  {log.details?.evidence_queries?.map((item, idx) => (
+                                    <div key={idx} className="bg-zinc-900/50 p-2 rounded border border-zinc-800 hover:border-zinc-700 transition-colors group">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className="text-[10px] font-mono text-zinc-500 bg-zinc-950 px-1 rounded">
+                                          {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : 'Unknown Time'}
+                                        </span>
+                                      </div>
+                                      <code className="text-xs font-mono text-blue-300/90 break-all whitespace-pre-wrap block pl-1 border-l-2 border-blue-500/30">
+                                        {item.query}
+                                      </code>
+                                    </div>
+                                  ))}
+                                  {(!log.details?.evidence_queries || log.details.evidence_queries.length === 0) && (
+                                    <div className="text-zinc-600 text-xs italic">No query evidence details available.</div>
+                                  )}
                                 </div>
                             </div>
                         </div>

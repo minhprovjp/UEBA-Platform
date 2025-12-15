@@ -11,7 +11,7 @@ import { Toaster, toast } from "sonner";
 import { useConfig, useUpdateConfigMutation } from '@/api/queries';
 import { apiClient } from '@/api/client';
 import { 
-    Save, Settings, Shield, BrainCircuit, List, Clock, Key, LogOut, User, Activity, Mail, Database
+    Save, Settings, Shield, BrainCircuit, List, Clock, Key, LogOut, User, Activity, Mail, Zap, AlertTriangle 
 } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -48,9 +48,16 @@ export default function SettingsPage() {
     setIsDirty(true);
   };
 
-  const updateArrayField = (path, stringValue) => {
-    const arr = stringValue.split(',').map(s => s.trim()).filter(Boolean);
-    updateField(path, arr);
+  const getListDisplayValue = (path) => {
+    const val = getVal(path, []);
+    // Nếu là Mảng (dữ liệu gốc) -> Nối thành chuỗi
+    if (Array.isArray(val)) return val.join(', ');
+    // Nếu là Chuỗi (đang nhập liệu) -> Trả về nguyên vẹn
+    return val;
+  };
+
+  const handleListChange = (path, stringValue) => {
+    updateField(path, stringValue);
   };
 
   const getVal = (path, fallback = "") => {
@@ -58,7 +65,51 @@ export default function SettingsPage() {
   };
 
   const handleSave = () => {
-    updateConfigMutation.mutate(localConfig, {
+    // Clone dữ liệu để xử lý
+    const payload = JSON.parse(JSON.stringify(localConfig));
+
+    // Danh sách các đường dẫn cần chuyển từ String -> Array
+    const fieldsToConvert = [
+        'email_alert_config.to_recipients',
+        'email_alert_config.bcc_recipients',
+        'security_rules.signatures.sqli_keywords',
+        'security_rules.signatures.admin_keywords',
+        'security_rules.signatures.disallowed_programs',
+        'security_rules.signatures.sensitive_tables',
+        'security_rules.settings.sensitive_allowed_users',
+        'security_rules.signatures.large_dump_tables',
+        'security_rules.signatures.hr_authorized_users',
+        'security_rules.signatures.restricted_connection_users'
+    ];
+
+    // Helper nội bộ để update object payload
+    const setDeepValue = (obj, path, value) => {
+        const keys = path.split('.');
+        let current = obj;
+        for (let i = 0; i < keys.length - 1; i++) {
+           if (!current[keys[i]]) current[keys[i]] = {}; 
+           current = current[keys[i]];
+        }
+        current[keys[keys.length - 1]] = value;
+    };
+
+    // Helper lấy giá trị sâu
+    const getDeepValue = (obj, path) => {
+        return path.split('.').reduce((acc, k) => (acc && acc[k] !== undefined) ? acc[k] : undefined, obj);
+    };
+
+    // Thực hiện chuyển đổi
+    fieldsToConvert.forEach(path => {
+        const rawVal = getDeepValue(payload, path);
+        // Nếu nó là chuỗi (do người dùng mới sửa), hãy convert sang mảng
+        if (typeof rawVal === 'string') {
+            const arr = rawVal.split(',').map(s => s.trim()).filter(Boolean);
+            setDeepValue(payload, path, arr);
+        }
+    });
+
+    // Gửi payload đã chuẩn hóa lên server
+    updateConfigMutation.mutate(payload, {
         onSuccess: () => setIsDirty(false)
     });
   };
@@ -134,9 +185,49 @@ export default function SettingsPage() {
             </TabsList>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-10">
-                
-                {/* === TAB: EMAIL ALERTS === */}
+
+                {/* === TAB: RESPONSE & EMAIL ALERTS === */}
                 <TabsContent value="alerts" className="space-y-4 mt-0">
+                    <Card className="bg-red-950/20 border-red-900/30">
+                        <CardHeader className="pb-3 border-b border-red-900/20 mb-3">
+                            <CardTitle className="text-base font-semibold text-red-400 flex items-center gap-2">
+                                <Zap className="w-5 h-5"/> Automated Defense (Active Response)
+                            </CardTitle>
+                            <CardDescription className="text-zinc-400">
+                                Hệ thống sẽ tự động <b>Khóa Tài Khoản (LOCK)</b> và <b>Ngắt Kết Nối (KILL)</b> nếu phát hiện vi phạm nghiêm trọng.
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-4">
+                                    <div className="flex items-center space-x-2 border border-red-900/50 p-3 rounded bg-red-950/30">
+                                        <Switch id="ar-enable" 
+                                            checked={getVal('active_response_config.enable_active_response', true)}
+                                            onCheckedChange={c => updateField('active_response_config.enable_active_response', c)}
+                                        />
+                                        <Label htmlFor="ar-enable" className="text-white font-bold cursor-pointer">
+                                            Bật Phản Ứng Chủ Động
+                                        </Label>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <AlertTriangle className="w-4 h-4 text-orange-500"/>
+                                        <span className="text-sm text-zinc-400">Cẩn trọng: Tính năng này sẽ tác động trực tiếp đến Database User.</span>
+                                    </div>
+                                </div>
+        
+                                {/* Config ngưỡng kích hoạt */}
+                                <div className="flex items-center gap-2">
+                                    <Label className="text-sm text-zinc-300">Ngưỡng vi phạm (lần):</Label>
+                                    <Input 
+                                        type="number" 
+                                        className="w-20 h-9 bg-zinc-950 border-red-900/50 focus:border-red-500 text-center"
+                                        value={getVal('active_response_config.max_violation_threshold', 3)}
+                                        onChange={e => updateField('active_response_config.max_violation_threshold', parseInt(e.target.value))}
+                                    />
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
                     <ConfigCard title="Email Notification Settings" desc="Cấu hình máy chủ SMTP để gửi cảnh báo khi phát hiện bất thường.">
                         <div className="flex items-center space-x-2 mb-6 border border-zinc-800 p-3 rounded bg-zinc-900/50">
                             <Switch id="email-enable" 
@@ -172,13 +263,13 @@ export default function SettingsPage() {
                                 <h4 className="text-sm font-semibold text-primary-400 uppercase tracking-wider">Danh Sách Người Nhận</h4>
                                 <FormItem label="Người nhận chính (To)" desc="Email nhận cảnh báo trực tiếp (phân cách bằng dấu phẩy)">
                                     <Textarea className="h-32 font-mono text-xs" 
-                                        value={getVal('email_alert_config.to_recipients', []).join(', ')} 
-                                        onChange={e => updateArrayField('email_alert_config.to_recipients', e.target.value)}/>
+                                        value={getListDisplayValue('email_alert_config.to_recipients')} 
+                                        onChange={e => handleListChange('email_alert_config.to_recipients', e.target.value)}/>
                                 </FormItem>
                                 <FormItem label="Người nhận ẩn (BCC)" desc="Email nhận bản sao ẩn để giám sát (phân cách bằng dấu phẩy)">
                                     <Textarea className="h-32 font-mono text-xs" 
-                                        value={getVal('email_alert_config.bcc_recipients', []).join(', ')} 
-                                        onChange={e => updateArrayField('email_alert_config.bcc_recipients', e.target.value)}/>
+                                        value={getListDisplayValue('email_alert_config.bcc_recipients')} 
+                                        onChange={e => handleListChange('email_alert_config.bcc_recipients', e.target.value)}/>
                                 </FormItem>
                             </div>
                         </div>
@@ -244,71 +335,52 @@ export default function SettingsPage() {
                     </ConfigCard>
                 </TabsContent>
 
-                {/* === TAB: SIGNATURES (ĐÃ BỔ SUNG CÁC TRƯỜNG THIẾU) === */}
+                {/* === TAB: SIGNATURES === */}
                 <TabsContent value="signatures" className="space-y-4 mt-0">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* COL 1: ATTACK SIGNATURES */}
+                    <div className="grid grid-cols-1 gap-6">
+                        {/* ATTACK SIGNATURES */}
                         <div className="space-y-6">
                             <ConfigCard title="Dấu Hiệu Tấn Công (Attack Patterns)" desc="Các từ khóa định danh hành vi nguy hiểm.">
                                 <div className="space-y-4">
                                     <FormItem label="Từ khóa SQL Injection" desc="Rule 11: Phát hiện tấn công tiêm nhiễm SQL">
                                         <Textarea className="h-32 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.sqli_keywords', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.sqli_keywords', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.sqli_keywords')} 
+                                            onChange={e => handleListChange('security_rules.signatures.sqli_keywords', e.target.value)}/>
                                     </FormItem>
                                     <FormItem label="Từ khóa Admin Privilege" desc="Rule 5: Phát hiện leo thang đặc quyền">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.admin_keywords', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.admin_keywords', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.admin_keywords')} 
+                                            onChange={e => handleListChange('security_rules.signatures.admin_keywords', e.target.value)}/>
                                     </FormItem>
                                     <FormItem label="Công cụ bị cấm (Blacklist)" desc="Rule 17: Các tool/client không được phép kết nối">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.disallowed_programs', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.disallowed_programs', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.disallowed_programs')} 
+                                            onChange={e => handleListChange('security_rules.signatures.disallowed_programs', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Công cụ cho phép (Whitelist)" desc="Rule 17: Nếu cấu hình, chỉ các tool này được phép">
-                                        <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.allowed_programs', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.allowed_programs', e.target.value)}/>
-                                    </FormItem>
-                                </div>
-                            </ConfigCard>
-                        </div>
-
-                        {/* COL 2: SENSITIVE DATA & USERS */}
-                        <div className="space-y-6">
-                            <ConfigCard title="Bảo Vệ Dữ Liệu (Data Protection)" desc="Cấu hình bảo vệ dữ liệu nhạy cảm.">
-                                <div className="space-y-4">
                                     <FormItem label="Danh sách Bảng Nhạy Cảm" desc="Rule 6: Bảng chứa dữ liệu mật (lương, thẻ...)">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.sensitive_tables', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.sensitive_tables', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.sensitive_tables')} 
+                                            onChange={e => handleListChange('security_rules.signatures.sensitive_tables', e.target.value)}/>
                                     </FormItem>
                                     <FormItem label="User Được Phép Truy Cập" desc="Rule 6: Whitelist user xem bảng nhạy cảm">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.settings.sensitive_allowed_users', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.settings.sensitive_allowed_users', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.settings.sensitive_allowed_users')} 
+                                            onChange={e => handleListChange('security_rules.settings.sensitive_allowed_users', e.target.value)}/>
                                     </FormItem>
-                                    <div className="border-t border-zinc-800 pt-2"></div>
                                     <FormItem label="Bảng Dữ Liệu Lớn (Large Dump)" desc="Rule 27: Giám sát việc dump dữ liệu trái phép">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.large_dump_tables', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.large_dump_tables', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.large_dump_tables')} 
+                                            onChange={e => handleListChange('security_rules.signatures.large_dump_tables', e.target.value)}/>
                                     </FormItem>
-                                </div>
-                            </ConfigCard>
-
-                            <ConfigCard title="Người Dùng Đặc Biệt" desc="Các user có quyền hạn cao.">
-                                <div className="space-y-4">
                                     <FormItem label="HR Authorized Users" desc="Rule 8: User được phép tạo tài khoản mới">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.hr_authorized_users', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.hr_authorized_users', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.hr_authorized_users')} 
+                                            onChange={e => handleListChange('security_rules.signatures.hr_authorized_users', e.target.value)}/>
                                     </FormItem>
                                     <FormItem label="Restricted Connection Users" desc="Rule 10: User bị cấm kết nối Insecure (TCP/IP)">
                                         <Textarea className="h-24 font-mono text-xs" 
-                                            value={getVal('security_rules.signatures.restricted_connection_users', []).join(', ')} 
-                                            onChange={e => updateArrayField('security_rules.signatures.restricted_connection_users', e.target.value)}/>
+                                            value={getListDisplayValue('security_rules.signatures.restricted_connection_users')} 
+                                            onChange={e => handleListChange('security_rules.signatures.restricted_connection_users', e.target.value)}/>
                                     </FormItem>
                                 </div>
                             </ConfigCard>

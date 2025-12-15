@@ -349,6 +349,10 @@ def _aggregate_multi_table_alerts(df_rule_multi):
     for (user, time_window), group in grouped:
         # Nếu nhóm này ít hơn 2 bảng thì có thể không đáng gọi là session tấn công lớn (tùy logic)
         # Nhưng vì rule gốc đã lọc rồi, nên ta cứ aggregate hết.
+        
+        client_ip = 'unknown'
+        if 'client_ip' in group.columns and not group['client_ip'].empty:
+            client_ip = group['client_ip'].iloc[0]
 
         # Lấy danh sách bảng bị truy cập trong session này
         # (Cần trích xuất lại tên bảng từ query vì trong df_rule_multi có thể chưa có cột clean list)
@@ -367,11 +371,12 @@ def _aggregate_multi_table_alerts(df_rule_multi):
                 "query": row['query']
             })
 
-        if not all_tables:
+        if len(all_tables) < 2:
             continue
 
         aggregated_data.append({
             "user": user,
+            "client_ip": client_ip,
             "start_time": group['timestamp'].min(),
             "end_time": group['timestamp'].max(),
             "tables_accessed_in_session": list(all_tables),
@@ -619,6 +624,47 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
             # Chuyển thành list dictionary
             users_to_lock_list = offenders.to_dict('records')
 
+
+    # ========================================================
+    # CẬP NHẬT LẠI THÔNG TIN RULE VÀO LOG TỔNG (df_logs)
+    # Để Log Explorer hiển thị được tên Rule
+    # ========================================================
+    
+    # 1. Danh sách các DataFrame chứa kết quả Rule
+    detection_sources = [
+        df_rule_access,
+        df_rule_insider,
+        df_rule_technical,
+        df_rule_destruction,
+        df_rule_multi,
+        anomalies_user_time, 
+        anomalies_ml
+    ]
+
+    # 2. Đảm bảo cột ghi lý do tồn tại trong df_logs
+    if 'unusual_activity_reason' not in df_logs.columns:
+        df_logs['unusual_activity_reason'] = None
+    
+    # 3. Duyệt qua từng nguồn phát hiện và cập nhật vào df_logs
+    for source_df in detection_sources:
+        if source_df is not None and not source_df.empty:
+            # Chỉ lấy các index có trong df_logs (để an toàn)
+            common_indices = source_df.index.intersection(df_logs.index)
+            
+            if not common_indices.empty:
+                # Lấy tên rule từ cột 'specific_rule' hoặc 'anomaly_type'
+                # Ưu tiên 'specific_rule' (do hàm process_rule_results tạo ra)
+                if 'specific_rule' in source_df.columns:
+                    rule_series = source_df.loc[common_indices, 'specific_rule']
+                elif 'behavior_group' in source_df.columns:
+                    rule_series = source_df.loc[common_indices, 'behavior_group']
+                else:
+                    rule_series = pd.Series("Detected by System", index=common_indices)
+
+                # Cập nhật vào df_logs
+                # Lưu ý: Nếu 1 log dính nhiều rule, code này sẽ ghi đè rule cuối cùng (hoặc bạn có thể nối chuỗi)
+                df_logs.loc[common_indices, 'unusual_activity_reason'] = rule_series
+                df_logs.loc[common_indices, 'is_anomaly'] = True
 
     # ========================================================
     # TỔNG HỢP KẾT QUẢ CUỐI CÙNG

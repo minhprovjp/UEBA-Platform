@@ -56,10 +56,10 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 grid grid-cols-12 gap-2">
+      <div className="flex-1 overflow-hidden custom-scrollbar grid grid-cols-12 gap-2 pr-1 pb-2">
         
         {/* LEFT COLUMN */}
-        <div className="col-span-9 flex flex-col gap-2 h-full">
+        <div className="col-span-9 flex flex-col gap-2 h-auto">
             
             {/* ROW 1: KPIs */}
             <div className="grid grid-cols-5 gap-2 h-24 shrink-0">
@@ -106,7 +106,7 @@ export default function Dashboard() {
             </div>
 
             {/* ROW 2: CHART */}
-            <div className="flex-[3] bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col min-h-0 relative">
+            <div className="h-[450px] bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col min-h-0 relative">
                  <div className="flex justify-between items-start mb-2">
                     <h3 className="text-[20px] font-semibold text-zinc-400 flex items-center gap-2">
                         <Activity className="w-3 h-3 text-blue-500"/> Anomaly Velocity
@@ -148,7 +148,7 @@ export default function Dashboard() {
             </div>
 
             {/* ROW 3: PIE & BAR */}
-            <div className="flex-[3] grid grid-cols-2 gap-2 min-h-0">
+            <div className="h-[350px] grid grid-cols-2 gap-2 min-h-0">
                  <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col">
                     <div className="flex justify-between items-center mb-1">
                         <h3 className="text-[15px] font-semibold text-zinc-400 flex items-center gap-2">
@@ -201,14 +201,35 @@ export default function Dashboard() {
                 </div>
 
                 <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col">
-                    <h3 className="text-[15px] font-semibold text-zinc-400 mb-1 flex items-center gap-2"><Server className="w-3 h-3 text-emerald-500"/> Top Targets</h3>
+                    <h3 className="text-[15px] font-semibold text-zinc-400 mb-1 flex items-center gap-2">
+                        <Server className="w-3 h-3 text-emerald-500"/> Top Targets
+                    </h3>
                     <div className="flex-1 min-h-0">
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart layout="vertical" data={displayStats.targeted_entities} margin={{left: 0, right: 20, top: 5, bottom: 0}} barCategoryGap={15}>
-                                <XAxis type="number" hide />
-                                <YAxis dataKey="name" type="category" width={90} tick={{fontSize: 10, fill: '#a1a1aa'}} axisLine={false} tickLine={false}/>
-                                <RechartsTooltip cursor={{fill: '#27272a'}} contentStyle={{backgroundColor: '#18181b', border: 'none', fontSize:'10px'}} />
-                                <Bar dataKey="value" fill="#10b981" radius={[0, 4, 4, 0]} barSize={12} />
+                            {/* Bỏ layout="vertical" để thành biểu đồ cột dọc */}
+                            <BarChart data={displayStats.targeted_entities} margin={{left: 0, right: 0, top: 10, bottom: 0}}>
+                                {/* Trục X hiển thị tên Database */}
+                                <XAxis 
+                                    dataKey="name" 
+                                    axisLine={false} 
+                                    tickLine={false} 
+                                    tick={{fontSize: 10, fill: '#a1a1aa'}} 
+                                    interval={0} // Hiển thị hết các nhãn
+                                />
+                                {/* Trục Y hiển thị số lượng */}
+                                <YAxis hide />
+                                <RechartsTooltip 
+                                    cursor={{fill: '#27272a'}} 
+                                    contentStyle={{backgroundColor: '#18181b', border: 'none', fontSize:'10px'}} 
+                                    itemStyle={{color: '#fff'}}
+                                />
+                                {/* Thanh Bar màu xanh */}
+                                <Bar 
+                                    dataKey="value" 
+                                    fill="#10b981" 
+                                    radius={[4, 4, 0, 0]} // Bo tròn góc trên
+                                    barSize={30}          // Độ rộng cột
+                                />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
@@ -217,8 +238,8 @@ export default function Dashboard() {
         </div>
 
         {/* RIGHT COLUMN */}
-        <div className="col-span-3 flex flex-col gap-2 h-full">
-             <div className="flex-1 bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col overflow-hidden">
+        <div className="col-span-3 flex flex-col gap-2 h-auto">
+             <div className="h-[450px] bg-zinc-900/40 border border-zinc-800 rounded-xl p-3 flex flex-col overflow-hidden">
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="text-[15px] font-semibold text-zinc-400 flex items-center gap-2"><Users className="w-3 h-3 text-red-500"/> Risky Users (UEBA)</h3>
                     <span className="text-[9px] text-zinc-600 bg-zinc-900 px-1.5 py-0.5 rounded">Top 10</span>
@@ -237,7 +258,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            <div className="flex-1 bg-zinc-900/40 border border-zinc-800 rounded-xl p-0 flex flex-col overflow-hidden">
+            <div className="h-[455px] bg-zinc-900/40 border border-zinc-800 rounded-xl p-0 flex flex-col overflow-hidden">
                 <div className="p-3 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur flex justify-between items-center">
                     <h3 className="text-[15px] font-semibold flex items-center gap-2 text-zinc-400"><Zap className="w-3 h-3 text-yellow-500"/> Live Feed</h3>
                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"/>
@@ -269,27 +290,49 @@ export default function Dashboard() {
 // === CÁC COMPONENTS CON ===
 
 // 1. Card Trạng thái riêng biệt
-const StatusCard = () => (
-  <div className="h-full bg-zinc-900/40 border border-zinc-800 px-3 py-3 flex flex-col justify-between rounded-xl backdrop-blur-sm relative overflow-hidden">
-    <div className="flex justify-between items-start">
-        <div>
-            <p className="text-[13px] text-zinc-500 font-medium uppercase tracking-wider">Status</p>
-            <div className="flex items-center gap-2 mt-1">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                </span>
-                <span className="text-lg font-bold text-green-400">ONLINE</span>
+const StatusCard = ({ isLoading, isError }) => {
+    let statusText = "ONLINE";
+    let statusColor = "text-green-400";
+    let statusBg = "bg-green-500";
+    let iconColor = "text-green-500";
+    let borderColor = "border-green-900/50";
+
+    if (isLoading) {
+        statusText = "CONNECTING...";
+        statusColor = "text-yellow-400";
+        statusBg = "bg-yellow-500";
+        iconColor = "text-yellow-500";
+        borderColor = "border-yellow-900/50";
+    } else if (isError) {
+        statusText = "OFFLINE";
+        statusColor = "text-red-500";
+        statusBg = "bg-red-500";
+        iconColor = "text-red-500";
+        borderColor = "border-red-900/50";
+    }
+
+    return (
+      <div className="h-full bg-zinc-900/40 border border-zinc-800 px-3 py-3 flex flex-col justify-between rounded-xl backdrop-blur-sm relative overflow-hidden">
+        <div className="flex justify-between items-start">
+            <div>
+                <p className="text-[13px] text-zinc-500 font-medium uppercase tracking-wider">Engine Status</p>
+                <div className="flex items-center gap-2 mt-1">
+                    <span className="relative flex h-2 w-2">
+                      {!isError && <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${statusBg} opacity-75`}></span>}
+                      <span className={`relative inline-flex rounded-full h-2 w-2 ${statusBg}`}></span>
+                    </span>
+                    <span className={`text-lg font-bold ${statusColor}`}>{statusText}</span>
+                </div>
+            </div>
+            <div className={`p-1.5 rounded-lg bg-zinc-950/30 border ${borderColor}`}>
+                {isError ? <AlertTriangle className={`h-4 w-4 ${iconColor}`} /> : <Activity className={`h-4 w-4 ${iconColor}`} />}
             </div>
         </div>
-        <div className="p-1.5 rounded-lg bg-green-950/30 border border-green-900/50">
-            <CheckCircle className="h-4 w-4 text-green-500" />
-        </div>
-    </div>
-    {/* Background Glow */}
-    <div className="absolute -bottom-4 -right-4 w-16 h-16 bg-green-500/10 blur-xl rounded-full pointer-events-none"></div>
-  </div>
-);
+        {/* Background Glow */}
+        {!isError && <div className={`absolute -bottom-4 -right-4 w-16 h-16 ${statusBg}/10 blur-xl rounded-full pointer-events-none`}></div>}
+      </div>
+    );
+};
 
 // 2. Card Số liệu chung (Dùng cho 4 card còn lại)
 const StatCard = ({ title, value, icon: Icon, color, borderColor, valueClass = "text-2xl font-bold" }) => (

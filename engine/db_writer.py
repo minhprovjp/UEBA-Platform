@@ -381,6 +381,7 @@ def save_results_to_db(results: Dict[str, Any]):
                 agg_records.append({
                     'scope': 'session',
                     'user': row.get('user'),
+                    'client_ip': row.get('client_ip'),
                     'database': None,
                     'start_time': pd.to_datetime(row['start_time']).tz_localize(None) if pd.notna(row['start_time']) else None,
                     'end_time': pd.to_datetime(row['end_time']).tz_localize(None) if pd.notna(row['end_time']) else None,

@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from engine.config_manager import load_config, save_config
     from engine.utils import save_feedback_to_csv
-    from engine.llm_analyzer_dual import analyze_query_with_llm, analyze_session_with_llm
+    from engine.llm_analyzer_dual import analyze_query_with_llm
 except ImportError as e:
     print("="*50)
     print(f"LỖI IMPORT NGHIÊM TRỌNG: {e}")
@@ -212,8 +212,8 @@ def anomaly_stats(
     critical_alerts = int(crit_events + crit_aggs)
 
     # 3. Chart Data (Giữ nguyên logic cũ)
-    event_query = db.query(models.Anomaly.timestamp).filter(models.Anomaly.timestamp >= start_date).all()
-    agg_query = db.query(models.AggregateAnomaly.created_at).filter(models.AggregateAnomaly.created_at >= start_date).all()
+    event_query = db.query(models.Anomaly).filter(models.Anomaly.timestamp >= start_date).all()
+    agg_query = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.created_at >= start_date).all()
 
     chart_query = event_query + agg_query
 
@@ -223,9 +223,6 @@ def anomaly_stats(
             h = (now - timedelta(hours=23-i)).hour
             key = f"{h}:00"
             data_map[key] = 0
-        for log in chart_query:
-            key = f"{log.timestamp.hour}:00"
-            if key in data_map: data_map[key] += 1
     elif group_mode == "month":
         curr = start_date.replace(day=1)
         end_date = now.replace(day=1)
@@ -236,17 +233,28 @@ def anomaly_stats(
                 curr = curr.replace(year=curr.year + 1, month=1)
             else:
                 curr = curr.replace(month=curr.month + 1)
-        for log in chart_query:
-            key = log.timestamp.strftime("%m/%Y")
-            if key in data_map: data_map[key] += 1
     else:
         days = (now - start_date).days + 1
         for i in range(days):
             d = (start_date + timedelta(days=i)).strftime("%d/%m")
             data_map[d] = 0
-        for log in chart_query:
-            key = log.timestamp.strftime("%d/%m")
-            if key in data_map: data_map[key] += 1
+            
+    for log in chart_query:
+        # Lấy thời gian an toàn: Ưu tiên timestamp -> created_at
+        log_time = getattr(log, 'timestamp', getattr(log, 'created_at', None))
+        
+        if not log_time: continue # Bỏ qua nếu lỗi dữ liệu
+
+        if group_mode == "hour":
+            key = f"{log_time.hour}:00"
+        elif group_mode == "month":
+            key = log_time.strftime("%m/%Y")
+        else:
+            key = log_time.strftime("%d/%m")
+        
+        if key in data_map: 
+            data_map[key] += 1
+            
     chart_data = [{"name": k, "anomalies": v} for k, v in data_map.items()]
 
     # 4. Top Risky Users (Giữ nguyên)
@@ -515,7 +523,7 @@ def anomaly_search(
             id=f"event-{r.id}", source="event",
             anomaly_type=r.anomaly_type, behavior_group=r.behavior_group, timestamp=r.timestamp,
             user=r.user, client_ip=r.client_ip, database=r.database, query=r.query,
-            reason=r.reason, score=r.score, scope="log", details=None
+            reason=r.reason, score=r.score, scope="log", details=None, ai_analysis=r.ai_analysis
         ))
     for r in ag_rows:
         items.append(schemas.UnifiedAnomaly(
@@ -523,8 +531,8 @@ def anomaly_search(
             anomaly_type=r.anomaly_type,
             behavior_group="MULTI_TABLE_ACCESS",
             timestamp=r.start_time or r.end_time or r.created_at,
-            user=r.user, client_ip=r.client_ip, database=r.database, query=None,
-            reason=r.reason, score=r.severity, scope=r.scope, details=r.details
+            user=r.user, client_ip=getattr(r, 'client_ip', None), database=r.database, query=None,
+            reason=r.reason, score=r.severity, scope=r.scope, details=r.details, ai_analysis=r.ai_analysis
         ))
 
     items.sort(key=lambda x: x.timestamp or datetime.min, reverse=True)
@@ -711,35 +719,64 @@ def read_aggregate_anomaly_by_id(
 
 
 # === ENDPOINT PHÂN TÍCH LLM ===
-
 @app.post("/api/llm/analyze-anomaly", tags=["LLM Analysis"])
 def analyze_anomaly_with_llm_endpoint(
     request: schemas.AnomalyAnalysisRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
-    ):
+):
     """
-    Nhận thông tin về một bất thường và yêu cầu LLM phân tích nó.
+    Nhận thông tin và yêu cầu LLM phân tích. Hỗ trợ cả Event, Aggregate và Raw Log.
     """
     try:
-        # 1. Load config & Prepare Data
+        # Load config
         engine_config = load_config()
         llm_settings = engine_config.get("llm_config", {})
         rules_settings = engine_config.get("analysis_params", {})
         
-        anomaly_data = request.model_dump(mode='json')
+        req_id = request.id
+        anomaly_data = None
         
-        # Xử lý query null (như cũ)
-        if not anomaly_data.get('query'):
-            if anomaly_data.get('details'):
-                 anomaly_data['query'] = f"SESSION DATA: {str(anomaly_data['details'])[:500]}..."
-            else:
-                 anomaly_data['query'] = "N/A (No query provided)"
+        # --- LOGIC MỚI: XỬ LÝ ID TỪ NHIỀU NGUỒN KHÁC NHAU ---
+        
+        # Trường hợp 1: Raw Log từ Log Explorer (ID dạng "log-12345")
+        if req_id.startswith("log-"):
+            db_id = int(req_id.split("-")[1])
+            log_record = db.query(models.AllLogs).filter(models.AllLogs.id == db_id).first()
+            if log_record:
+                # Convert SQLAlchemy object to Dict
+                anomaly_data = {c.name: getattr(log_record, c.name) for c in log_record.__table__.columns}
+                # Gán type giả để AI biết đây là log thường cần rà soát
+                anomaly_data['anomaly_type'] = "Manual Investigation (Log Explorer)"
+        
+        # Trường hợp 2: Event Anomaly (ID dạng "event-123")
+        elif req_id.startswith("event-"):
+            db_id = int(req_id.split("-")[1])
+            record = db.query(models.Anomaly).filter(models.Anomaly.id == db_id).first()
+            if record:
+                anomaly_data = {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
-        # 2. GỌI AI PHÂN TÍCH
+        # Trường hợp 3: Aggregate Anomaly (ID dạng "agg-456")
+        elif req_id.startswith("agg-"):
+            db_id = int(req_id.split("-")[1])
+            record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == db_id).first()
+            if record:
+                anomaly_data = {c.name: getattr(record, c.name) for c in record.__table__.columns}
+                # Aggregate cần xử lý query đặc biệt
+                if not anomaly_data.get('query') and anomaly_data.get('details'):
+                     anomaly_data['query'] = f"SESSION DATA: {str(anomaly_data['details'])[:500]}..."
+
+        if not anomaly_data:
+             raise HTTPException(status_code=404, detail=f"Data not found for ID: {req_id}")
+
+        # Xử lý query null
+        if not anomaly_data.get('query'):
+             anomaly_data['query'] = "N/A (No query provided)"
+
+        # GỌI AI PHÂN TÍCH
         analysis_result = analyze_query_with_llm(
             anomaly_row=anomaly_data,
-            anomaly_type_from_system=anomaly_data['anomaly_type'],
+            anomaly_type_from_system=anomaly_data.get('anomaly_type', 'Unknown'),
             llm_config=llm_settings,
             rules_config=rules_settings
         )
@@ -747,35 +784,24 @@ def analyze_anomaly_with_llm_endpoint(
         if not analysis_result:
             raise ValueError("Analyzer returned None")
 
-        # 3. [MỚI] LƯU KẾT QUẢ VÀO DATABASE
-        # request.id có dạng "event-123" hoặc "agg-456"
-        req_id = request.id
-        
-        final_result_to_save = analysis_result.get("final_analysis") or analysis_result
-
+        # [LƯU Ý] Ta không lưu kết quả phân tích của Log thường vào DB 
+        # (vì bảng AllLogs thường rất lớn và không có cột ai_analysis), chỉ trả về cho UI xem.
         if req_id.startswith("event-"):
-            # Xử lý lưu cho Event Anomaly
-            db_id = int(req_id.split("-")[1])
-            record = db.query(models.Anomaly).filter(models.Anomaly.id == db_id).first()
+            record = db.query(models.Anomaly).filter(models.Anomaly.id == int(req_id.split("-")[1])).first()
             if record:
-                record.ai_analysis = final_result_to_save
+                record.ai_analysis = analysis_result.get("final_analysis")
                 db.commit()
-                print(f"Đã lưu kết quả AI vào Event ID {db_id}")
-
+                
         elif req_id.startswith("agg-"):
-            # Xử lý lưu cho Aggregate Anomaly
-            db_id = int(req_id.split("-")[1])
-            record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == db_id).first()
+            record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == int(req_id.split("-")[1])).first()
             if record:
-                record.ai_analysis = final_result_to_save
+                record.ai_analysis = analysis_result.get("final_analysis")
                 db.commit()
-                print(f"Đã lưu kết quả AI vào Aggregate ID {db_id}")
 
         return analysis_result
         
     except Exception as e:
         print(f"Lỗi API AI: {str(e)}")
-        # Trả về lỗi giả để UI hiển thị (như cũ)
         return {
             "final_analysis": {
                 "summary": "Analysis Process Failed",
