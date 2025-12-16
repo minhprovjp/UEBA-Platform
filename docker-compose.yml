@@ -17,7 +17,7 @@ services:
     networks:
       - uba-net
     healthcheck:
-      test: ["CMD", "mysqladmin" ,"ping", "-h", "10.12.112.11"]
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
       timeout: 20s
       retries: 10
 
@@ -58,10 +58,8 @@ services:
       - MYSQL_HOST=mysql-source
       - SECRET_KEY=default_secret_key_change_me
     depends_on:
-      uba_postgres:
-        condition: service_started
-      uba_redis:
-        condition: service_started
+      - postgres-db
+      - redis
     networks:
       - uba-net
 
@@ -78,9 +76,9 @@ services:
       - REDIS_HOST=redis
       - MYSQL_HOST=mysql-source
     depends_on:
-      uba_mysql:
+      mysql-source:
         condition: service_healthy
-      uba_redis:
+      redis:
         condition: service_started
     networks:
       - uba-net
@@ -111,9 +109,9 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         # IP máy chủ (thay bằng IP Tailscale hoặc Public IP của bạn)
-        # Nếu chạy local trên máy tính cá nhân thì để 10.12.112.11
-        - VITE_API_URL=http://10.12.112.11:8001 
-        - VITE_API_KEY=default_secret_key_change_me
+        # Nếu chạy local trên máy tính cá nhân thì để localhost
+        - VITE_API_URL=http://10.12.112.11:8001
+        - VITE_API_KEY=default_secret_key_change_me 
     container_name: uba_frontend
     ports:
       - "5173:80" # Map cổng 80 của container ra cổng 5173 của máy chủ
