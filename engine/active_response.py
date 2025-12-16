@@ -76,11 +76,6 @@ def execute_mysql_query(db_config: Dict[str, Any],
     except Exception as e:
         return False, f"Lỗi không xác định: {str(e)}", []
 
-def escape_sql_input(value: str) -> str:
-    if not value:
-        return ""
-    return value.replace("\\", "\\\\").replace("'", "\\'")
-
 def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], reason: str) -> List[Tuple[str, str]]:
     """
     Hàm chính thực thi chiến lược "Lock & Kill".
@@ -96,18 +91,13 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
 
     messages = []
 
-    es_user_name = escape_sql_input(user_name)
-    if not es_user_name:
-        messages.append(("error", "Invalid Username ."))
-        return messages
-
     # === HÀNH ĐỘNG 1: LOCK  ===
     # (Truy vấn mysql.user và khóa tất cả)
 
-    messages.append(("info", f"Bắt đầu Hành động 1 (LOCK) cho user '{es_user_name}'..."))
+    messages.append(("info", f"Bắt đầu Hành động 1 (LOCK) cho user '{user_name}'..."))
 
     # 1.1. Truy vấn để tìm tất cả host của user
-    sql_find_hosts = f"SELECT host FROM mysql.user WHERE user = '{es_user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
+    sql_find_hosts = f"SELECT host FROM mysql.user WHERE user = '{user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
 
     success_find, msg_find, hosts_to_lock = execute_mysql_query(
         db_config, sql_find_hosts, fetch_results=True
@@ -119,32 +109,32 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
 
     if not hosts_to_lock:
         messages.append(
-            ("warning", f"Không tìm thấy tài khoản nào trong mysql.user cho '{es_user_name}'. Không thể LOCK."))
+            ("warning", f"Không tìm thấy tài khoản nào trong mysql.user cho '{user_name}'. Không thể LOCK."))
 
     else:
         messages.append(("info", f"Tìm thấy {len(hosts_to_lock)} tài khoản: {hosts_to_lock}. Bắt đầu khóa..."))
 
         # 1.2. Lặp và khóa từng host
         for host in hosts_to_lock:
-            sql_lock = f"ALTER USER '{es_user_name}'@'{host}' ACCOUNT LOCK /* UBA_EVENT */;"
+            sql_lock = f"ALTER USER '{user_name}'@'{host}' ACCOUNT LOCK /* UBA_EVENT */;"
             reason_lock = f"{reason} | Lockdown @{host}"
 
             success_lock, msg_lock, _ = execute_mysql_query(db_config, sql_lock, fetch_results=False)
 
             if success_lock:
-                messages.append(("success", f"Đã LOCK thành công: '{es_user_name}'@'{host}'"))
-                log_active_response_action("LOCK_ACCOUNT", f"'{es_user_name}'@'{host}'", reason_lock)
+                messages.append(("success", f"Đã LOCK thành công: '{user_name}'@'{host}'"))
+                log_active_response_action("LOCK_ACCOUNT", f"'{user_name}'@'{host}'", reason_lock)
             else:
-                messages.append(("error", f"Lỗi khi LOCK '{es_user_name}'@'{host}': {msg_lock}"))
-                log_active_response_action("LOCK_FAILED", f"'{es_user_name}'@'{host}'", msg_lock)
+                messages.append(("error", f"Lỗi khi LOCK '{user_name}'@'{host}': {msg_lock}"))
+                log_active_response_action("LOCK_FAILED", f"'{user_name}'@'{host}'", msg_lock)
 
     # === HÀNH ĐỘNG 2: KILL (Chấm dứt Session Hiện tại) ===
     # (Truy vấn PROCESSLIST và KILL)
 
-    messages.append(("info", f"Bắt đầu Hành động 2 (KILL) cho user '{es_user_name}'..."))
+    messages.append(("info", f"Bắt đầu Hành động 2 (KILL) cho user '{user_name}'..."))
 
     # 2.1. Truy vấn PROCESSLIST để tìm các session ID đang hoạt động
-    sql_find_sessions = f"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE USER = '{es_user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
+    sql_find_sessions = f"SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE USER = '{user_name}' AND 'UBA_EVENT' = 'UBA_EVENT';"
 
     success_find_sess, msg_find_sess, session_ids_to_kill = execute_mysql_query(
         db_config, sql_find_sessions, fetch_results=True
@@ -155,7 +145,7 @@ def execute_lock_and_kill_strategy(user_name: str, db_config: Dict[str, Any], re
         return messages  # Dừng lại nếu không thể truy vấn PROCESSLIST
 
     if not session_ids_to_kill:
-        messages.append(("info", f"Không tìm thấy session nào đang hoạt động cho '{es_user_name}'. SKIP KILL."))
+        messages.append(("info", f"Không tìm thấy session nào đang hoạt động cho '{user_name}'. SKIP KILL."))
 
     else:
         messages.append(("warning",
