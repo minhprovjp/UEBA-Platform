@@ -56,7 +56,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-hidden custom-scrollbar grid grid-cols-12 gap-2 pr-1 pb-2">
+      <div className="flex-1 overflow-y-auto custom-scrollbar grid grid-cols-12 gap-2 pr-1 pb-2">
         
         {/* LEFT COLUMN */}
         <div className="col-span-9 flex flex-col gap-2 h-auto">
