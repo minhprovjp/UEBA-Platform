@@ -44,13 +44,14 @@ class Anomaly(Base):
     execution_time_ms = Column(Float, nullable=True, server_default='0')
     rows_returned = Column(BigInteger, nullable=True, server_default='0')
     rows_affected = Column(BigInteger, nullable=True, server_default='0')
-    # ai_analysis = Column(JSON, nullable=True)
+    ai_analysis = Column(JSON, nullable=True)
 
 class AggregateAnomaly(Base):
     __tablename__ = 'aggregate_anomalies'
     id = Column(Integer, primary_key=True, index=True)
     scope = Column(String, nullable=False)
     user = Column(String, index=True, nullable=True)
+    client_ip = Column(String, nullable=True)
     database = Column(String, nullable=True)
     start_time = Column(DateTime, index=True, nullable=True)
     end_time = Column(DateTime, index=True, nullable=True)
@@ -59,7 +60,7 @@ class AggregateAnomaly(Base):
     reason = Column(Text, nullable=True)
     details = Column(JSONB, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
-    # ai_analysis = Column(JSON, nullable=True)
+    ai_analysis = Column(JSON, nullable=True)
 
 class AllLogs(Base):
     __tablename__ = 'all_logs'
