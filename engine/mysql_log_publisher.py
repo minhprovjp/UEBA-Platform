@@ -279,7 +279,7 @@ def monitor_log_file(
                         try:
                             # Đặt tên nguồn log rõ ràng để phân biệt
                             save_logs_to_parquet(recs, source_dbms="MySQL_GQL_File") 
-                            logging.info(f"Đã lưu {len(recs)} bản ghi GQL File vào Staging.")
+                            # logging.info(f"Đã lưu {len(recs)} bản ghi GQL File vào Staging.")
                         except Exception as e:
                             logging.error(f"Lỗi khi lưu file Parquet (Staging): {e}", exc_info=True)
                             

@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [H
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_hybrid_timer.json")
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
+total_collected = 0
 
 def handle_shutdown(signum, frame):
     global is_running
@@ -268,7 +269,7 @@ def process_and_push(rows, redis_client, source_type="RAM"):
 
 # === 4. Main Logic ===
 def monitor_hybrid():
-    global is_running
+    global is_running, total_collected
     engine = connect_db()
     redis = connect_redis()
     if not engine or not redis: return
@@ -425,7 +426,10 @@ def monitor_hybrid():
                         saved_boot = curr_boot
                         save_state(last_timer, saved_boot, last_ts)
                         if cnt > 0:
-                            logging.info(f"⚡ Realtime: {cnt} logs (New Timer: {last_timer})")
+                        #     logging.info(f"⚡ Realtime: {cnt} logs (New Timer: {last_timer})")
+                            total_collected += cnt
+                            sys.stdout.write(f"\r📥 Total Collected: {total_collected} logs | (New Timer: {last_timer})")
+                            sys.stdout.flush()
                 else:
                     # Catch-up con trỏ RAM nếu bị filter
                     if max_timer_ram > last_timer:

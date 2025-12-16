@@ -286,7 +286,7 @@ def save_logs_to_parquet(records: list, source_dbms: str) -> int:
         filename = f"{source_dbms}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
         file_path = os.path.join(STAGING_DATA_DIR, filename)
         df.to_parquet(file_path, engine='pyarrow', index=False)
-        logging.info(f"Đã lưu {len(df)} bản ghi từ '{source_dbms}' vào file: {filename}")
+        # logging.info(f"Đã lưu {len(df)} bản ghi từ '{source_dbms}' vào file: {filename}")
         return len(df)
     except Exception as e:
         logging.error(f"Lỗi khi lưu file Parquet: {e}")
