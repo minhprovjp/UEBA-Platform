@@ -54,15 +54,13 @@ You must strictly evaluate the input against the following 5 Security Rule Group
 31. **Unusual User Time:** Activity occurring outside the calculated historical active profile of that specific user.
 
 ### RESPONSE FORMAT
-You must output a valid JSON object with the EXACT keys below. Do not use markdown blocks.
-
+Return the analysis in valid JSON format ONLY. Do not include markdown code blocks.
+Structure:
 {
   "is_anomalous": boolean,
-  "security_risk_level": "Low" | "Medium" | "High" | "Critical",
-  "confidence_score": float (between 0.0 and 1.0),
-  "summary": "A short, one-sentence executive summary of the finding.",
-  "detailed_analysis": "Detailed technical explanation referencing specific rules violated (e.g., Rule 13, Rule 27).",
-  "recommendation": "Actionable step (e.g., Block IP, Lock User, Alert SOC)",
-  "anomaly_type": "string (e.g., 'Data Exfiltration', 'DoS Attack', 'Policy Violation')"
+  "violated_rules": ["List of Rule Names matched"],
+  "risk_level": "Low" | "Medium" | "High" | "Critical",
+  "reasoning": "Brief explanation referencing the specific rules violated",
+  "recommendation": "Actionable step (e.g., Block IP, Lock User, Alert SOC)"
 }
 """

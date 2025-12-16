@@ -3,10 +3,11 @@
 -- ============================================================
 DROP DATABASE IF EXISTS uba_db;
 CREATE DATABASE IF NOT EXISTS uba_db CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-
+-- Tạo user uba_user nếu chưa có
+CREATE USER IF NOT EXISTS 'uba_user'@'%' IDENTIFIED BY 'password';
 -- Cấp quyền đọc bảng log cho uba_user
-GRANT SELECT ON uba_db.* TO 'uba_user'@'localhost';
--- GRANT SELECT ON uba_db.* TO 'uba_user'@'%';
+-- GRANT SELECT ON uba_db.* TO 'uba_user'@'localhost';
+GRANT SELECT ON uba_db.* TO 'uba_user'@'%';
 
 -- Áp dụng quyền ngay lập tức
 FLUSH PRIVILEGES;

@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # 1. Database nguồn (MySQL) - Có Performance Schema & Event
+  mysql-source:
+    image: mysql:8.0
+    container_name: uba_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: uba_db
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init/01_setup.sql:/docker-entrypoint-initdb.d/01_setup.sql
+      - ./mysql-init/my.cnf:/etc/mysql/conf.d/custom.cnf
+    ports:
+      - "3306:3306"
+    networks:
+      - uba-net
+    healthcheck:
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # 2. Database đích (PostgreSQL) - Lưu kết quả phân tích
+  postgres-db:
+    image: postgres:15
+    container_name: uba_postgres
+    environment:
+      POSTGRES_USER: uba_user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: uba_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - uba-net
+
+  # 3. Message Queue (Redis)
+  redis:
+    image: redis:alpine
+    container_name: uba_redis
+    networks:
+      - uba-net
+
+  # 4. Backend API
+  backend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: uba_api
+    command: uvicorn backend_api.main_api:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - DB_HOST=postgres-db
+      - REDIS_HOST=redis
+      - MYSQL_HOST=mysql-source
+      - SECRET_KEY=default_secret_key_change_me
+    depends_on:
+      - postgres-db
+      - redis
+    networks:
+      - uba-net
+
+  # 5. Publisher (Thu thập log từ MySQL -> Redis)
+  uba-publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: uba_publisher
+    # Chạy file publisher đã tối ưu (Disk/Hybrid)
+    command: python engine/hybrid_log_publisher.py
+    environment:
+      - DB_HOST=postgres-db
+      - REDIS_HOST=redis
+      - MYSQL_HOST=mysql-source
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - uba-net
+
+  # 6. Analysis Engine (Xử lý log từ Redis -> ML -> Postgres)
+  uba-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: uba_engine
+    command: sh -c "python engine/init_db.py && python engine/realtime_engine.py"
+    environment:
+      - DB_HOST=postgres-db
+      - REDIS_HOST=redis
+      - MYSQL_HOST=mysql-source
+    volumes:
+      # Mount folder trained_models ra ngoài để giữ lại model khi restart container
+      - ./trained_models:/app/trained_models
+    depends_on:
+      - backend-api # Đợi API chạy xong (đã init DB) hoặc tự init
+    networks:
+      - uba-net
+
+  # 7. Frontend (React)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # IP máy chủ (thay bằng IP Tailscale hoặc Public IP của bạn)
+        # Nếu chạy local trên máy tính cá nhân thì để localhost
+        - VITE_API_URL=http://10.12.112.11:8001
+        - VITE_API_KEY=default_secret_key_change_me 
+    container_name: uba_frontend
+    ports:
+      - "5173:80" # Map cổng 80 của container ra cổng 5173 của máy chủ
+    networks:
+      - uba-net
+
+networks:
+  uba-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  postgres_data:

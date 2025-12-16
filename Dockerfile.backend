@@ -1,0 +1,27 @@
+# Dockerfile.backend
+FROM python:3.11-slim
+
+# Cài đặt thư viện hệ thống cần thiết cho mysql-connector và psycopg2
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy file requirements và cài đặt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy toàn bộ code vào container
+COPY . .
+
+# Tạo các thư mục cần thiết
+RUN mkdir -p logs data/staging data/archive trained_models
+
+# Thiết lập biến môi trường để Python in log ngay lập tức
+ENV PYTHONUNBUFFERED=1
+
+# Command mặc định (sẽ bị ghi đè bởi docker-compose)
+CMD ["python", "engine/realtime_engine.py"]

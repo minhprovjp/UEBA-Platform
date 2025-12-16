@@ -51,6 +51,10 @@ app = FastAPI(
 origins = [
     "http://localhost:5173",  # Địa chỉ của Vite React dev server
     "http://localhost:3000",
+    "http://10.12.112.11:5173",  
+    "http://10.12.112.11:3000",
+    "http://http://100.92.147.73/:5173",  
+    "http://http://100.92.147.73/:3000",
 ]
 
 app.add_middleware(
