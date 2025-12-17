@@ -226,3 +226,14 @@ export const useUpdateConfigMutation = () => {
     }
   });
 };
+
+export const useAuditLogs = () => {
+    return useQuery({
+        queryKey: ['audit-logs'],
+        queryFn: async () => {
+            const { data } = await apiClient.get('/api/system/audit-logs');
+            return data;
+        },
+        refetchInterval: 1000, // Tự động refresh mỗi 10s để thấy log mới nhất
+    });
+};

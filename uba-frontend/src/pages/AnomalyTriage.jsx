@@ -5,8 +5,11 @@ import { AnomalyDetailModal } from '@/components/AnomalyDetailModal'
 import { Toaster, toast } from 'sonner'
 import { Activity, Layers, ShieldAlert, UserX, Database, Cpu, BrainCircuit, UserCog} from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next';
 
 export default function AnomalyTriage() {
+  const { t } = useTranslation();
+
   // State quản lý bộ lọc
   const [filters, setFilters] = useState({
     pageIndex: 0,
@@ -107,10 +110,10 @@ export default function AnomalyTriage() {
           aiAnalysis: data.final_analysis || data.first_analysis || data 
         }));
         queryClient.invalidateQueries(['anomalySearch']);
-        toast.success("Phân tích AI hoàn tất và đã được lưu!");
+        toast.success(t('common.ai_save'));
       },
       onError: (error) => {
-        toast.error(`Lỗi: ${error.message || "Không thể kết nối tới AI"}`);
+        toast.error(`${t('common.error')}: ${error.message || t('common.error_ai')}`);
       }
     });
   };
@@ -137,7 +140,7 @@ export default function AnomalyTriage() {
             Session Aggregation
           </div>
           <div className="text-zinc-500 text-xs mt-0.5">
-            Accessed <span className="text-zinc-300 font-mono">{tableCount} tables</span> with {queryCount} queries in {duration}.
+            {t('common.access')} <span className="text-zinc-300 font-mono">{tableCount} {t('common.table')}</span> {t('common.with')} {queryCount} {t('common.queries_in')} {duration}.
           </div>
         </div>
       );
@@ -169,21 +172,21 @@ export default function AnomalyTriage() {
       <div className="flex gap-2 items-center shrink-0">
         <input
           className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 w-80 text-sm focus:outline-none focus:border-zinc-500"
-          placeholder="Search query / reason…"
+          placeholder={t('common.search')}
           value={filters.search}
           onChange={(e) => setFilters(p => ({ ...p, search: e.target.value, pageIndex: 0 }))}
         />
         <select className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" value={filters.user} onChange={(e) => setFilters(p => ({ ...p, user: e.target.value.trim(), pageIndex: 0 }))}>
-          <option value="">All Users</option>
+          <option value="">{t('common.all_user')}</option>
           {users.map((u) => <option key={u} value={u}>{u}</option>)}
         </select>
         <select className="bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" value={filters.anomaly_type} onChange={(e) => setFilters(p => ({ ...p, anomaly_type: e.target.value.trim(), pageIndex: 0 }))}>
-          <option value="">All Rules</option>
+          <option value="">{t('common.all_rule')}</option>
           {types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
         {(filters.behavior_group || filters.anomaly_type || filters.user || filters.search) && (
           <button className="px-3 py-2 rounded-md border border-zinc-700 bg-zinc-900 text-sm hover:bg-zinc-800 transition-colors" onClick={() => setFilters({ ...filters, search:'', user:'', anomaly_type:'', behavior_group: '', pageIndex:0 })}>
-            Clear All
+            {t('common.clear_all')}
           </button>
         )}
       </div>
@@ -194,13 +197,13 @@ export default function AnomalyTriage() {
           
           {/* Header (Sticky) - Đã áp dụng gridLayoutClass */}
           <div className={`sticky top-0 z-10 bg-zinc-900/95 backdrop-blur border-b border-zinc-800 px-4 py-2 grid ${gridLayoutClass} gap-3 text-xs font-bold text-zinc-500 uppercase tracking-wider`}>
-            <div>Time</div>
-            <div>User</div>
-            <div>Specific Rule</div>
-            <div>Query / Content</div>
-            <div>Reason</div>
+            <div>{t('common.time')}</div>
+            <div>{t('common.user')}</div>
+            <div>{t('common.specific_rule')}</div>
+            <div>{t('common.query')}</div>
+            <div>{t('common.reason')}</div>
             {/* Chỉ render cột Score Header nếu showScoreCol = true */}
-            {showScoreCol && <div className="text-center">Score</div>}
+            {showScoreCol && <div className="text-center">{t('common.score')}</div>}
           </div>
 
           {/* Body */}
@@ -256,9 +259,9 @@ export default function AnomalyTriage() {
 
       {/* --- PHÂN TRANG --- */}
       <div className="flex items-center gap-2 shrink-0 justify-end py-1">
-        <button className="px-3 py-1.5 rounded-md border border-zinc-700 bg-zinc-900 text-sm disabled:opacity-50 hover:bg-zinc-800 transition-colors" disabled={filters.pageIndex === 0} onClick={() => setFilters(p => ({ ...p, pageIndex: Math.max(0, p.pageIndex - 1) }))}>Prev</button>
-        <span className="text-sm text-zinc-400 font-mono">Page {filters.pageIndex + 1} / {totalPages}</span>
-        <button className="px-3 py-1.5 rounded-md border border-zinc-700 bg-zinc-900 text-sm disabled:opacity-50 hover:bg-zinc-800 transition-colors" disabled={(filters.pageIndex + 1) >= totalPages} onClick={() => setFilters(p => ({ ...p, pageIndex: p.pageIndex + 1 }))}>Next</button>
+        <button className="px-3 py-1.5 rounded-md border border-zinc-700 bg-zinc-900 text-sm disabled:opacity-50 hover:bg-zinc-800 transition-colors" disabled={filters.pageIndex === 0} onClick={() => setFilters(p => ({ ...p, pageIndex: Math.max(0, p.pageIndex - 1) }))}>{t('common.previous')}</button>
+        <span className="text-sm text-zinc-400 font-mono">{t('common.page')} {filters.pageIndex + 1} / {totalPages}</span>
+        <button className="px-3 py-1.5 rounded-md border border-zinc-700 bg-zinc-900 text-sm disabled:opacity-50 hover:bg-zinc-800 transition-colors" disabled={(filters.pageIndex + 1) >= totalPages} onClick={() => setFilters(p => ({ ...p, pageIndex: p.pageIndex + 1 }))}>{t('common.next')}</button>
       </div>
 
       {/* --- MODAL --- */}

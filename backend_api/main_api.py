@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from sqlalchemy import func, or_, text, cast, Text
+import re 
+from pathlib import Path
 
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
@@ -809,7 +811,7 @@ def analyze_anomaly_with_llm_endpoint(
         return {
             "final_analysis": {
                 "summary": "Analysis Process Failed",
-                "detailed_analysis": f"Lỗi hệ thống: {str(e)}",
+                "detailed_analysis": f"System error: {str(e)}",
                 "is_anomalous": False,
                 "confidence_score": 0.0,
                 "recommendation": "Check backend logs.",
@@ -829,7 +831,7 @@ def get_engine_config(current_user: models.User = Depends(auth.get_current_user)
     """
     config = load_config()
     if not config:
-        raise HTTPException(status_code=404, detail="File cấu hình không tìm thấy hoặc bị lỗi.")
+        raise HTTPException(status_code=404, detail="Configuration file not found or corrupted.")
     return config
 
 @app.put("/api/engine/config", status_code=status.HTTP_202_ACCEPTED, tags=["Configuration"])
@@ -864,7 +866,7 @@ def submit_feedback(feedback: schemas.FeedbackCreate, current_user: models.User 
         return {"message": message}
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi không xác định: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unknown error: {str(e)}")
     
 # === API MỚI CHO LOG EXPLORER ===
 @app.get("/api/logs/", response_model=List[schemas.AllLogs], tags=["Log Explorer"])
@@ -897,4 +899,51 @@ def read_all_logs(
         query = query.filter(models.AllLogs.timestamp <= date_to)
         
     logs = query.order_by(models.AllLogs.timestamp.desc()).offset(skip).limit(limit).all()
+    return logs
+
+
+@app.get("/api/system/audit-logs", response_model=List[schemas.AuditLogEntry], tags=["System"])
+def get_active_response_audit_logs(
+    limit: int = 100,
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    Đọc file active_response_audit.log và trả về danh sách log đã được parse.
+    """
+    log_path = Path("active_response_audit.log") # Đường dẫn file log ở root folder
+    
+    if not log_path.exists():
+        return []
+
+    logs = []
+    # Regex để tách các trường: Timestamp, Action, Target, Reason
+    # Mẫu log: 2025-12-16 22:18:27,486 - ACTION: LOCK_ACCOUNT | TARGET: ... | REASON: ...
+    pattern = re.compile(r"^([\d\-\s:,]+) - ACTION:\s(.*?)\s\|\sTARGET:\s(.*?)\s\|\sREASON:\s(.*)$")
+
+    try:
+        # Đọc file và lấy N dòng cuối cùng
+        with open(log_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        # Đảo ngược để lấy log mới nhất trước
+        for line in reversed(lines):
+            line = line.strip()
+            if not line: continue
+            
+            match = pattern.match(line)
+            if match:
+                logs.append(schemas.AuditLogEntry(
+                    timestamp=match.group(1).strip(),
+                    action=match.group(2).strip(),
+                    target=match.group(3).strip(),
+                    reason=match.group(4).strip()
+                ))
+            
+            if len(logs) >= limit:
+                break
+                
+    except Exception as e:
+        print(f"Error parsing audit log: {e}")
+        # Có thể trả về list rỗng hoặc raise HTTP Exception tùy bạn
+        
     return logs

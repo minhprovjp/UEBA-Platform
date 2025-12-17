@@ -4,8 +4,8 @@ import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 // Import các file ngôn ngữ (chúng ta sẽ tạo ở bước sau)
-import translationEN from './locales/en/translation.json';
-import translationVI from './locales/vi/translation.json';
+import translationEN from './locales/en/translation_en.json';
+import translationVI from './locales/vi/translation_vi.json';
 
 const resources = {
   en: {

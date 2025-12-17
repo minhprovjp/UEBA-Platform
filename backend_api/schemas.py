@@ -120,3 +120,9 @@ class AnomalySearchResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+    
+class AuditLogEntry(BaseModel):
+    timestamp: str
+    action: str
+    target: str
+    reason: str

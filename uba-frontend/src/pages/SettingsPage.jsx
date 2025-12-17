@@ -8,17 +8,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Toaster, toast } from "sonner";
-import { useConfig, useUpdateConfigMutation } from '@/api/queries';
+import { useConfig, useUpdateConfigMutation, useAuditLogs } from '@/api/queries';
 import { apiClient } from '@/api/client';
 import { 
-    Save, Settings, Shield, BrainCircuit, List, Clock, Key, LogOut, User, Activity, Mail, Zap, AlertTriangle 
+    Save, Settings, Shield, BrainCircuit, List, Clock, Key, LogOut, User, Mail, Zap, AlertTriangle, FileText
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export default function SettingsPage() {
   const [localConfig, setLocalConfig] = useState(null);
   const [isDirty, setIsDirty] = useState(false);
-  
-  // State cho Change Password
+  const { t } = useTranslation();
+  const { data: auditLogs, isLoading: isLogLoading } = useAuditLogs();
   const [passForm, setPassForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [isPassLoading, setIsPassLoading] = useState(false);
 
@@ -32,7 +33,6 @@ export default function SettingsPage() {
     }
   }, [config]);
 
-  // Helper functions
   const updateField = (path, value) => {
     setLocalConfig(prev => {
       const newData = { ...prev };
@@ -50,9 +50,7 @@ export default function SettingsPage() {
 
   const getListDisplayValue = (path) => {
     const val = getVal(path, []);
-    // Nếu là Mảng (dữ liệu gốc) -> Nối thành chuỗi
     if (Array.isArray(val)) return val.join(', ');
-    // Nếu là Chuỗi (đang nhập liệu) -> Trả về nguyên vẹn
     return val;
   };
 
@@ -65,10 +63,7 @@ export default function SettingsPage() {
   };
 
   const handleSave = () => {
-    // Clone dữ liệu để xử lý
     const payload = JSON.parse(JSON.stringify(localConfig));
-
-    // Danh sách các đường dẫn cần chuyển từ String -> Array
     const fieldsToConvert = [
         'email_alert_config.to_recipients',
         'email_alert_config.bcc_recipients',
@@ -82,7 +77,6 @@ export default function SettingsPage() {
         'security_rules.signatures.restricted_connection_users'
     ];
 
-    // Helper nội bộ để update object payload
     const setDeepValue = (obj, path, value) => {
         const keys = path.split('.');
         let current = obj;
@@ -93,22 +87,18 @@ export default function SettingsPage() {
         current[keys[keys.length - 1]] = value;
     };
 
-    // Helper lấy giá trị sâu
     const getDeepValue = (obj, path) => {
         return path.split('.').reduce((acc, k) => (acc && acc[k] !== undefined) ? acc[k] : undefined, obj);
     };
 
-    // Thực hiện chuyển đổi
     fieldsToConvert.forEach(path => {
         const rawVal = getDeepValue(payload, path);
-        // Nếu nó là chuỗi (do người dùng mới sửa), hãy convert sang mảng
         if (typeof rawVal === 'string') {
             const arr = rawVal.split(',').map(s => s.trim()).filter(Boolean);
             setDeepValue(payload, path, arr);
         }
     });
 
-    // Gửi payload đã chuẩn hóa lên server
     updateConfigMutation.mutate(payload, {
         onSuccess: () => setIsDirty(false)
     });
@@ -116,9 +106,9 @@ export default function SettingsPage() {
 
   const handleChangePassword = async (e) => {
     e.preventDefault();
-    if (!passForm.currentPassword) { toast.error("Vui lòng nhập mật khẩu hiện tại."); return; }
-    if (passForm.newPassword !== passForm.confirmPassword) { toast.error("Mật khẩu xác nhận không khớp!"); return; }
-    if (passForm.newPassword.length < 6) { toast.error("Mật khẩu phải có ít nhất 6 ký tự."); return; }
+    if (!passForm.currentPassword) { toast.error(t('setting.account.error_1')); return; }
+    if (passForm.newPassword !== passForm.confirmPassword) { toast.error(t('setting.account.error_2')); return; }
+    if (passForm.newPassword.length < 6) { toast.error(t('setting.account.error_3')); return; }
 
     setIsPassLoading(true);
     try {
@@ -126,23 +116,23 @@ export default function SettingsPage() {
             current_password: passForm.currentPassword,
             new_password: passForm.newPassword
         });
-        toast.success("Đổi mật khẩu thành công!");
+        toast.success(t('setting.account.success'));
         setPassForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
     } catch (error) {
-        toast.error(error.response?.data?.detail || "Đổi mật khẩu thất bại.");
+        toast.error(error.response?.data?.detail || t('setting.account.error_4'));
     } finally {
         setIsPassLoading(false);
     }
   };
 
   const handleLogout = () => {
-    if (confirm("Bạn có chắc chắn muốn đăng xuất?")) {
+    if (confirm(t('setting.account.confirm_1'))) {
         localStorage.removeItem('uba_token');
         window.location.href = '/'; 
     }
   };
 
-  if (isLoading || !localConfig) return <div className="p-10 text-center text-zinc-500">Loading settings...</div>;
+  if (isLoading || !localConfig) return <div className="p-10 text-center text-zinc-500">{t('common.loading')}</div>;
 
   return (
     <div className="h-full flex flex-col gap-4 overflow-hidden pr-2">
@@ -152,10 +142,10 @@ export default function SettingsPage() {
       <header className="shrink-0 flex justify-between items-center pb-4 border-b border-zinc-800">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <Settings className="w-6 h-6 text-primary-500"/> System Configuration
+            <Settings className="w-6 h-6 text-primary-500"/> {t('settings.title')}
           </h2>
           <p className="text-zinc-400 text-sm mt-1">
-            Cấu hình lõi cho Engine UEBA (Email, Thresholds, AI, Signatures).
+            {t('settings.subtitle')}
           </p>
         </div>
         <div className="flex gap-2">
@@ -165,7 +155,7 @@ export default function SettingsPage() {
                 className={`min-w-[120px] transition-all ${isDirty ? 'bg-primary-600 hover:bg-primary-700' : 'bg-zinc-800 text-zinc-500'}`}
             >
                 <Save className="w-4 h-4 mr-2"/>
-                {updateConfigMutation.isPending ? "Saving..." : (isDirty ? "Lưu Thay Đổi" : "Đã Lưu")}
+                {updateConfigMutation.isPending ? t('common.saving') : (isDirty ? t('common.save') : t('common.saved'))}
             </Button>
         </div>
       </header>
@@ -174,160 +164,173 @@ export default function SettingsPage() {
       <div className="flex-1 min-h-0 overflow-hidden">
         <Tabs defaultValue="alerts" className="h-full flex flex-col">
             <TabsList className="bg-zinc-900 border border-zinc-800 w-full justify-start rounded-lg p-1 h-auto mb-4 shrink-0 overflow-x-auto">
-                <TabsTrigger value="alerts" className="data-[state=active]:bg-zinc-800"><Mail className="w-4 h-4 mr-2"/> Alerts & Email</TabsTrigger>
-                <TabsTrigger value="thresholds" className="data-[state=active]:bg-zinc-800"><Shield className="w-4 h-4 mr-2"/> Security Thresholds</TabsTrigger>
-                <TabsTrigger value="signatures" className="data-[state=active]:bg-zinc-800"><List className="w-4 h-4 mr-2"/> Signatures & Lists</TabsTrigger>
-                <TabsTrigger value="analysis" className="data-[state=active]:bg-zinc-800"><Clock className="w-4 h-4 mr-2"/> Time & Behavior</TabsTrigger>
-                <TabsTrigger value="llm" className="data-[state=active]:bg-zinc-800"><BrainCircuit className="w-4 h-4 mr-2"/> AI & LLM</TabsTrigger>
+                <TabsTrigger value="alerts" className="data-[state=active]:bg-zinc-800"><Mail className="w-4 h-4 mr-2"/> {t('settings.tabs.alerts')}</TabsTrigger>
+                <TabsTrigger value="thresholds" className="data-[state=active]:bg-zinc-800"><Shield className="w-4 h-4 mr-2"/> {t('settings.tabs.thresholds')}</TabsTrigger>
+                <TabsTrigger value="signatures" className="data-[state=active]:bg-zinc-800"><List className="w-4 h-4 mr-2"/> {t('settings.tabs.signatures')}</TabsTrigger>
+                <TabsTrigger value="analysis" className="data-[state=active]:bg-zinc-800"><Clock className="w-4 h-4 mr-2"/> {t('settings.tabs.analysis')}</TabsTrigger>
+                <TabsTrigger value="llm" className="data-[state=active]:bg-zinc-800"><BrainCircuit className="w-4 h-4 mr-2"/> {t('settings.tabs.llm')}</TabsTrigger>
                 <TabsTrigger value="account" className="data-[state=active]:bg-zinc-800 ml-auto text-zinc-300 data-[state=active]:text-white">
-                    <User className="w-4 h-4 mr-2"/> Account
+                    <User className="w-4 h-4 mr-2"/> {t('settings.tabs.account')}
                 </TabsTrigger>
             </TabsList>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-10">
 
-                {/* === TAB: RESPONSE & EMAIL ALERTS === */}
-                <TabsContent value="alerts" className="space-y-4 mt-0">
+                {/* === TAB: RESPONSE & HISTORY === */}
+                <TabsContent value="alerts" className="space-y-4 mt-0 h-full overflow-hidden">
                     <Card className="bg-red-950/20 border-red-900/30">
-                        <CardHeader className="pb-3 border-b border-red-900/20 mb-3">
-                            <CardTitle className="text-base font-semibold text-red-400 flex items-center gap-2">
-                                <Zap className="w-5 h-5"/> Automated Defense (Active Response)
-                            </CardTitle>
-                            <CardDescription className="text-zinc-400">
-                                Hệ thống sẽ tự động <b>Khóa Tài Khoản (LOCK)</b> và <b>Ngắt Kết Nối (KILL)</b> nếu phát hiện vi phạm nghiêm trọng.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-4">
-                                    <div className="flex items-center space-x-2 border border-red-900/50 p-3 rounded bg-red-950/30">
-                                        <Switch id="ar-enable" 
+                        <CardHeader className="pb-4">
+                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                                {/* PHẦN BÊN TRÁI: TIÊU ĐỀ & MÔ TẢ */}
+                                <div className="space-y-1.5">
+                                    <CardTitle className="text-base font-semibold text-red-400 flex items-center gap-2">
+                                        <Zap className="w-5 h-5"/> {t('settings.response.title')}
+                                    </CardTitle>
+                                    <CardDescription className="text-zinc-400">
+                                        {t('settings.response.desc')}
+                                    </CardDescription>
+                                    <div className="flex items-center gap-2 text-xs text-orange-400/90 pt-1">
+                                        <AlertTriangle className="w-3.5 h-3.5"/>
+                                        <span>{t('settings.response.warning')}</span>
+                                    </div>
+                                </div>
+
+                                {/* PHẦN BÊN PHẢI: CÁC NÚT ĐIỀU KHIỂN */}
+                                <div className="flex flex-col items-end gap-3 shrink-0">
+                                    {/* 1. Nút Enable Switch */}
+                                    <div className="flex items-center space-x-2 bg-red-950/40 border border-red-900/50 px-3 py-1.5 rounded-md shadow-sm">
+                                        <Switch 
+                                            id="ar-enable" 
                                             checked={getVal('active_response_config.enable_active_response', true)}
                                             onCheckedChange={c => updateField('active_response_config.enable_active_response', c)}
+                                            className="data-[state=checked]:bg-red-600"
                                         />
-                                        <Label htmlFor="ar-enable" className="text-white font-bold cursor-pointer">
-                                            Bật Phản Ứng Chủ Động
+                                        <Label htmlFor="ar-enable" className="text-sm font-bold text-red-100 cursor-pointer select-none">
+                                            {t('settings.response.enable')}
                                         </Label>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                        <AlertTriangle className="w-4 h-4 text-orange-500"/>
-                                        <span className="text-sm text-zinc-400">Cẩn trọng: Tính năng này sẽ tác động trực tiếp đến Database User.</span>
+
+                                    {/* 2. Input Threshold */}
+                                    <div className="flex items-center gap-2 bg-zinc-900/30 px-2 py-1 rounded border border-zinc-800/50">
+                                        <Label className="text-xs text-zinc-400 whitespace-nowrap">
+                                            {t('settings.response.threshold_label')}
+                                        </Label>
+                                        <Input 
+                                            type="number" 
+                                            className="w-16 h-7 bg-zinc-950 border-red-900/30 focus:border-red-500 text-center text-xs p-0"
+                                            value={getVal('active_response_config.max_violation_threshold', 3)}
+                                            onChange={e => updateField('active_response_config.max_violation_threshold', parseInt(e.target.value))}
+                                        />
                                     </div>
                                 </div>
-        
-                                {/* Config ngưỡng kích hoạt */}
-                                <div className="flex items-center gap-2">
-                                    <Label className="text-sm text-zinc-300">Ngưỡng vi phạm (lần):</Label>
-                                    <Input 
-                                        type="number" 
-                                        className="w-20 h-9 bg-zinc-950 border-red-900/50 focus:border-red-500 text-center"
-                                        value={getVal('active_response_config.max_violation_threshold', 3)}
-                                        onChange={e => updateField('active_response_config.max_violation_threshold', parseInt(e.target.value))}
-                                    />
-                                </div>
                             </div>
+                        </CardHeader>
+                    </Card>
+                    <Card className="bg-zinc-950/40 border-zinc-800 flex flex-col h-full">
+                        <CardHeader className="pb-3 border-b border-zinc-800/50 bg-zinc-900/20 shrink-0">
+                            <CardTitle className="text-base font-semibold text-zinc-100 flex items-center gap-2">
+                                <FileText className="w-5 h-5 text-blue-400"/> {t('settings.response.history')}
+                            </CardTitle>
+                            <CardDescription className="text-zinc-400">
+                                {t('settings.response.log')}
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-0 flex-1 overflow-auto">
+                            {!auditLogs || auditLogs.length === 0 ? (
+                                <div className="p-8 text-center text-zinc-500 text-sm">
+                                    {isLogLoading ? t('settings.response.loag') : t('settings.response.no_action')}
+                                </div>
+                            ) : (
+                                <table className="w-full text-left text-sm text-zinc-400">
+                                    <thead className="bg-zinc-900/50 text-zinc-300 sticky top-0 z-10">
+                                        <tr>
+                                            <th className="px-4 py-3 font-medium border-b border-zinc-800">{t('settings.response.time')}</th>
+                                            <th className="px-4 py-3 font-medium border-b border-zinc-800">{t('settings.response.action')}</th>
+                                            <th className="px-4 py-3 font-medium border-b border-zinc-800">{t('settings.response.target')}</th>
+                                            <th className="px-4 py-3 font-medium border-b border-zinc-800">{t('settings.response.reason')}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-zinc-800/50">
+                                        {auditLogs.map((log, index) => (
+                                            <tr key={index} className="hover:bg-zinc-900/30 transition-colors">
+                                                <td className="px-4 py-2 whitespace-nowrap font-mono text-xs text-zinc-500">
+                                                    {log.timestamp}
+                                                </td>
+                                                <td className="px-4 py-2">
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium 
+                                                        ${log.action === 'LOCK_ACCOUNT' ? 'bg-red-950 text-red-400 border border-red-900/50' : 
+                                                        log.action === 'KILL_SESSION' ? 'bg-orange-950 text-orange-400 border border-orange-900/50' : 
+                                                        'bg-zinc-800 text-zinc-300'}`}>
+                                                        {log.action}
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-2 font-mono text-xs text-zinc-300">
+                                                    {log.target}
+                                                </td>
+                                                <td className="px-4 py-2 text-zinc-400 truncate max-w-xs" title={log.reason}>
+                                                    {log.reason}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
                         </CardContent>
                     </Card>
-                    <ConfigCard title="Email Notification Settings" desc="Cấu hình máy chủ SMTP để gửi cảnh báo khi phát hiện bất thường.">
-                        <div className="flex items-center space-x-2 mb-6 border border-zinc-800 p-3 rounded bg-zinc-900/50">
-                            <Switch id="email-enable" 
-                                checked={getVal('email_alert_config.enable_email_alerts', true)}
-                                onCheckedChange={c => updateField('email_alert_config.enable_email_alerts', c)}
-                            />
-                            <Label htmlFor="email-enable" className="text-white font-bold cursor-pointer">Bật gửi cảnh báo qua Email</Label>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-semibold text-primary-400 uppercase tracking-wider">Cấu hình SMTP Server</h4>
-                                <FormItem label="SMTP Server Host" desc="Địa chỉ máy chủ gửi mail (VD: smtp.gmail.com)">
-                                    <Input value={getVal('email_alert_config.smtp_server')} 
-                                           onChange={e => updateField('email_alert_config.smtp_server', e.target.value)}/>
-                                </FormItem>
-                                <FormItem label="SMTP Port" desc="Cổng gửi mail (Thường là 587 cho TLS hoặc 465 cho SSL)">
-                                    <Input type="number" value={getVal('email_alert_config.smtp_port')} 
-                                           onChange={e => updateField('email_alert_config.smtp_port', parseInt(e.target.value))}/>
-                                </FormItem>
-                                <div className="border-t border-zinc-800 my-2 pt-2"></div>
-                                <FormItem label="Email Người Gửi" desc="Địa chỉ email dùng để gửi cảnh báo đi">
-                                    <Input value={getVal('email_alert_config.sender_email')} 
-                                           onChange={e => updateField('email_alert_config.sender_email', e.target.value)}/>
-                                </FormItem>
-                                <FormItem label="Mật Khẩu Ứng Dụng" desc="Nếu dùng Gmail 2FA, hãy tạo App Password.">
-                                    <Input type="password" value={getVal('email_alert_config.sender_password')} 
-                                           onChange={e => updateField('email_alert_config.sender_password', e.target.value)}/>
-                                </FormItem>
-                            </div>
-
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-semibold text-primary-400 uppercase tracking-wider">Danh Sách Người Nhận</h4>
-                                <FormItem label="Người nhận chính (To)" desc="Email nhận cảnh báo trực tiếp (phân cách bằng dấu phẩy)">
-                                    <Textarea className="h-32 font-mono text-xs" 
-                                        value={getListDisplayValue('email_alert_config.to_recipients')} 
-                                        onChange={e => handleListChange('email_alert_config.to_recipients', e.target.value)}/>
-                                </FormItem>
-                                <FormItem label="Người nhận ẩn (BCC)" desc="Email nhận bản sao ẩn để giám sát (phân cách bằng dấu phẩy)">
-                                    <Textarea className="h-32 font-mono text-xs" 
-                                        value={getListDisplayValue('email_alert_config.bcc_recipients')} 
-                                        onChange={e => handleListChange('email_alert_config.bcc_recipients', e.target.value)}/>
-                                </FormItem>
-                            </div>
-                        </div>
-                    </ConfigCard>
                 </TabsContent>
 
-                {/* === TAB: THRESHOLDS (ĐÃ BỔ SUNG CÁC TRƯỜNG THIẾU) === */}
+                {/* === TAB: THRESHOLDS === */}
                 <TabsContent value="thresholds" className="space-y-4 mt-0">
-                    <ConfigCard title="Ngưỡng Phát Hiện Bất Thường" desc="Điều chỉnh độ nhạy của các Rule.">
+                    <ConfigCard title={t('settings.thresholds.anomaly_detection')} desc="Adjust sensitivity of Rules.">
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            <FormItem label="Ngưỡng Xóa (Rows)" desc="Rule 25: Mass Deletion">
+                            <FormItem label={t('settings.thresholds.deletion_thresholds')} desc="Rule 25: Mass Deletion">
                                 <Input type="number" value={getVal('security_rules.thresholds.mass_deletion_rows')} 
                                        onChange={e => updateField('security_rules.thresholds.mass_deletion_rows', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Thời gian chạy tối đa (ms)" desc="Rule 12: DoS / Slow Query">
+                            <FormItem label={t('settings.thresholds.execution_time')} desc="Rule 12: DoS / Slow Query">
                                 <Input type="number" value={getVal('security_rules.thresholds.execution_time_limit_ms')} 
                                        onChange={e => updateField('security_rules.thresholds.execution_time_limit_ms', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="CPU Time tối đa (ms)" desc="Rule 13: High CPU Usage">
+                            <FormItem label={t('settings.thresholds.cpu_time')} desc="Rule 13: High CPU Usage">
                                 <Input type="number" value={getVal('security_rules.thresholds.cpu_time_limit_ms')} 
                                        onChange={e => updateField('security_rules.thresholds.cpu_time_limit_ms', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Lock Time tối đa (ms)" desc="Rule 20: Excessive Locking">
+                            <FormItem label={t('settings.thresholds.lock_time')} desc="Rule 20: Excessive Locking">
                                 <Input type="number" value={getVal('security_rules.thresholds.lock_time_limit_ms')} 
                                        onChange={e => updateField('security_rules.thresholds.lock_time_limit_ms', parseInt(e.target.value))}/>
                             </FormItem>
 
-                            <FormItem label="Số lần thử sai (Brute-force)" desc="Rule 2: Login Failure Limit">
+                            <FormItem label={t('settings.thresholds.brute_force')} desc="Rule 2: Login Failure Limit">
                                 <Input type="number" value={getVal('security_rules.thresholds.brute_force_attempts')} 
                                        onChange={e => updateField('security_rules.thresholds.brute_force_attempts', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Số Warning tối đa" desc="Rule 22: Warning Flooding">
+                            <FormItem label={t('settings.thresholds.warnings')} desc="Rule 22: Warning Flooding">
                                 <Input type="number" value={getVal('security_rules.thresholds.warning_count_threshold')} 
                                        onChange={e => updateField('security_rules.thresholds.warning_count_threshold', parseInt(e.target.value))}/>
                             </FormItem>
                             
-                            <FormItem label="Số IP đồng thời" desc="Rule 1: Concurrent IPs">
+                            <FormItem label={t('settings.thresholds.concurrent_ips')} desc="Rule 1: Concurrent IPs">
                                 <Input type="number" value={getVal('security_rules.thresholds.concurrent_ips_limit')} 
                                        onChange={e => updateField('security_rules.thresholds.concurrent_ips_limit', parseInt(e.target.value))}/>
                             </FormItem>
-                             <FormItem label="Entropy tối đa" desc="Rule 16: SQL Injection / Obfuscation">
+                             <FormItem label={t('settings.thresholds.entropy')} desc="Rule 16: SQL Injection / Obfuscation">
                                 <Input type="number" step="0.1" value={getVal('security_rules.thresholds.max_query_entropy')} 
                                        onChange={e => updateField('security_rules.thresholds.max_query_entropy', parseFloat(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Tốc độ di chuyển (km/h)" desc="Rule 3: Impossible Travel">
+                            <FormItem label={t('settings.thresholds.travel_speed')} desc="Rule 3: Impossible Travel">
                                 <Input type="number" value={getVal('security_rules.thresholds.impossible_travel_speed_kmh')} 
                                        onChange={e => updateField('security_rules.thresholds.impossible_travel_speed_kmh', parseInt(e.target.value))}/>
                             </FormItem>
 
-                            <FormItem label="Hiệu suất quét (Min Ratio)" desc="Rule 14: Scan Efficiency">
+                            <FormItem label={t('settings.thresholds.scan_efficiency')} desc="Rule 14: Scan Efficiency">
                                 <Input type="number" step="0.01" value={getVal('security_rules.thresholds.scan_efficiency_min')} 
                                        onChange={e => updateField('security_rules.thresholds.scan_efficiency_min', parseFloat(e.target.value))}/>
                             </FormItem>
-                             <FormItem label="Số dòng tối thiểu check quét" desc="Rule 14: Min Rows">
+                             <FormItem label={t('settings.thresholds.min_rows')} desc="Rule 14: Min Rows">
                                 <Input type="number" value={getVal('security_rules.thresholds.scan_efficiency_min_rows')} 
                                        onChange={e => updateField('security_rules.thresholds.scan_efficiency_min_rows', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Min Profile Occurrences" desc="Rule 31: Behavior Profile (Redis)">
+                            <FormItem label={t('settings.thresholds.profile_occurrences')} desc="Rule 31: Behavior Profile (Redis)">
                                 <Input type="number" value={getVal('security_rules.thresholds.min_occurrences_threshold')} 
                                     onChange={e => updateField('security_rules.thresholds.min_occurrences_threshold', parseInt(e.target.value))}/>
                             </FormItem>
@@ -338,46 +341,45 @@ export default function SettingsPage() {
                 {/* === TAB: SIGNATURES === */}
                 <TabsContent value="signatures" className="space-y-4 mt-0">
                     <div className="grid grid-cols-1 gap-6">
-                        {/* ATTACK SIGNATURES */}
                         <div className="space-y-6">
-                            <ConfigCard title="Dấu Hiệu Tấn Công (Attack Patterns)" desc="Các từ khóa định danh hành vi nguy hiểm.">
+                            <ConfigCard title={t('settings.signatures.attack_signatures')} desc="Keywords identifying dangerous behaviors.">
                                 <div className="space-y-4">
-                                    <FormItem label="Từ khóa SQL Injection" desc="Rule 11: Phát hiện tấn công tiêm nhiễm SQL">
+                                    <FormItem label={t('settings.signatures.sql_injection')} desc="Rule 11: SQL injection attack detected">
                                         <Textarea className="h-32 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.sqli_keywords')} 
                                             onChange={e => handleListChange('security_rules.signatures.sqli_keywords', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Từ khóa Admin Privilege" desc="Rule 5: Phát hiện leo thang đặc quyền">
+                                    <FormItem label={t('settings.signatures.admin_privilege')} desc="Rule 5: Escalation of privilege detected">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.admin_keywords')} 
                                             onChange={e => handleListChange('security_rules.signatures.admin_keywords', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Công cụ bị cấm (Blacklist)" desc="Rule 17: Các tool/client không được phép kết nối">
+                                    <FormItem label={t('settings.signatures.lacklisted')} desc="Rule 17: Tools/clients are not allowed to connect">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.disallowed_programs')} 
                                             onChange={e => handleListChange('security_rules.signatures.disallowed_programs', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Danh sách Bảng Nhạy Cảm" desc="Rule 6: Bảng chứa dữ liệu mật (lương, thẻ...)">
+                                    <FormItem label={t('settings.signatures.sensitive_tables')} desc="Rule 6: Table containing confidential data (salary, card details, etc.)">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.sensitive_tables')} 
                                             onChange={e => handleListChange('security_rules.signatures.sensitive_tables', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="User Được Phép Truy Cập" desc="Rule 6: Whitelist user xem bảng nhạy cảm">
+                                    <FormItem label={t('settings.signatures.allowed_users')} desc="Rule 6: Whitelist users view sensitive table">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.settings.sensitive_allowed_users')} 
                                             onChange={e => handleListChange('security_rules.settings.sensitive_allowed_users', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Bảng Dữ Liệu Lớn (Large Dump)" desc="Rule 27: Giám sát việc dump dữ liệu trái phép">
+                                    <FormItem label={t('settings.signatures.large_dump')} desc="Rule 27: Monitoring unauthorized data dumping">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.large_dump_tables')} 
                                             onChange={e => handleListChange('security_rules.signatures.large_dump_tables', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="HR Authorized Users" desc="Rule 8: User được phép tạo tài khoản mới">
+                                    <FormItem label={t('settings.signatures.authorized_users')} desc="Rule 8: Users are allowed to create new accounts.">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.hr_authorized_users')} 
                                             onChange={e => handleListChange('security_rules.signatures.hr_authorized_users', e.target.value)}/>
                                     </FormItem>
-                                    <FormItem label="Restricted Connection Users" desc="Rule 10: User bị cấm kết nối Insecure (TCP/IP)">
+                                    <FormItem label={t('settings.signatures.restricted_users')} desc="Rule 10: User is prohibited from connecting via Insecure (TCP/IP)">
                                         <Textarea className="h-24 font-mono text-xs" 
                                             value={getListDisplayValue('security_rules.signatures.restricted_connection_users')} 
                                             onChange={e => handleListChange('security_rules.signatures.restricted_connection_users', e.target.value)}/>
@@ -391,38 +393,38 @@ export default function SettingsPage() {
                 {/* === TAB: ANALYSIS PARAMS === */}
                 <TabsContent value="analysis" className="space-y-4 mt-0">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                        <ConfigCard title="Cấu Hình Chu Kỳ Engine" desc="Tham số điều khiển tần suất quét và phân tích.">
-                            <FormItem label="Chu kỳ nghỉ (Sleep Interval)" desc="Thời gian nghỉ giữa các lần quét log (giây)">
+                        <ConfigCard title={t('settings.analysis.engine_configuration')} desc="Parameters controlling scanning frequency.">
+                            <FormItem label={t('settings.analysis.sleep_interval')} desc="Engine rest time">
                                 <Input type="number" value={getVal('engine_sleep_interval_seconds')} 
                                        onChange={e => updateField('engine_sleep_interval_seconds', parseInt(e.target.value))}/>
                             </FormItem>
                             <div className="grid grid-cols-2 gap-4 mt-4">
-                                <FormItem label="Cửa sổ gom nhóm (phút)" desc="Khoảng thời gian để đếm số bảng bị truy cập (Rule 30)">
+                                <FormItem label={t('settings.analysis.frouping_window')} desc="Rule 30: The time period to count the number of accessed tables (E.g: 4)">
                                     <Input type="number" value={getVal('security_rules.thresholds.multi_table_window_minutes')} 
                                            onChange={e => updateField('security_rules.thresholds.multi_table_window_minutes', parseInt(e.target.value))}/>
                                 </FormItem>
-                                <FormItem label="Số bảng tối thiểu" desc="Số lượng bảng khác nhau bị truy cập để kích hoạt cảnh báo Multi-table">
+                                <FormItem label={t('settings.analysis.table_count')} desc="Rule 30: The number of different tables accessed triggers the Multi-table alert (E.g: 3)">
                                     <Input type="number" value={getVal('security_rules.thresholds.multi_table_min_count')} 
                                            onChange={e => updateField('security_rules.thresholds.multi_table_min_count', parseInt(e.target.value))}/>
                                 </FormItem>
                             </div>
                         </ConfigCard>
 
-                        <ConfigCard title="Định Nghĩa Giờ Làm Việc" desc="Thiết lập khung giờ chuẩn và giờ khuya.">
+                        <ConfigCard title={t('settings.analysis.working_definition')} desc="Standard business hours and late night hours.">
                              <div className="grid grid-cols-2 gap-4">
-                                <FormItem label="Giờ bắt đầu làm việc" desc="Giờ an toàn bắt đầu (VD: 8)">
+                                <FormItem label={t('settings.analysis.start_hour')} desc="(E.g: 8">
                                     <Input type="number" value={getVal('security_rules.settings.sensitive_safe_hours_start')} 
                                            onChange={e => updateField('security_rules.settings.sensitive_safe_hours_start', parseInt(e.target.value))}/>
                                 </FormItem>
-                                <FormItem label="Giờ kết thúc làm việc" desc="Giờ an toàn kết thúc (VD: 17)">
+                                <FormItem label={t('settings.analysis.end_hour')} desc="(E.g: 17)">
                                     <Input type="number" value={getVal('security_rules.settings.sensitive_safe_hours_end')} 
                                            onChange={e => updateField('security_rules.settings.sensitive_safe_hours_end', parseInt(e.target.value))}/>
                                 </FormItem>
-                                <FormItem label="Bắt đầu Giờ Khuya" desc="Mốc thời gian bắt đầu tính là đêm khuya (Rule 7)">
+                                <FormItem label={t('settings.analysis.night_start')} desc="(E.g: 00:00:00)">
                                     <Input value={getVal('security_rules.settings.late_night_start')} 
                                            onChange={e => updateField('security_rules.settings.late_night_start', e.target.value)}/>
                                 </FormItem>
-                                <FormItem label="Kết thúc Giờ Khuya" desc="Mốc thời gian kết thúc đêm khuya">
+                                <FormItem label={t('settings.analysis.night_end')} desc="(E.g: 05:30:00)">
                                     <Input value={getVal('security_rules.settings.late_night_end')} 
                                            onChange={e => updateField('security_rules.settings.late_night_end', e.target.value)}/>
                                 </FormItem>
@@ -433,49 +435,78 @@ export default function SettingsPage() {
 
                 {/* === TAB: AI & LLM === */}
                 <TabsContent value="llm" className="space-y-4 mt-0">
-                    <ConfigCard title="Cấu Hình AI (Ollama/LLM)" desc="Kết nối tới mô hình ngôn ngữ lớn.">
+                    <ConfigCard title={t('settings.llm.ai')} desc={t('settings.llm.connect')}>
                         <div className="flex items-center space-x-2 mb-4 border border-zinc-800 p-2 rounded">
                             <Switch id="ollama-mode" 
                                 checked={getVal('llm_config.enable_ollama')}
                                 onCheckedChange={c => updateField('llm_config.enable_ollama', c)}
                             />
-                            <Label htmlFor="ollama-mode" className="text-white font-bold cursor-pointer">Bật sử dụng Local LLM (Ollama)</Label>
+                            <Label htmlFor="ollama-mode" className="text-white font-bold cursor-pointer">{t('settings.llm.enable')}</Label>
                         </div>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <FormItem label="Ollama Host URL" desc="Địa chỉ server chạy Ollama">
+                            <FormItem label={t('settings.llm.host')} desc="E.g: http://192.168.1.0:11434">
                                 <Input value={getVal('llm_config.ollama_host')} 
                                        onChange={e => updateField('llm_config.ollama_host', e.target.value)}/>
                             </FormItem>
-                             <FormItem label="Tên Model" desc="Tên model đã pull về (VD: deepseek-r1:1.5b)">
+                             <FormItem label={t('settings.llm.model')} desc="E.g: uba-expert">
                                 <Input value={getVal('llm_config.ollama_model')} 
                                        onChange={e => updateField('llm_config.ollama_model', e.target.value)}/>
                             </FormItem>
-                             <FormItem label="Timeout (giây)" desc="Thời gian chờ tối đa cho 1 request">
+                             <FormItem label={t('settings.llm.timeout')} desc="E.g: 360">
                                 <Input type="number" value={getVal('llm_config.ollama_timeout')} 
                                        onChange={e => updateField('llm_config.ollama_timeout', parseInt(e.target.value))}/>
                             </FormItem>
-                            <FormItem label="Số lần thử lại (Max Retries)" desc="Thử lại nếu kết nối thất bại">
-                                <Input type="number" value={getVal('llm_config.ollama_max_retries')} 
-                                       onChange={e => updateField('llm_config.ollama_max_retries', parseInt(e.target.value))}/>
+                            <FormItem label={t('settings.llm.keep_alive')} desc="Waiting time while alive. E.g: 30m">
+                                <Input value={getVal('llm_config.keep_alive')} 
+                                       onChange={e => updateField('llm_config.keep_alive', parseInt(e.target.value))}/>
                             </FormItem>
                         </div>
                     </ConfigCard>
-                    
-                    <ConfigCard title="Chiến Lược Phân Tích" desc="Cách thức AI xử lý dữ liệu.">
+                    <ConfigCard title={t('settings.email.title')} desc={t('settings.email.desc')}>
+                        <div className="flex items-center space-x-2 mb-6 border border-zinc-800 p-3 rounded bg-zinc-900/50">
+                            <Switch id="email-enable" 
+                                checked={getVal('email_alert_config.enable_email_alerts', true)}
+                                onCheckedChange={c => updateField('email_alert_config.enable_email_alerts', c)}
+                            />
+                            <Label htmlFor="email-enable" className="text-white font-bold cursor-pointer">{t('settings.email.enable')}</Label>
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                             <div className="flex items-center space-x-2 border border-zinc-800 p-3 rounded bg-zinc-900/50">
-                                <Switch id="two-round" 
-                                    checked={getVal('llm_analysis_settings.enable_two_round_analysis')}
-                                    onCheckedChange={c => updateField('llm_analysis_settings.enable_two_round_analysis', c)}
-                                />
-                                <Label htmlFor="two-round" className="cursor-pointer">Chế độ phân tích 2 vòng (Review Mode)</Label>
+                            <div className="space-y-4">
+                                <h4 className="text-sm font-semibold text-primary-400 uppercase tracking-wider">{t('settings.email.smtp_server')}</h4>
+                                <FormItem label={t('settings.email.host')} desc="E.g: smtp.gmail.com">
+                                    <Input value={getVal('email_alert_config.smtp_server')} 
+                                           onChange={e => updateField('email_alert_config.smtp_server', e.target.value)}/>
+                                </FormItem>
+                                <FormItem label={t('settings.email.port')} desc="TLS: 587, SSL: 465">
+                                    <Input type="number" value={getVal('email_alert_config.smtp_port')} 
+                                           onChange={e => updateField('email_alert_config.smtp_port', parseInt(e.target.value))}/>
+                                </FormItem>
+                                <div className="border-t border-zinc-800 my-2 pt-2"></div>
+                                <FormItem label={t('settings.email.sender')} desc="Email address">
+                                    <Input value={getVal('email_alert_config.sender_email')} 
+                                           onChange={e => updateField('email_alert_config.sender_email', e.target.value)}/>
+                                </FormItem>
+                                <FormItem label={t('settings.email.password')} desc="If you use Gmail 2FA, App Password">
+                                    <Input type="password" value={getVal('email_alert_config.sender_password')} 
+                                           onChange={e => updateField('email_alert_config.sender_password', e.target.value)}/>
+                                </FormItem>
                             </div>
-                            <FormItem label="Ngưỡng tin cậy (Confidence Threshold)" desc="Chỉ báo động nếu AI chắc chắn trên mức này (0.0 - 1.0)">
-                                <Input type="number" step="0.1" max="1" min="0" 
-                                       value={getVal('llm_analysis_settings.confidence_threshold')} 
-                                       onChange={e => updateField('llm_analysis_settings.confidence_threshold', parseFloat(e.target.value))}/>
-                            </FormItem>
+
+                            <div className="space-y-4">
+                                <h4 className="text-sm font-semibold text-primary-400 uppercase tracking-wider">{t('settings.email.recipients')}</h4>
+                                <FormItem label={t('settings.email.to')} desc="Email to receive direct alerts (Separated by comma)">
+                                    <Textarea className="h-32 font-mono text-xs" 
+                                        value={getListDisplayValue('email_alert_config.to_recipients')} 
+                                        onChange={e => handleListChange('email_alert_config.to_recipients', e.target.value)}/>
+                                </FormItem>
+                                <FormItem label={t('settings.email.bcc')} desc="Email to receive a hidden copy for monitoring (Separated by comma)">
+                                    <Textarea className="h-32 font-mono text-xs" 
+                                        value={getListDisplayValue('email_alert_config.bcc_recipients')} 
+                                        onChange={e => handleListChange('email_alert_config.bcc_recipients', e.target.value)}/>
+                                </FormItem>
+                            </div>
                         </div>
                     </ConfigCard>
                 </TabsContent>
@@ -485,26 +516,26 @@ export default function SettingsPage() {
                     <Card className="bg-zinc-950/40 border-zinc-800">
                         <CardHeader>
                             <CardTitle className="text-lg flex items-center gap-2">
-                                <Key className="w-5 h-5 text-primary-500"/> Đổi Mật Khẩu
+                                <Key className="w-5 h-5 text-primary-500"/> {t('settings.account.change_pass')}
                             </CardTitle>
-                            <CardDescription>Cập nhật mật khẩu đăng nhập hệ thống.</CardDescription>
+                            <CardDescription>{t('settings.account.change_pass_desc')}</CardDescription>
                         </CardHeader>
                         <form onSubmit={handleChangePassword}>
                             <CardContent className="space-y-4">
                                 <div className="space-y-2">
-                                    <Label>Mật khẩu hiện tại</Label>
+                                    <Label>{t('settings.account.current')}</Label>
                                     <Input type="password" required value={passForm.currentPassword}
                                         onChange={e => setPassForm({...passForm, currentPassword: e.target.value})}
                                         className="bg-zinc-900 border-zinc-700 focus:border-primary-500"/>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Mật khẩu mới</Label>
+                                    <Label>{t('settings.account.new')}</Label>
                                     <Input type="password" required value={passForm.newPassword}
                                         onChange={e => setPassForm({...passForm, newPassword: e.target.value})}
                                         className="bg-zinc-900 border-zinc-700 focus:border-primary-500"/>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label>Xác nhận mật khẩu mới</Label>
+                                    <Label>{t('settings.account.confirm')}</Label>
                                     <Input type="password" required value={passForm.confirmPassword}
                                         onChange={e => setPassForm({...passForm, confirmPassword: e.target.value})}
                                         className="bg-zinc-900 border-zinc-700 focus:border-primary-500"/>
@@ -512,7 +543,7 @@ export default function SettingsPage() {
                             </CardContent>
                             <CardFooter className="flex justify-end border-t border-zinc-800/50 pt-4">
                                 <Button type="submit" disabled={isPassLoading} className="bg-primary-600 hover:bg-primary-700">
-                                    {isPassLoading ? "Đang xử lý..." : "Cập nhật mật khẩu"}
+                                    {isPassLoading ? "Processing..." : t('settings.account.update_btn')}
                                 </Button>
                             </CardFooter>
                         </form>
@@ -521,12 +552,12 @@ export default function SettingsPage() {
                     <Card className="bg-red-950/10 border-red-900/30">
                         <CardHeader>
                             <CardTitle className="text-lg text-red-500 flex items-center gap-2">
-                                <LogOut className="w-5 h-5"/> Điều Khiển Phiên
+                                <LogOut className="w-5 h-5"/> {t('settings.account.logout_title')}
                             </CardTitle>
                         </CardHeader>
                         <CardContent className="flex justify-between items-center">
-                            <div className="text-sm text-zinc-400">Đăng xuất khỏi phiên làm việc hiện tại.</div>
-                            <Button variant="destructive" onClick={handleLogout} className="bg-red-600 hover:bg-red-700">Đăng Xuất</Button>
+                            <div className="text-sm text-zinc-400">{t('settings.account.logout_desc')}</div>
+                            <Button variant="destructive" onClick={handleLogout} className="bg-red-600 hover:bg-red-700">{t('settings.account.logout_btn')}</Button>
                         </CardContent>
                     </Card>
                 </TabsContent>
