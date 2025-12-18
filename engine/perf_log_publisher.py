@@ -25,6 +25,8 @@ logging.basicConfig(
 
 # File state
 PERF_SCHEMA_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_schema.state")
+HYBRID_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_hybrid_timer.state")
+PERF_DISK_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_persistent_id.state")
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 
 # Flag để điều khiển vòng lặp
@@ -51,8 +53,37 @@ def read_last_timer():
         logging.warning("Không tìm thấy state file. Bắt đầu từ timestamp = 0.")
         return 0
         
+def load_hybrid_state():
+    """Load state from hybrid_log_publisher to avoid duplicate processing"""
+    try:
+        with open(HYBRID_STATE_FILE, 'r') as f:
+            state = json.load(f)
+            return {
+                "last_timer_start": state.get("last_timer_start", 0),
+                "last_event_ts": state.get("last_event_ts", "2024-01-01T00:00:00.000000")
+            }
+    except:
+        return {"last_timer_start": 0, "last_event_ts": "2024-01-01T00:00:00.000000"}
+
+def load_perf_disk_state():
+    """Load state from perf_disk_publisher to avoid duplicate processing"""
+    try:
+        with open(PERF_DISK_STATE_FILE, 'r') as f:
+            return json.load(f).get("last_id", 0)
+    except:
+        return 0
+
 def write_last_timer(ts: int):
-    state = {"last_timer_start": ts, "last_updated": datetime.now(timezone.utc).isoformat()}
+    hybrid_state = load_hybrid_state()
+    perf_disk_id = load_perf_disk_state()
+    
+    state = {
+        "last_timer_start": ts, 
+        "hybrid_last_timer": hybrid_state["last_timer_start"],
+        "hybrid_last_event_ts": hybrid_state["last_event_ts"],
+        "perf_disk_last_id": perf_disk_id,
+        "last_updated": datetime.now(timezone.utc).isoformat()
+    }
     os.makedirs(os.path.dirname(PERF_SCHEMA_STATE_FILE) or ".", exist_ok=True)
     try:
         with open(PERF_SCHEMA_STATE_FILE, 'w', encoding='utf-8') as f:
@@ -130,7 +161,6 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             e.EVENT_ID,
             e.EVENT_NAME,
             e.SQL_TEXT,
-    		e.DIGEST,
             e.DIGEST_TEXT,
             e.CURRENT_SCHEMA,
             e.TIMER_WAIT,
@@ -160,8 +190,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
             e.NO_GOOD_INDEX_USED,
             t.PROCESSLIST_USER,
             COALESCE(t.PROCESSLIST_HOST, 'unknown') AS PROCESSLIST_HOST,
-            t.CONNECTION_TYPE,          
-            t.THREAD_OS_ID
+            t.CONNECTION_TYPE
         FROM performance_schema.events_statements_history_long e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_START > :last_timer
@@ -207,7 +236,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                 uptime_sec = float(uptime_res) if uptime_res else 0
                 boot_time = datetime.now(timezone.utc) - timedelta(seconds=uptime_sec)
 
-                # 3. Fetch Logs
+                # 3. Load other publishers' states to avoid duplicates
+                hybrid_state = load_hybrid_state()
+                perf_disk_id = load_perf_disk_state()
+
+                # 4. Fetch Logs
                 results = conn.execute(sql_query, {"last_timer": last_timer})
                 batch_max_timer = last_timer
 
@@ -218,6 +251,11 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                     t_start_raw = int(row_dict['TIMER_START'] or 0)
                     if t_start_raw > batch_max_timer:
                         batch_max_timer = t_start_raw
+                    
+                    # Skip if this event might be processed by hybrid_log_publisher
+                    if t_start_raw <= hybrid_state["last_timer_start"]:
+                        logging.debug(f"Skipping event {row_dict['EVENT_ID']} - likely processed by hybrid_log_publisher (timer: {t_start_raw} <= {hybrid_state['last_timer_start']})")
+                        continue
 
                     # Tính Timestamp = BootTime + TimerStart (pico -> seconds)
                     if t_start_raw > 0:
@@ -232,12 +270,10 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                     entropy = calculate_entropy(sql_text)
                     
                     host_str = str(row_dict['PROCESSLIST_HOST'] or '')
-                    client_ip, client_port = 'unknown', 0
+                    client_ip = 'unknown'
                     if ':' in host_str:
                         p = host_str.split(':')
                         client_ip = p[0]
-                        try: client_port = int(p[1])
-                        except: pass
                     else: client_ip = host_str
                     
                     # Enhanced database detection logic
@@ -270,11 +306,9 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "event_name": str(row_dict['EVENT_NAME']),
                         "user": str(row_dict['PROCESSLIST_USER'] or 'unknown'),
                         "client_ip": client_ip,
-                        "client_port": client_port,
                         "database": db_name,
                         "query": sql_text,
                         "normalized_query": str(row_dict['DIGEST_TEXT'] or ''),
-                        "query_digest": str(row_dict['DIGEST'] or ''),
                         "query_length": len(sql_text),
                         "query_entropy": float(f"{entropy:.4f}"),
                         "is_system_table": is_system,
@@ -310,8 +344,6 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "no_good_index_used": int(row_dict['NO_GOOD_INDEX_USED'] or 0),
                         
                         "connection_type": str(row_dict['CONNECTION_TYPE'] or 'unknown'),
-                        "thread_os_id": int(row_dict['THREAD_OS_ID'] or 0),
-                        "source_dbms": "MySQL"
                     }
                     new_records.append(record)
 
@@ -323,7 +355,7 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                             pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, ensure_ascii=False)})
                         pipe.execute()
 
-                        save_logs_to_parquet(new_records, source_dbms="MySQL")
+                        save_logs_to_parquet(new_records)
                         
                         last_timer = batch_max_timer
                         write_last_timer(last_timer)

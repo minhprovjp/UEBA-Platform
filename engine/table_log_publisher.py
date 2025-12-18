@@ -149,7 +149,6 @@ def monitor_log_table(poll_interval_sec: int = 1):
                             "client_ip": host,
                             "database": "N/A", # General log không cung cấp DB, sẽ được cập nhật bởi 'USE db'
                             "query": str(row_dict['query_text']),
-                            "source_dbms": "MySQL"
                         }
                         new_records_to_publish.append(record)
                         

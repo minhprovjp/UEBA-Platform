@@ -129,7 +129,7 @@ def save_results_to_db(results: Dict[str, Any]):
     INT_COLS = {
         'created_tmp_disk_tables', 'created_tmp_tables', 'select_full_join', 
         'select_scan', 'sort_merge_passes', 'no_index_used', 'no_good_index_used',
-        'error_count', 'warning_count', 'client_port', 'thread_os_id', 
+        'error_count', 'warning_count', 
         'rows_returned', 'rows_examined', 'rows_affected', 'num_tables',
         'num_joins', 'num_where_conditions', 'subquery_depth', 'query_length',
         'accessed_sensitive_tables', 'event_id', 'error_code'
@@ -147,14 +147,10 @@ def save_results_to_db(results: Dict[str, Any]):
         'timestamp': 'timestamp',
         'user': 'user',
         'client_ip': 'client_ip',
-        'client_port': 'client_port',
         'connection_type': 'connection_type',
-        'thread_os_id': 'thread_os_id',
         'database': 'database',
-        'source_dbms': 'source_dbms',
         'query': 'query',
         'normalized_query': 'normalized_query',
-        'query_digest': 'query_digest',
         'event_id': 'event_id',
         'event_name': 'event_name',
         'command_type': 'command_type',

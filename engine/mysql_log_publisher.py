@@ -106,7 +106,6 @@ def parse_and_append_log_data(new_lines, sessions, filter_user=None):
                 'client_ip': session_info.get('host'),
                 'database': session_info.get('db', 'N/A'),
                 'query': full_query,
-                'source_dbms': 'MySQL_GQL_File'
             })
         current_multiline_query_parts.clear()
         last_query_timestamp, last_query_thread_id = None, None
@@ -278,7 +277,7 @@ def monitor_log_file(
                         
                         try:
                             # Đặt tên nguồn log rõ ràng để phân biệt
-                            save_logs_to_parquet(recs, source_dbms="MySQL_GQL_File") 
+                            save_logs_to_parquet(recs) 
                             # logging.info(f"Đã lưu {len(recs)} bản ghi GQL File vào Staging.")
                         except Exception as e:
                             logging.error(f"Lỗi khi lưu file Parquet (Staging): {e}", exc_info=True)

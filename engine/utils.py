@@ -271,22 +271,20 @@ def save_feedback_to_csv(item_data: dict, label: int) -> tuple[bool, str]:
 
 
 
-def save_logs_to_parquet(records: list, source_dbms: str) -> int:
+def save_logs_to_parquet(records: list) -> int:
     if not records:
         return 0
     try:
         df = pd.DataFrame(records)
-        if 'source_dbms' not in df.columns:
-            df['source_dbms'] = source_dbms
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
 
         os.makedirs(STAGING_DATA_DIR, exist_ok=True)  # <-- thêm dòng này
 
-        filename = f"{source_dbms}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+        filename = f"MYSQL_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
         file_path = os.path.join(STAGING_DATA_DIR, filename)
         df.to_parquet(file_path, engine='pyarrow', index=False)
-        # logging.info(f"Đã lưu {len(df)} bản ghi từ '{source_dbms}' vào file: {filename}")
+        # logging.info(f"Đã lưu {len(df)} bản ghi từ MYSQL vào file: {filename}")
         return len(df)
     except Exception as e:
         logging.error(f"Lỗi khi lưu file Parquet: {e}")

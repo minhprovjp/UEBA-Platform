@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", date
 
 # --- CẤU HÌNH ---
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_creator.state")
-CSV_OUTPUT_FILE = "final_new_dataset_30d.csv"
+CSV_OUTPUT_FILE = "final_clean_dataset.csv"
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0
@@ -170,8 +170,8 @@ def process_logs():
     # Init CSV Header
     csv_headers = [
         "timestamp", "event_id", "event_name", 
-        "user", "client_ip", "client_port", "database", 
-        "query", "normalized_query", "query_digest",
+        "user", "client_ip", "database", 
+        "query", "normalized_query",
         "query_length", "query_entropy", 
         "is_system_table", "scan_efficiency", "is_admin_command", "is_risky_command", "has_comment",
         "execution_time_ms", "lock_time_ms", "cpu_time_ms", "program_name", "connector_name", "client_os", "source_host",
@@ -180,8 +180,8 @@ def process_logs():
         "created_tmp_disk_tables", "created_tmp_tables", 
         "select_full_join", "select_scan", "sort_merge_passes",
         "no_index_used", "no_good_index_used",
-        "connection_type", "thread_os_id",
-        "source_dbms", "behavior_type", "is_anomaly"
+        "connection_type",
+        "behavior_type", "is_anomaly"
     ]
     
     # Khởi tạo/Kiểm tra file CSV
@@ -204,7 +204,7 @@ def process_logs():
         SELECT 
             e.TIMER_START, e.TIMER_END, 
             e.EVENT_ID, e.EVENT_NAME,
-            e.SQL_TEXT, e.DIGEST, e.DIGEST_TEXT, e.CURRENT_SCHEMA,
+            e.SQL_TEXT, e.DIGEST_TEXT, e.CURRENT_SCHEMA,
             TRUNCATE(e.TIMER_WAIT / 1000000000, 4) AS execution_time_ms,
             TRUNCATE(e.LOCK_TIME / 1000000000, 4) AS lock_time_ms,
             e.CPU_TIME,
@@ -223,7 +223,7 @@ def process_logs():
             e.NO_INDEX_USED, e.NO_GOOD_INDEX_USED,
             t.PROCESSLIST_USER, 
             COALESCE(t.PROCESSLIST_HOST, 'localhost') AS PROCESSLIST_HOST,
-            t.CONNECTION_TYPE, t.THREAD_OS_ID
+            t.CONNECTION_TYPE
         FROM performance_schema.events_statements_history_long e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_END > :last_ts
@@ -330,11 +330,9 @@ def process_logs():
                         "event_name": str(r_map['EVENT_NAME']),
                         "user": meta["sim_user"],
                         "client_ip": meta["sim_ip"],
-                        "client_port": meta["sim_port"],
                         "database": db_name,
                         "query": clean_sql,
-                        "normalized_query": str(r_map['DIGEST_TEXT'] or ''),
-                        "query_digest": str(r_map['DIGEST'] or ''),                        
+                        "normalized_query": str(r_map['DIGEST_TEXT'] or ''),                    
                         "query_length": len(clean_sql),
                         "query_entropy": float(f"{entropy:.4f}"),
                         "is_system_table": is_system,
@@ -365,8 +363,6 @@ def process_logs():
                         "no_index_used": int(r_map['NO_INDEX_USED'] or 0),
                         "no_good_index_used": int(r_map['NO_GOOD_INDEX_USED'] or 0),
                         "connection_type": str(r_map['CONNECTION_TYPE'] or 'unknown'),
-                        "thread_os_id": int(r_map['THREAD_OS_ID'] or 0),
-                        "source_dbms": "MySQL",
                         "behavior_type": meta["beh_type"],
                         "is_anomaly": meta["is_anomaly"]
                     }

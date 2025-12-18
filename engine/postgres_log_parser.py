@@ -51,7 +51,6 @@ def parse_single_log_file(log_path, start_byte=0):
                         'client_ip': row[4].split(':')[0] if row[4] else 'N/A',
                         'database': row[2],
                         'query': message.removeprefix("statement: ").strip(),
-                        'source_dbms': 'PostgreSQL' # Thêm nguồn
                     })
     except Exception as e:
         print(f"    -> Lỗi khi đọc file '{os.path.basename(log_path)}': {e}")
@@ -109,7 +108,7 @@ def run_postgres_parser(source_log_dir, state_file_path):
 
     # === LOGIC GHI FILE ĐÃ THAY ĐỔI ===
     # Thay vì đọc/ghi file CSV lớn, chỉ cần ghi batch mới ra staging
-    num_saved = save_logs_to_parquet(all_new_records, source_dbms="PostgreSQL")
+    num_saved = save_logs_to_parquet(all_new_records)
     
     if num_saved > 0:
         # Lưu lại trạng thái mới nhất

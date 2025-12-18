@@ -157,7 +157,6 @@ class EnhancedSimulationScheduler:
                 "query": sql,
                 "is_anomaly": intent.get('is_anomaly', 0),
                 "session_id": intent.get('session_id'),
-                "client_port": intent.get('client_port', 0),
                 "work_intensity": round(current_intensity, 2)
             }
             

@@ -71,15 +71,11 @@ class AllLogs(Base):
     # --- Identity ---
     user = Column(String, index=True)
     client_ip = Column(String)
-    client_port = Column(Integer, nullable=True) 
     connection_type = Column(String, nullable=True) 
-    thread_os_id = Column(Integer, nullable=True)  
     database = Column(String, nullable=True)
-    source_dbms = Column(String, default="MySQL")
 
     # --- Content ---
     query = Column(Text, nullable=False)
-    query_digest = Column(String, nullable=True)
     normalized_query = Column(Text, nullable=True)
     command_type = Column(String, nullable=True)
     

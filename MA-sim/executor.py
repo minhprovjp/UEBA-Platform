@@ -247,8 +247,6 @@ class SQLExecutor:
         is_anomaly = intent['is_anomaly']
         behavior = intent['action']
         db_target = intent.get('database', '') 
-        # [NEW] Lấy Port từ Agent
-        agent_port = intent.get('client_port', 0)
         
         if not client_profile:
             client_profile = {}

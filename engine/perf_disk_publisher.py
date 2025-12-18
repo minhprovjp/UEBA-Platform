@@ -20,8 +20,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [P
 
 # File state chỉ cần lưu ID tự tăng (BigInt)
 STATE_FILE = os.path.join(LOGS_DIR, ".mysql_persistent_id.state")
+HYBRID_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_hybrid_timer.state")
+PERF_LOG_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_schema.state")
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
+total_collected = 0
 
 def handle_shutdown(signum, frame):
     global is_running
@@ -37,9 +40,39 @@ def get_last_id():
         with open(STATE_FILE, 'r') as f: return int(json.load(f).get("last_id", 0))
     except: return 0
 
+def load_hybrid_state():
+    """Load state from hybrid_log_publisher to avoid duplicate processing"""
+    try:
+        with open(HYBRID_STATE_FILE, 'r') as f:
+            state = json.load(f)
+            return {
+                "last_timer_start": state.get("last_timer_start", 0),
+                "last_event_ts": state.get("last_event_ts", "2024-01-01T00:00:00.000000")
+            }
+    except:
+        return {"last_timer_start": 0, "last_event_ts": "2024-01-01T00:00:00.000000"}
+
+def load_perf_log_state():
+    """Load state from perf_log_publisher to avoid duplicate processing"""
+    try:
+        with open(PERF_LOG_STATE_FILE, 'r') as f:
+            return json.load(f).get("last_timer_start", 0)
+    except:
+        return 0
+
 def save_last_id(lid):
     try:
-        with open(STATE_FILE, 'w') as f: json.dump({"last_id": lid}, f)
+        hybrid_state = load_hybrid_state()
+        perf_log_timer = load_perf_log_state()
+        
+        state = {
+            "last_id": lid,
+            "hybrid_last_timer": hybrid_state["last_timer_start"],
+            "hybrid_last_event_ts": hybrid_state["last_event_ts"],
+            "perf_log_last_timer": perf_log_timer,
+            "last_updated": datetime.now(timezone.utc).isoformat()
+        }
+        with open(STATE_FILE, 'w') as f: json.dump(state, f)
     except: pass
 
 # === 2. Kết nối ===
@@ -72,7 +105,7 @@ def calculate_entropy(text):
 
 # === 3. Main Loop ===
 def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
-    global is_running
+    global is_running, total_collected
     
     engine = connect_db()
     redis = Redis.from_url(REDIS_URL, decode_responses=True)
@@ -104,10 +137,20 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                 new_records = []
                 max_id = last_id
 
+                # Load other publishers' states to avoid duplicates
+                hybrid_state = load_hybrid_state()
+                perf_log_timer = load_perf_log_state()
+
                 for row in rows:
                     r = row._mapping
                     current_id = r['id']
                     if current_id > max_id: max_id = current_id
+                    
+                    # Skip if this event might be processed by other publishers
+                    event_ts_str = str(r['event_ts'])
+                    if event_ts_str <= hybrid_state["last_event_ts"]:
+                        logging.debug(f"Skipping event ID {current_id} - likely processed by hybrid_log_publisher (ts: {event_ts_str} <= {hybrid_state['last_event_ts']})")
+                        continue
                     
                     # Convert metrics (trong bảng persistent đã là raw units)
                     # Timer Wait (pico) -> ms
@@ -171,13 +214,11 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         "event_id": int(r['event_id']), # Event ID gốc trong phiên
                         "user": str(r['processlist_user'] or 'unknown'),
                         "client_ip": str(r['processlist_host']).split(':')[0] if r['processlist_host'] else 'unknown',
-                        "client_port": 0, 
                         "database": db_name,
                         
                         # Content
                         "query": sql_txt,
                         "normalized_query": str(r['digest_text'] or ''),
-                        "query_digest": str(r['digest'] or ''),
                         "event_name": str(r['event_name']),
                         
                         # Features
@@ -193,7 +234,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         # Metrics
                         "execution_time_ms": exec_ms,
                         "lock_time_ms": lock_ms,
-                        "cpu_time_ms": float(r['CPU_TIME'] or 0) / 1000000.0, # Pico -> ms
+                        "cpu_time_ms": float(r['cpu_time'] or 0) / 1000000.0, # Pico -> ms
                         "program_name": str(r['program_name'] or 'unknown'),
                         "connector_name": str(r['connector_name'] or 'unknown'),
                         "client_os": str(r['client_os'] or 'unknown'),
@@ -217,9 +258,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         "no_index_used": int(r['no_index_used'] or 0),
                         "no_good_index_used": int(r['no_good_index_used'] or 0),
                         
-                        "source_dbms": "MySQL",
-                        "connection_type": str(r['connection_type'] or ''),
-                        "thread_os_id": int(r['thread_os_id'] or 0)
+                        "connection_type": str(r['connection_type'] or '')
                     }
                     
                     new_records.append(record)
@@ -230,11 +269,14 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         pipe.xadd(STREAM_KEY, {"data": json.dumps(rec, default=str)})
                     pipe.execute()
                     
-                    save_logs_to_parquet(new_records, source_dbms="MySQL")
+                    save_logs_to_parquet(new_records)
                     
                     last_id = max_id
                     save_last_id(last_id)
-                    logging.info(f"Published {len(new_records)} logs. (Last DB ID: {last_id})")
+                    total_collected += len(new_records)
+                    sys.stdout.write(f"\r📥 Total Collected: {total_collected} logs. (Last DB ID: {last_id})")
+                    sys.stdout.flush()
+                    # logging.info(f"Published {len(new_records)} logs. (Last DB ID: {last_id})")
 
         except Exception as e:
             if is_running:

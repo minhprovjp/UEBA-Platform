@@ -20,10 +20,13 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [HybridPublisher] - %(message)s")
 
 # Đổi tên file state để tránh xung đột với version cũ dùng ID
-STATE_FILE = os.path.join(LOGS_DIR, ".mysql_hybrid_timer.json")
+STATE_FILE = os.path.join(LOGS_DIR, ".mysql_hybrid_timer.state")
+PERF_DISK_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_persistent_id.state")
+PERF_LOG_STATE_FILE = os.path.join(LOGS_DIR, ".mysql_perf_schema.state")
 STREAM_KEY = f"{REDIS_STREAM_LOGS}:mysql"
 is_running = True
 total_collected = 0
+total_recovered = 0
 
 def handle_shutdown(signum, frame):
     global is_running
@@ -43,11 +46,30 @@ def load_state():
         # last_event_ts: Con trỏ cho Disk (datetime string)
         return {"last_timer_start": 0, "boot_signature": "", "last_event_ts": "2024-01-01T00:00:00.000000"}
 
+def load_perf_disk_state():
+    """Load state from perf_disk_publisher to avoid duplicate processing"""
+    try:
+        with open(PERF_DISK_STATE_FILE, 'r') as f:
+            return json.load(f).get("last_id", 0)
+    except:
+        return 0
+
+def load_perf_log_state():
+    """Load state from perf_log_publisher to avoid duplicate processing"""
+    try:
+        with open(PERF_LOG_STATE_FILE, 'r') as f:
+            return json.load(f).get("last_timer_start", 0)
+    except:
+        return 0
+
 def save_state(timer_start, boot_sig, event_ts):
     state = {
         "last_timer_start": timer_start,
         "boot_signature": boot_sig,
-        "last_event_ts": event_ts
+        "last_event_ts": event_ts,
+        "perf_disk_last_id": load_perf_disk_state(),
+        "perf_log_last_timer": load_perf_log_state(),
+        "last_updated": datetime.now(timezone.utc).isoformat()
     }
     try:
         with open(STATE_FILE, 'w') as f: json.dump(state, f)
@@ -118,6 +140,10 @@ def process_and_push(rows, redis_client, source_type="RAM"):
     new_records = []
     max_timer_in_batch = 0
     max_ts_in_batch = ""
+    
+    # Load other publishers' states to avoid duplicates
+    perf_disk_last_id = load_perf_disk_state()
+    perf_log_last_timer = load_perf_log_state()
 
     for row in rows:
         try:
@@ -188,19 +214,32 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             host_str = str(g('PROCESSLIST_HOST') or g('processlist_host') or 'unknown')
             client_ip = get_client_ip_safe(host_str)
 
+            # Skip if this event might be processed by other publishers
+            event_id = int(g('e_EVENT_ID') or g('event_id') or 0)
+            
+            # For RAM source, check if perf_log_publisher might have processed this
+            if source_type == "RAM" and current_timer <= perf_log_last_timer:
+                logging.debug(f"Skipping event {event_id} - likely processed by perf_log_publisher (timer: {current_timer} <= {perf_log_last_timer})")
+                continue
+                
+            # For DISK source, check if perf_disk_publisher might have processed this
+            if source_type == "DISK":
+                disk_id = int(g('id') or 0)
+                if disk_id > 0 and disk_id <= perf_disk_last_id:
+                    logging.debug(f"Skipping event {event_id} - likely processed by perf_disk_publisher (id: {disk_id} <= {perf_disk_last_id})")
+                    continue
+
             record = {
                 "timestamp": ts_iso,
                 # Event ID vẫn lưu để truy vết, nhưng không dùng làm state nữa
-                "event_id": int(g('e_EVENT_ID') or g('event_id') or 0), 
+                "event_id": event_id, 
                 "event_name": str(g('EVENT_NAME') or g('event_name') or ''),
                 
                 "user": str(g('PROCESSLIST_USER') or g('processlist_user') or 'unknown'),
                 "client_ip": client_ip,
-                "client_port": 0,
                 "database": db_name,
                 "query": sql_txt,
                 "normalized_query": str(g('DIGEST_TEXT') or g('digest_text') or ''),
-                "query_digest": str(g('DIGEST') or g('digest') or ''),
                 
                 "query_length": len(sql_txt),
                 "query_entropy": float(f"{calculate_entropy(sql_txt):.4f}"),
@@ -235,9 +274,7 @@ def process_and_push(rows, redis_client, source_type="RAM"):
                 "no_index_used": int(g('NO_INDEX_USED') or g('no_index_used') or 0),
                 "no_good_index_used": int(g('NO_GOOD_INDEX_USED') or g('no_good_index_used') or 0),
                 
-                "connection_type": str(g('CONNECTION_TYPE') or g('connection_type') or 'unknown'),
-                "thread_os_id": int(g('THREAD_OS_ID') or g('thread_os_id') or 0),
-                "source_dbms": "MySQL"
+                "connection_type": str(g('CONNECTION_TYPE') or g('connection_type') or 'unknown')
             }
             new_records.append(record)
         except Exception as e:
@@ -263,13 +300,13 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             logging.error(f"Unexpected error while pushing to Redis: {e}")
             # Continue to save to parquet even if Redis fails
         
-        save_logs_to_parquet(new_records, source_dbms="MySQL")
+        save_logs_to_parquet(new_records)
     
     return len(new_records), max_timer_in_batch, max_ts_in_batch
 
 # === 4. Main Logic ===
 def monitor_hybrid():
-    global is_running, total_collected
+    global is_running, total_collected, total_recovered
     engine = connect_db()
     redis = connect_redis()
     if not engine or not redis: return
@@ -299,7 +336,7 @@ def monitor_hybrid():
             e.ROWS_SENT, e.ROWS_EXAMINED, e.ROWS_AFFECTED,
             e.MYSQL_ERRNO, e.MESSAGE_TEXT, e.ERRORS, e.WARNINGS,
             e.CREATED_TMP_DISK_TABLES, e.CREATED_TMP_TABLES, e.SELECT_FULL_JOIN, e.SELECT_SCAN, e.NO_INDEX_USED,
-            t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.CONNECTION_TYPE, t.THREAD_OS_ID
+            t.PROCESSLIST_USER, t.PROCESSLIST_HOST, t.CONNECTION_TYPE
         FROM performance_schema.events_statements_history_long e
         LEFT JOIN performance_schema.threads t ON e.THREAD_ID = t.THREAD_ID
         WHERE e.TIMER_START > :ltimer 
@@ -399,8 +436,11 @@ def monitor_hybrid():
                         
                         if max_ts_batch > last_ts: last_ts = max_ts_batch
                         
-                        logging.info(f"📥 Recovered {cnt} logs.")
+                        # logging.info(f"📥 Recovered {cnt} logs.")
                         save_state(last_timer, saved_boot, last_ts)
+                        total_recovered += cnt
+                        sys.stdout.write(f"\r📥 Total Collected: {total_collected} logs")
+                        sys.stdout.flush()
                         time.sleep(0.1) 
                     continue
 

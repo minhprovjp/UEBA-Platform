@@ -128,7 +128,7 @@ class ProductionUBAEngine:
             return
 
         try:
-            str_cols = ['error_message', 'query', 'normalized_query', 'query_digest',
+            str_cols = ['error_message', 'query', 'normalized_query',
                         'user', 'database', 'client_ip', 'connection_type', 'command_type',
                         'event_name', 'suspicious_func_name', 'privilege_cmd_name',
                         'unusual_activity_reason']
@@ -197,8 +197,8 @@ class ProductionUBAEngine:
             return False
 
         exclude_cols = [
-            'timestamp', 'event_id', 'thread_os_id', 'source_dbms', 'client_port',
-            'query', 'normalized_query', 'error_message', 'query_digest',
+            'timestamp', 'event_id',
+            'query', 'normalized_query', 'error_message',
             'is_anomaly', 'ml_anomaly_score', 'unusual_activity_reason', 'analysis_type',
             'accessed_tables', 'sensitive_access_info', 'tables_touched',
             'suspicious_func_name', 'privilege_cmd_name', 'error_code', 'behavior_group'
