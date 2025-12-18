@@ -2,12 +2,11 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Toaster, toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { useConfig, useUpdateConfigMutation } from '@/api/queries';
-import { Save, ShieldCheck, Clock, Server, PlusCircle, Trash2, Calendar, Zap, AlertTriangle } from 'lucide-react';
+import { Save, ShieldCheck, Clock, Server, PlusCircle, Trash2, Calendar } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 export default function AccessControlPage() {
@@ -15,10 +14,7 @@ export default function AccessControlPage() {
   const [isDirty, setIsDirty] = useState(false);
   const { t } = useTranslation();
 
-  // State cho Form thêm mới Overtime
   const [newOvertime, setNewOvertime] = useState({ user: '', date: '', start: '', end: '', ip: '', reason: '' });
-  
-  // State cho Form thêm mới Service Account
   const [newServiceAccount, setNewServiceAccount] = useState({ user: '', hours: '', ips: '' });
 
   const { data: config, isLoading } = useConfig();
@@ -31,7 +27,6 @@ export default function AccessControlPage() {
     }
   }, [config]);
 
-  // --- HELPER FUNCTIONS ---
   const updateField = (path, value) => {
     setLocalConfig(prev => {
       const newData = { ...prev };
@@ -58,13 +53,13 @@ export default function AccessControlPage() {
   // --- LOGIC 1: OVERTIME ---
   const handleAddOvertime = () => {
     if (!newOvertime.user || !newOvertime.date || !newOvertime.start || !newOvertime.end) {
-        toast.error("Vui lòng nhập User, Ngày và Giờ."); return;
+        toast.error(t('access_control.form.error_1')); return;
     }
     const currentList = getVal('security_rules.signatures.overtime_schedule', []);
     const updatedList = [...currentList, newOvertime];
     updateField('security_rules.signatures.overtime_schedule', updatedList);
     setNewOvertime({ user: '', date: '', start: '', end: '', ip: '', reason: '' });
-    toast.success("Đã thêm lịch trình ngoại lệ.");
+    toast.success(t('access_control.form.success_1'));
   };
 
   const handleRemoveOvertime = (index) => {
@@ -76,7 +71,7 @@ export default function AccessControlPage() {
   // --- LOGIC 2: SERVICE ACCOUNTS ---
   const handleAddServiceAccount = () => {
     if (!newServiceAccount.user || !newServiceAccount.hours || !newServiceAccount.ips) {
-        toast.error("Vui lòng nhập User, Hours và IPs."); return;
+        toast.error(t('access_control.form.error_2')); return;
     }
     const hoursArr = newServiceAccount.hours.split(',').map(h => parseInt(h.trim())).filter(h => !isNaN(h) && h >= 0 && h <= 23);
     const ipsArr = newServiceAccount.ips.split(',').map(ip => ip.trim()).filter(Boolean);
@@ -89,7 +84,7 @@ export default function AccessControlPage() {
 
     updateField('security_rules.service_accounts', updatedMap);
     setNewServiceAccount({ user: '', hours: '', ips: '' });
-    toast.success(`Đã cấu hình Service Account: ${newServiceAccount.user}`);
+    toast.success(`${t('access_control.form.success_2')}: ${newServiceAccount.user}`);
   };
 
   const handleRemoveServiceAccount = (userKey) => {
@@ -99,7 +94,7 @@ export default function AccessControlPage() {
     updateField('security_rules.service_accounts', updatedMap);
   };
 
-  if (isLoading || !localConfig) return <div className="p-10 text-center text-zinc-500">Loading Access Control...</div>;
+  if (isLoading || !localConfig) return <div className="p-10 text-center text-zinc-500">{t('common.loading')}</div>;
   const serviceAccountsList = Object.entries(getVal('security_rules.service_accounts', {}));
 
   return (
@@ -110,16 +105,16 @@ export default function AccessControlPage() {
       <header className="shrink-0 flex justify-between items-center pb-4 border-b border-zinc-800">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <ShieldCheck className="w-6 h-6 text-green-500"/> Access Control Policies
+            <ShieldCheck className="w-6 h-6 text-green-500"/> {t('access_control.title')}
           </h2>
-          <p className="text-zinc-400 text-sm mt-1">
-            Quản lý quyền truy cập đặc biệt (Overtime) và tài khoản hệ thống (Service Accounts).
+          <p className="text-zinc-400 text-sm mt-1"> 
+            {t('access_control.privilege_manage')}
           </p>
         </div>
         <div className="flex gap-2">
             <Button onClick={handleSave} disabled={!isDirty || updateConfigMutation.isPending}
                 className={`min-w-[120px] transition-all ${isDirty ? 'bg-primary-600 hover:bg-primary-700' : 'bg-zinc-800 text-zinc-500'}`}>
-                <Save className="w-4 h-4 mr-2"/> {updateConfigMutation.isPending ? "Saving..." : (isDirty ? t('common.save') : t('common.saved'))}
+                <Save className="w-4 h-4 mr-2"/> {updateConfigMutation.isPending ? t('common.saving') : (isDirty ? t('common.save') : t('common.saved'))}
             </Button>
         </div>
       </header>
@@ -137,43 +132,43 @@ export default function AccessControlPage() {
                 </div>
                 
                 <ConfigCard 
-                    title="Đăng Ký Ngoại Lệ (Exception Schedule)" 
-                    desc="Cho phép user truy cập hệ thống ngoài khung giờ hành chính hoặc truy cập từ IP lạ trong khoảng thời gian nhất định (Rule 7 & 4)."
+                    title={t('access_control.exception_title')}
+                    desc={t('access_control.exception_desc')}
                 >
                     <div className="space-y-4">
                         {/* Form Thêm */}
                         <div className="bg-zinc-900/50 p-4 rounded-md border border-zinc-800 space-y-3">
                             <Label className="text-xs text-primary-400 font-semibold flex items-center gap-1 uppercase">
-                                <PlusCircle className="w-3 h-3"/> Thêm Lịch Mới
+                                <PlusCircle className="w-3 h-3"/> {t('access_control.add_exclusion')}
                             </Label>
                             <div className="grid grid-cols-2 gap-3">
-                                <FormItem label="Tên đăng nhập (User)">
-                                    <Input placeholder="ví dụ: thanh.nguyen" className="h-8 text-xs bg-zinc-950" 
+                                <FormItem label={t('access_control.form.username')} desc="E.g: nguyen_duy_minh_anh">
+                                    <Input className="h-8 text-xs bg-zinc-950" 
                                     value={newOvertime.user} onChange={e => setNewOvertime({...newOvertime, user: e.target.value})}/>
                                 </FormItem>
-                                <FormItem label="Ngày áp dụng">
+                                <FormItem label={t('access_control.form.date')}>
                                     <Input type="date" className="h-8 text-xs bg-zinc-950"
                                     value={newOvertime.date} onChange={e => setNewOvertime({...newOvertime, date: e.target.value})}/>
                                 </FormItem>
                             </div>
                             <div className="grid grid-cols-2 gap-3">
-                                <FormItem label="Bắt đầu">
+                                <FormItem label={t('access_control.form.start')}>
                                     <Input type="time" className="h-8 text-xs bg-zinc-950"
                                     value={newOvertime.start} onChange={e => setNewOvertime({...newOvertime, start: e.target.value})}/>
                                 </FormItem>
-                                <FormItem label="Kết thúc">
+                                <FormItem label={t('access_control.form.end')}>
                                     <Input type="time" className="h-8 text-xs bg-zinc-950"
                                     value={newOvertime.end} onChange={e => setNewOvertime({...newOvertime, end: e.target.value})}/>
                                 </FormItem>
                             </div>
-                            <FormItem label="IP Cho phép (Tùy chọn)" desc="Nếu để trống, chấp nhận mọi IP. Nếu nhập, user bắt buộc phải dùng IP này.">
-                                <Input placeholder="ví dụ: 14.162.x.x" className="h-8 text-xs bg-zinc-950" 
+                            <FormItem label={t('access_control.form.allowed_ip')} desc={t('access_control.form.allowed_ip_desc')}>
+                                <Input className="h-8 text-xs bg-zinc-950" 
                                 value={newOvertime.ip} onChange={e => setNewOvertime({...newOvertime, ip: e.target.value})}/>
                             </FormItem>
                             <div className="flex gap-2 items-end">
                                 <div className="flex-1">
-                                    <FormItem label="Lý do">
-                                        <Input placeholder="ví dụ: Bảo trì server đêm Noel" className="h-8 text-xs bg-zinc-950"
+                                    <FormItem label={t('access_control.form.reason')}>
+                                        <Input className="h-8 text-xs bg-zinc-950"
                                         value={newOvertime.reason} onChange={e => setNewOvertime({...newOvertime, reason: e.target.value})}/>
                                     </FormItem>
                                 </div>
@@ -186,8 +181,8 @@ export default function AccessControlPage() {
                             <table className="w-full text-xs text-left">
                                 <thead className="bg-zinc-900 text-zinc-400 font-medium">
                                     <tr>
-                                        <th className="p-3">User / Ngày</th>
-                                        <th className="p-3">Chi tiết (Giờ & IP)</th>
+                                        <th className="p-3">{t('common.user')} / {t('common.date')}</th>
+                                        <th className="w-[350px]">{t('access_control.form.details')}</th>
                                         <th className="p-3 w-10"></th>
                                     </tr>
                                 </thead>
@@ -207,7 +202,7 @@ export default function AccessControlPage() {
                                                         IP: {item.ip}
                                                     </div>
                                                 ) : (
-                                                    <div className="text-[10px] text-zinc-600 italic">IP: Any (Không giới hạn)</div>
+                                                    <div className="text-[10px] text-zinc-600 italic">IP: Any</div>
                                                 )}
                                                 <div className="text-[11px] text-zinc-500 italic">"{item.reason}"</div>
                                             </td>
@@ -219,7 +214,7 @@ export default function AccessControlPage() {
                                         </tr>
                                     ))}
                                     {getVal('security_rules.signatures.overtime_schedule', []).length === 0 && (
-                                        <tr><td colSpan={3} className="p-6 text-center text-zinc-600 italic">Chưa có lịch trình ngoại lệ nào.</td></tr>
+                                        <tr><td colSpan={3} className="p-6 text-center text-zinc-600 italic">{t('access_control.form.exception')}</td></tr>
                                     )}
                                 </tbody>
                             </table>
@@ -232,33 +227,33 @@ export default function AccessControlPage() {
             <div className="space-y-4">
                 <div className="flex items-center gap-2 mb-2">
                     <Server className="w-5 h-5 text-orange-400"/>
-                    <h3 className="text-lg font-semibold text-white">Tài Khoản Dịch Vụ (Service Accounts)</h3>
+                    <h3 className="text-lg font-semibold text-white">{t('access_control.service_account_title')}</h3>
                 </div>
 
                 <ConfigCard 
-                    title="Giới Hạn Bot & Tool Tự Động" 
-                    desc="Cấu hình danh sách trắng (Whitelist) cho các tài khoản chạy tự động (Backup, ETL...). Bất kỳ truy cập nào sai IP hoặc sai giờ quy định sẽ bị chặn (Rule 4)."
+                    title={t('access_control.limitation_bot_tool')}
+                    desc={t('access_control.limitation_desc')}
                 >
                     <div className="space-y-4">
                         {/* Form Thêm */}
                         <div className="bg-zinc-900/50 p-4 rounded-md border border-zinc-800 space-y-3">
                             <Label className="text-xs text-primary-400 font-semibold flex items-center gap-1 uppercase">
-                                <PlusCircle className="w-3 h-3"/> Thêm Service User
+                                <PlusCircle className="w-3 h-3"/> {t('access_control.service_user')}
                             </Label>
                             <div className="grid grid-cols-2 gap-3">
-                                <FormItem label="Tên tài khoản (User)" desc="Tên user trong MySQL">
-                                    <Input placeholder="ví dụ: backup_bot" className="h-8 text-xs bg-zinc-950"
+                                <FormItem label={t('access_control.form.username')} desc="E.g: nguyen_duy_minh_anh">
+                                    <Input className="h-8 text-xs bg-zinc-950"
                                         value={newServiceAccount.user} onChange={e => setNewServiceAccount({...newServiceAccount, user: e.target.value})} />
                                 </FormItem>
-                                <FormItem label="Giờ được phép chạy" desc="Nhập số giờ (0-23), cách nhau dấu phẩy">
-                                    <Input placeholder="ví dụ: 1, 2, 3 (nghĩa là 1h-3h sáng)" className="h-8 text-xs bg-zinc-950"
+                                <FormItem label={t('access_control.form.hours')} desc="E.g: 1, 2, 3">
+                                    <Input className="h-8 text-xs bg-zinc-950"
                                         value={newServiceAccount.hours} onChange={e => setNewServiceAccount({...newServiceAccount, hours: e.target.value})} />
                                 </FormItem>
                             </div>
                             <div className="flex gap-2 items-end">
                                 <div className="flex-1">
-                                    <FormItem label="IP Nguồn được phép" desc="Danh sách IP được phép chạy, cách nhau dấu phẩy">
-                                        <Input placeholder="ví dụ: 192.168.1.10, 10.0.0.5" className="h-8 text-xs bg-zinc-950 flex-1"
+                                    <FormItem label={t('access_control.form.source_ips')} desc="E.g: 192.168.1.10">
+                                        <Input className="h-8 text-xs bg-zinc-950 flex-1"
                                             value={newServiceAccount.ips} onChange={e => setNewServiceAccount({...newServiceAccount, ips: e.target.value})} />
                                     </FormItem>
                                 </div>
@@ -271,8 +266,8 @@ export default function AccessControlPage() {
                             <table className="w-full text-xs text-left">
                                 <thead className="bg-zinc-900 text-zinc-400 font-medium">
                                     <tr>
-                                        <th className="p-3">User</th>
-                                        <th className="p-3">Quy tắc (Hours & IPs)</th>
+                                        <th className="p-3">{t('common.user')}</th>
+                                        <th className="w-[350px]">{t('access_control.form.details')}</th>
                                         <th className="p-3 w-10"></th>
                                     </tr>
                                 </thead>
@@ -285,15 +280,15 @@ export default function AccessControlPage() {
                                             </td>
                                             <td className="p-3 align-top space-y-1.5">
                                                 <div>
-                                                    <span className="text-[10px] uppercase text-zinc-500 font-bold mr-2">Giờ chạy:</span>
+                                                    <span className="text-[10px] uppercase text-zinc-500 font-bold mr-2">Hours:</span>
                                                     <span className="text-zinc-300 font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-[11px]">
-                                                        {conf.allowed_hours?.join(', ') || 'Chưa cấu hình'}h
+                                                        {conf.allowed_hours?.join(', ') || 'N/A'}h
                                                     </span>
                                                 </div>
                                                 <div>
-                                                    <span className="text-[10px] uppercase text-zinc-500 font-bold mr-2">IP Nguồn:</span>
+                                                    <span className="text-[10px] uppercase text-zinc-500 font-bold mr-2">IPs:</span>
                                                     <span className="text-zinc-300 font-mono text-[11px]">
-                                                        {conf.allowed_ips?.join(', ') || 'Chưa cấu hình'}
+                                                        {conf.allowed_ips?.join(', ') || 'N/A'}
                                                     </span>
                                                 </div>
                                             </td>
@@ -305,7 +300,7 @@ export default function AccessControlPage() {
                                         </tr>
                                     ))}
                                     {serviceAccountsList.length === 0 && (
-                                        <tr><td colSpan={3} className="p-6 text-center text-zinc-600 italic">Chưa có tài khoản dịch vụ nào được định nghĩa.</td></tr>
+                                        <tr><td colSpan={3} className="p-6 text-center text-zinc-600 italic">{t('access_control.form.service_account')}</td></tr>
                                     )}
                                 </tbody>
                             </table>
@@ -319,7 +314,6 @@ export default function AccessControlPage() {
   );
 }
 
-// Sub-components dùng chung
 const ConfigCard = ({ title, desc, children }) => (
   <Card className="bg-zinc-950/40 border-zinc-800 h-full shadow-lg">
     <CardHeader className="pb-3 border-b border-zinc-800/50 mb-3 bg-zinc-900/20">

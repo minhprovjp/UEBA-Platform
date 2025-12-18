@@ -33,15 +33,15 @@ class OllamaProvider:
         except Exception as e:
             logger.error(f"Ollama connect failed: {e}")
 
-    def analyze(self, prompt: str, model: str) -> Dict[str, Any]:
+    def analyze(self, prompt: str, model: str, keep_alive: str = "30m") -> Dict[str, Any]:
         if not self.client: self._connect()
         try:
-            # Gọi model với keep_alive để giữ context trong RAM
+            # Gọi model với keep_alive từ config để giữ context trong RAM
             response = self.client.chat(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 format="json",
-                keep_alive="30m" 
+                keep_alive=keep_alive 
             )
             return response
         except Exception as e:
@@ -55,10 +55,17 @@ def analyze_query_with_llm(
     rules_config: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
     
-    # 1. Cấu hình
-    host = llm_config.get('ollama_host', 'http://100.92.147.73:11434')
-    model_name = llm_config.get('ollama_model', 'uba-expert') # Mặc định dùng model tự build
-    provider = OllamaProvider(host=host)
+    # 1. Cấu hình - Lấy từ config file, không hardcode fallback IP
+    host = llm_config.get('ollama_host')
+    model_name = llm_config.get('ollama_model')
+    timeout = llm_config.get('ollama_timeout', 360)
+    keep_alive_duration = llm_config.get('keep_alive', '30m')
+
+    if not host or not model_name:
+        logger.error("Missing Ollama host or model in configuration.")
+        return None
+
+    provider = OllamaProvider(host=host, timeout=timeout)
 
     # 2. CHUẨN BỊ DỮ LIỆU INPUT (ENRICHED LOG)
     # Thay vì chỉ gửi câu query, ta gửi toàn bộ ngữ cảnh kỹ thuật số
@@ -118,8 +125,8 @@ def analyze_query_with_llm(
         logger.info(f"Sending log to {model_name}...")
         start_t = time.time()
         
-        # Gọi LLM (Chỉ 1 round là đủ vì model đã được chuyên biệt hóa)
-        res = provider.analyze(prompt, model=model_name)
+        # Gọi LLM (Sử dụng tham số từ config)
+        res = provider.analyze(prompt, model=model_name, keep_alive=keep_alive_duration)
         
         duration = time.time() - start_t
         clean_text = clean_json_text(res['message']['content'])

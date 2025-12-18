@@ -9,6 +9,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { useTranslation } from 'react-i18next';
 
 export const AnomalyDetailModal = ({ 
   isOpen, 
@@ -19,11 +20,11 @@ export const AnomalyDetailModal = ({
   isAiLoading, 
   isFeedbackLoading 
 }) => {
+  const { t } = useTranslation();
   if (!log) return null;
 
   const isAggregate = log.source === 'aggregate';
 
-  // --- Helper để lấy màu sắc dựa trên mức độ rủi ro ---
   const getRiskColor = (level) => {
     if (!level) return "bg-zinc-800 text-zinc-400 border-zinc-700";
     const l = level.toString().toLowerCase();
@@ -33,13 +34,12 @@ export const AnomalyDetailModal = ({
     return "bg-zinc-800 text-zinc-400 border-zinc-700";
   };
 
-  // --- Helper để render kết quả AI đẹp mắt ---
   const renderAiResult = () => {
     if (isAiLoading) {
       return (
         <div className="flex flex-col items-center justify-center h-40 space-y-3 animate-pulse">
             <Bot className="w-8 h-8 text-purple-500" />
-            <div className="text-sm text-zinc-400">DeepSeek is analyzing security patterns...</div>
+            <div className="text-sm text-zinc-400">{t('modal.analyzing')}</div>
         </div>
       );
     }
@@ -48,16 +48,14 @@ export const AnomalyDetailModal = ({
       return (
         <div className="flex flex-col items-center justify-center h-32 text-zinc-500 border border-dashed border-zinc-800 rounded-lg">
            <Bot className="w-6 h-6 mb-2 opacity-50"/>
-           <span className="text-sm italic">Click "Analyze with AI" to generate insights.</span>
+           <span className="text-sm italic">{t('modal.click')}</span>
         </div>
       );
     }
 
-    // Xử lý lấy dữ liệu final_analysis từ backend
     let data = log.aiAnalysis;
     if (data.final_analysis) data = data.final_analysis;
 
-    // Trường hợp data vẫn là string (lỗi parse)
     if (typeof data === 'string') {
         return <div className="p-4 bg-zinc-950 border border-zinc-800 rounded text-xs font-mono whitespace-pre-wrap">{data}</div>;
     }
@@ -69,7 +67,7 @@ export const AnomalyDetailModal = ({
             <div className={`p-3 rounded-lg border flex items-center justify-between ${getRiskColor(data.security_risk_level)}`}>
                 <div className="flex items-center gap-2">
                     <ShieldAlert className="w-4 h-4" />
-                    <span className="text-xs font-bold uppercase tracking-wider">Risk Level</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">{t('modal.risk_level')}</span>
                 </div>
                 <span className="text-sm font-bold capitalize">{data.security_risk_level || 'Unknown'}</span>
             </div>
@@ -77,7 +75,7 @@ export const AnomalyDetailModal = ({
             <div className="p-3 rounded-lg border border-purple-900/30 bg-purple-900/10 text-purple-300 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                     <Zap className="w-4 h-4" />
-                    <span className="text-xs font-bold uppercase tracking-wider">Confidence</span>
+                    <span className="text-xs font-bold uppercase tracking-wider">{t('modal.confidence')}</span>
                 </div>
                 <span className="text-sm font-bold">{(data.confidence_score * 100).toFixed(0)}%</span>
             </div>
@@ -86,7 +84,7 @@ export const AnomalyDetailModal = ({
         {/* 2. Summary Section */}
         <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
             <h4 className="text-xs font-bold text-zinc-400 mb-2 uppercase flex items-center gap-2">
-                <Activity className="w-3 h-3"/> Executive Summary
+                <Activity className="w-3 h-3"/> {t('modal.exec_summary')}
             </h4>
             <p className="text-sm text-zinc-200 leading-relaxed">
                 {data.summary || data.session_summary || "No summary provided."}
@@ -96,7 +94,7 @@ export const AnomalyDetailModal = ({
         {/* 3. Detailed Analysis */}
         <div>
             <h4 className="text-xs font-bold text-zinc-400 mb-2 uppercase flex items-center gap-2">
-                <FileText className="w-3 h-3"/> Technical Analysis
+                <FileText className="w-3 h-3"/> {t('modal.tech_analysis')}
             </h4>
             <div className="text-sm text-zinc-300 leading-relaxed bg-zinc-950 p-3 rounded border border-zinc-800/50">
                 {data.detailed_analysis}
@@ -106,7 +104,7 @@ export const AnomalyDetailModal = ({
         {/* 4. Recommendation (Highlight) */}
         <div className="bg-gradient-to-r from-blue-950/30 to-zinc-900 p-3 rounded-lg border-l-4 border-l-blue-500 border-y border-r border-zinc-800">
             <h4 className="text-xs font-bold text-blue-400 mb-2 uppercase flex items-center gap-2">
-                <Lightbulb className="w-3 h-3"/> Recommendation
+                <Lightbulb className="w-3 h-3"/> {t('modal.recommendation')}
             </h4>
             <p className="text-sm text-zinc-200 italic">
                 {data.recommendation}
@@ -116,15 +114,13 @@ export const AnomalyDetailModal = ({
         {/* 5. Footer Info */}
         <div className="flex flex-col gap-1 pt-3 border-t border-zinc-800/50">
              <div className="flex justify-between items-center text-[10px] text-zinc-500">
-                 <span>Model: Ollama (DeepSeek-R1)</span>
-                 <span>Analysis Time: {new Date().toLocaleTimeString()}</span>
+                 <span>{t('modal.model')}: Ollama</span>
+                 <span>{t('modal.analysis_time')}: {new Date().toLocaleTimeString()}</span>
              </div>
              
-             {/* Hiển thị loại tấn công / Rule cụ thể */}
              <div className="mt-2 bg-zinc-900/80 p-2 rounded border border-zinc-800 flex items-center justify-between">
-                <span className="text-xs text-zinc-400 font-medium">Detected Pattern / Rule:</span>
+                <span className="text-xs text-zinc-400 font-medium">{t('modal.detected_rule')}:</span>
                 <Badge variant="outline" className="text-xs font-mono border-purple-500/30 text-purple-300 bg-purple-500/10">
-                    {/* Ưu tiên hiển thị kết quả từ AI, nếu không có mới hiện loại gốc */}
                     {data.anomaly_type || data.behavior_type || log.anomaly_type || "Unknown Pattern"}
                 </Badge>
              </div>
@@ -144,9 +140,9 @@ export const AnomalyDetailModal = ({
               <div>
                 <DialogTitle className="text-xl flex items-center gap-2">
                   {isAggregate ? (
-                      <><Layers className="w-5 h-5 text-orange-500"/> Session Detail</>
+                      <><Layers className="w-5 h-5 text-orange-500"/> {t('modal.session_detail')}</>
                   ) : (
-                      <><Database className="w-5 h-5 text-blue-500"/> Event Detail</>
+                      <><Database className="w-5 h-5 text-blue-500"/> {t('modal.event_detail')}</>
                   )}
                   <Badge variant="outline" className="ml-2 bg-zinc-800 text-zinc-300 border-zinc-700 font-normal">
                     {log.anomaly_type}
@@ -169,7 +165,7 @@ export const AnomalyDetailModal = ({
           </DialogHeader>
         </div>
 
-        {/* BODY - Split View (Left: Raw Data, Right: AI Analysis) */}
+        {/* BODY */}
         <div className="flex-1 min-h-0 flex divide-x divide-zinc-800">
             
             {/* LEFT COLUMN: RAW LOG DATA */}
@@ -177,21 +173,21 @@ export const AnomalyDetailModal = ({
                 <div className="space-y-6">
                     {/* Reason */}
                     <div>
-                        <h4 className="text-xs font-bold text-red-400 mb-2 uppercase tracking-wider">Detection Trigger</h4>
+                        <h4 className="text-xs font-bold text-red-400 mb-2 uppercase tracking-wider">{t('modal.detection_trigger')}</h4>
                         <div className="bg-red-950/10 border border-red-900/30 p-3 rounded text-sm text-red-200/80">
                             {log.reason}
                         </div>
                     </div>
 
-                    {/* Content (Query or Session Info) */}
+                    {/* Content */}
                     {isAggregate ? (
                         <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-3">
-                                <InfoBox label="Duration" value={`${log.details?.duration_sec?.toFixed(1) || 0}s`} icon={Clock} />
-                                <InfoBox label="Queries" value={log.details?.query_count || 0} icon={List} />
+                                <InfoBox label={t('modal.duration')} value={`${log.details?.duration_sec?.toFixed(1) || 0}s`} icon={Clock} />
+                                <InfoBox label={t('modal.queries')} value={log.details?.query_count || 0} icon={List} />
                             </div>
                             <div>
-                                <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase">Tables Accessed</h4>
+                                <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase">{t('modal.tables_accessed')}</h4>
                                 <div className="flex flex-wrap gap-2">
                                 {log.details?.tables?.map((t, i) => (
                                     <Badge key={i} variant="secondary" className="bg-zinc-800 text-zinc-300 hover:bg-zinc-700">
@@ -202,7 +198,7 @@ export const AnomalyDetailModal = ({
                             </div>
                             <div>
                                 <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase flex items-center gap-2">
-                                  <FileText className="w-3 h-3"/> Evidence Queries
+                                  <FileText className="w-3 h-3"/> {t('modal.evidence')}
                                 </h4>
                                 <div className="space-y-2">
                                   {log.details?.evidence_queries?.map((item, idx) => (
@@ -225,14 +221,14 @@ export const AnomalyDetailModal = ({
                         </div>
                     ) : (
                         <div>
-                            <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase">Executed Query</h4>
+                            <h4 className="text-xs font-bold text-zinc-500 mb-2 uppercase">{t('modal.executed_query')}</h4>
                             <div className="bg-zinc-900 p-3 rounded border border-zinc-800 overflow-x-auto">
                                 <code className="text-xs font-mono text-blue-300 break-all whitespace-pre-wrap">
                                     {log.query}
                                 </code>
                             </div>
                             <div className="mt-2 text-xs text-zinc-500 flex justify-between">
-                                <span>Database: {log.database || 'N/A'}</span>
+                                <span>{t('log_explorer.table.database')}: {log.database || 'N/A'}</span>
                             </div>
                         </div>
                     )}
@@ -243,7 +239,7 @@ export const AnomalyDetailModal = ({
             <ScrollArea className="flex-1 p-6 bg-zinc-900/20">
                 <div className="flex items-center justify-between mb-4">
                      <h4 className="text-sm font-bold text-purple-400 uppercase flex items-center gap-2">
-                        <Bot className="w-4 h-4" /> AI Investigation Report
+                        <Bot className="w-4 h-4" /> {t('modal.report')}
                     </h4>
                     {log.aiAnalysis && !isAiLoading && (
                         <Badge variant="outline" className="text-[10px] border-purple-900 text-purple-500 bg-purple-950/20">
@@ -265,7 +261,7 @@ export const AnomalyDetailModal = ({
             className="bg-purple-600 hover:bg-purple-700 text-white min-w-[140px]"
           >
             <Bot className="h-4 w-4 mr-2" />
-            {isAiLoading ? "Analyzing..." : (log.aiAnalysis ? "Re-Analyze" : "Analyze with AI")}
+            {isAiLoading ? t('modal.analyzing') : (log.aiAnalysis ? t('modal.re_analyze_btn') : t('modal.analyze_btn'))}
           </Button>
 
           <div className="flex gap-2">
@@ -275,7 +271,7 @@ export const AnomalyDetailModal = ({
               onClick={() => onFeedback(0)}
               disabled={isAiLoading || isFeedbackLoading}
             >
-              <Check className="h-4 w-4 mr-2" /> Mark Safe
+              <Check className="h-4 w-4 mr-2" /> {t('modal.mark_safe')}
             </Button>
             <Button 
               variant="outline" 
@@ -283,7 +279,7 @@ export const AnomalyDetailModal = ({
               onClick={() => onFeedback(1)}
               disabled={isAiLoading || isFeedbackLoading}
             >
-              <X className="h-4 w-4 mr-2" /> Confirm Threat
+              <X className="h-4 w-4 mr-2" /> {t('modal.confirm_threat')}
             </Button>
           </div>
         </div>

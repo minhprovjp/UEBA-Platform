@@ -664,7 +664,7 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                 # Cập nhật vào df_logs
                 # Lưu ý: Nếu 1 log dính nhiều rule, code này sẽ ghi đè rule cuối cùng (hoặc bạn có thể nối chuỗi)
                 df_logs.loc[common_indices, 'unusual_activity_reason'] = rule_series
-                df_logs.loc[common_indices, 'is_anomaly'] = True
+                df_logs.loc[common_indices, 'is_anomaly'] = 1
 
     # ========================================================
     # TỔNG HỢP KẾT QUẢ CUỐI CÙNG
