@@ -9,6 +9,9 @@ from sqlalchemy import func, or_, text, cast, Text
 import re 
 from pathlib import Path
 
+# Import self_monitoring router
+from . import self_monitoring_api
+
 # Import các thành phần từ các file trong cùng thư mục
 from . import models, schemas
 from .models import SessionLocal, engine
@@ -147,6 +150,8 @@ def change_password(
     db.refresh(user_in_db) # Làm mới object (tùy chọn)
     
     return {"msg": "Đổi mật khẩu thành công! Vui lòng đăng nhập lại."}
+
+app.include_router(self_monitoring_api.router)
 
 # === CÁC ENDPOINT LẤY DỮ LIỆU BẤT THƯỜNG (CHO FRONTEND) ===
 
@@ -947,3 +952,4 @@ def get_active_response_audit_logs(
         # Có thể trả về list rỗng hoặc raise HTTP Exception tùy bạn
         
     return logs
+

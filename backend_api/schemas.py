@@ -126,3 +126,42 @@ class AuditLogEntry(BaseModel):
     action: str
     target: str
     reason: str
+
+# === UBA SELF-MONITORING SCHEMAS ===
+
+class SelfMonitoringStatus(BaseModel):
+    status: str
+    components: Dict[str, Any]
+    timestamp: datetime
+
+class SelfMonitoringAlert(BaseModel):
+    alert_id: str
+    title: str
+    description: str
+    priority: str
+    status: str
+    timestamp: datetime
+    affected_components: List[str]
+    metadata: Optional[Dict[str, Any]] = None
+
+class InfrastructureEvent(BaseModel):
+    event_id: str
+    timestamp: datetime
+    event_type: str
+    source_ip: Optional[str] = None
+    user_account: Optional[str] = None
+    target_component: str
+    action_details: Dict[str, Any]
+    risk_score: float
+    integrity_hash: str
+
+class ThreatDetection(BaseModel):
+    detection_id: str
+    timestamp: datetime
+    threat_type: str
+    severity: str
+    affected_components: List[str]
+    attack_indicators: Dict[str, Any]
+    confidence_score: float
+    response_actions: List[str]
+    evidence_chain: List[str]

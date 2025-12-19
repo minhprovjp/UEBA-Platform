@@ -187,8 +187,8 @@ def process_and_push(rows, redis_client, source_type="RAM"):
             rows_exam = int(g('ROWS_EXAMINED') or g('rows_examined') or 0)
             scan_eff = rows_sent / (rows_exam + 1)
             
-            exec_ms = float(g('TIMER_WAIT') or g('timer_wait') or 0) / 1000000.0
-            lock_ms = float(g('LOCK_TIME') or g('lock_time') or 0) / 1000000.0
+            exec_ms = float(g('TIMER_WAIT') or g('timer_wait') or 0) / 1e12
+            lock_ms = float(g('LOCK_TIME') or g('lock_time') or 0) / 1e12
             
             sql_up = sql_txt.upper()
             
@@ -252,7 +252,7 @@ def process_and_push(rows, redis_client, source_type="RAM"):
                 
                 "execution_time_ms": exec_ms,
                 "lock_time_ms": lock_ms,
-                "cpu_time_ms": float(g('CPU_TIME') or g('cput_time') or 0) / 1000000.0, # Pico -> ms
+                "cpu_time_ms": float(g('CPU_TIME') or g('cput_time') or 0) / 1e12, # Pico -> ms
                 "program_name": str(g('program_name') or (g('PROGRAM_NAME')) or 'unknown'),
                 "connector_name": str(g('connector_name') or g('CONNECTOR_NAME') or 'unknown'),
                 "client_os": str(g('client_os') or g('CLIENT_OS') or 'unknown'),

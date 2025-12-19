@@ -154,8 +154,8 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                     
                     # Convert metrics (trong bảng persistent đã là raw units)
                     # Timer Wait (pico) -> ms
-                    exec_ms = float(r['timer_wait'] or 0) / 1000000.0
-                    lock_ms = float(r['lock_time'] or 0) / 1000000.0
+                    exec_ms = float(r['timer_wait'] or 0) / 1e12
+                    lock_ms = float(r['lock_time'] or 0) / 1e12
                     
                     # Text Analysis
                     sql_txt = str(r['sql_text'] or '')
@@ -234,7 +234,7 @@ def monitor_persistent_log(poll_interval=1): # Poll nhanh mỗi 1s
                         # Metrics
                         "execution_time_ms": exec_ms,
                         "lock_time_ms": lock_ms,
-                        "cpu_time_ms": float(r['cpu_time'] or 0) / 1000000.0, # Pico -> ms
+                        "cpu_time_ms": float(r['cpu_time'] or 0) / 1e12, # Pico -> ms
                         "program_name": str(r['program_name'] or 'unknown'),
                         "connector_name": str(r['connector_name'] or 'unknown'),
                         "client_os": str(r['client_os'] or 'unknown'),

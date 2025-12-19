@@ -237,3 +237,52 @@ export const useAuditLogs = () => {
         refetchInterval: 1000, // Tự động refresh mỗi 10s để thấy log mới nhất
     });
 };
+
+// --- SELF MONITORING HOOKS ---
+
+export const useSelfMonitoringStatus = () => {
+  return useQuery({
+    queryKey: ['selfMonitoringStatus'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/api/self-monitoring/status');
+      return data;
+    },
+    refetchInterval: 30000, // 30s
+  });
+};
+
+export const useSelfMonitoringAlerts = () => {
+  return useQuery({
+    queryKey: ['selfMonitoringAlerts'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/api/self-monitoring/alerts');
+      return data.alerts || [];
+    },
+    refetchInterval: 30000,
+  });
+};
+
+export const useInfrastructureEvents = () => {
+  return useQuery({
+    queryKey: ['infrastructureEvents'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/api/self-monitoring/infrastructure-events');
+      return data.events || [];
+    },
+    refetchInterval: 30000,
+  });
+};
+
+export const useAcknowledgeAlertMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (alertId) => apiClient.post(`/api/self-monitoring/alerts/${alertId}/acknowledge`),
+    onSuccess: () => {
+      toast.success("Alert acknowledged");
+      queryClient.invalidateQueries(['selfMonitoringAlerts']);
+    },
+    onError: (err) => {
+      toast.error("Failed to acknowledge: " + err.message);
+    }
+  });
+};

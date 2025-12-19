@@ -1,0 +1,109 @@
+{
+    "monitoring": {
+        "enabled": true,
+        "interval_seconds": 30,
+        "max_events_per_batch": 1000,
+        "event_retention_days": 90,
+        "components_to_monitor": [
+            "uba_db",
+            "uba_user",
+            "performance_schema",
+            "uba_persistent_log"
+        ]
+    },
+    "detection": {
+        "enabled": true,
+        "thresholds": {
+            "low_risk_threshold": 0.3,
+            "medium_risk_threshold": 0.6,
+            "high_risk_threshold": 0.8,
+            "unauthorized_access_attempts": 3,
+            "concurrent_session_limit": 2,
+            "privilege_escalation_keywords": [
+                "GRANT",
+                "REVOKE",
+                "CREATE USER",
+                "DROP USER",
+                "ALTER USER",
+                "SET PASSWORD"
+            ]
+        },
+        "patterns": {
+            "malicious_queries": [
+                "SELECT.*FROM.*information_schema",
+                "SELECT.*FROM.*performance_schema.*user",
+                "SHOW.*GRANTS",
+                "SELECT.*authentication_string"
+            ],
+            "reconnaissance_indicators": [
+                "SHOW DATABASES",
+                "SHOW TABLES",
+                "DESCRIBE.*",
+                "EXPLAIN.*"
+            ]
+        }
+    },
+    "response": {
+        "auto_response_enabled": true,
+        "max_actions_per_minute": 10,
+        "actions": {
+            "credential_rotation_enabled": true,
+            "session_termination_enabled": true,
+            "component_isolation_enabled": true,
+            "backup_activation_enabled": true
+        },
+        "escalation": {
+            "critical_threat_timeout_seconds": 300,
+            "notification_channels": [
+                "email",
+                "log"
+            ]
+        }
+    },
+    "integrity": {
+        "enabled": true,
+        "checksum_algorithm": "SHA-256",
+        "verification_interval_seconds": 300,
+        "tamper_detection_enabled": true,
+        "backup_verification_enabled": true
+    },
+    "shadow_monitoring": {
+        "enabled": true,
+        "independent_database": {
+            "enabled": true,
+            "connection_string": "sqlite:///shadow_monitoring.db"
+        },
+        "heartbeat_interval_seconds": 60,
+        "primary_health_check_interval_seconds": 30,
+        "failover_timeout_seconds": 120
+    },
+    "database": {
+        "host": "localhost",
+        "port": 3306,
+        "database": "uba_db",
+        "user": "uba_user",
+        "password": "password",
+        "connection_timeout_seconds": 30,
+        "query_timeout_seconds": 60,
+        "max_connections": 10
+    },
+    "logging": {
+        "level": "INFO",
+        "file_path": "logs/self_monitoring.log",
+        "max_file_size_mb": 100,
+        "backup_count": 5,
+        "crypto_logging_enabled": true,
+        "audit_trail_enabled": true
+    },
+    "security": {
+        "encryption_enabled": true,
+        "key_rotation_days": 30,
+        "secure_communication_only": true,
+        "certificate_validation_enabled": true
+    },
+    "_metadata": {
+        "created_at": "2025-12-18T11:51:47.416972+00:00",
+        "version": "1.0.0",
+        "checksum": "29b53dd0287b86b1b62c856ffcbb06308d7c21aff4aee7c07afa1ee22772a4e9"
+    }
+}

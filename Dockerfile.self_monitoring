@@ -1,0 +1,24 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies if needed (e.g. for potential mysql compilation)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    default-libmysqlclient-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+# Assuming you have a requirements.txt, or we install specific ones
+RUN pip install --no-cache-dir \
+    mysql-connector-python \
+    pandas \
+    numpy \
+    sqlalchemy \ 
+    redis
+
+# Copy configuration and engine code
+COPY . /app
+
+# Run the service
+CMD ["python", "run_self_monitoring_service.py"]

@@ -316,9 +316,9 @@ def monitor_performance_schema(poll_interval_sec: int = 2):
                         "is_admin_command": 1 if any(k in sql_upper for k in ['GRANT','REVOKE','CREATE USER']) else 0,
                         "is_risky_command": 1 if any(k in sql_upper for k in ['DROP','TRUNCATE']) else 0,
                         "has_comment": 1 if ('--' in sql_text or '/*' in sql_text or '#' in sql_text) else 0,
-                        "execution_time_ms": float(row_dict['TIMER_WAIT'] or 0) / 1e6, 
-                        "lock_time_ms": float(row_dict['LOCK_TIME'] or 0) / 1e6,
-                        "cpu_time_ms": float(row_dict['CPU_TIME'] or 0) / 1000000.0, # Pico -> ms
+                        "execution_time_ms": float(row_dict['TIMER_WAIT'] or 0) / 1e12, 
+                        "lock_time_ms": float(row_dict['LOCK_TIME'] or 0) / 1e12,
+                        "cpu_time_ms": float(row_dict['CPU_TIME'] or 0) / 1e12, # Pico -> ms
                         "program_name": str(row_dict['program_name'] or 'unknown'),
                         "connector_name": str(row_dict['connector_name'] or 'unknown'),
                         "client_os": str(row_dict['client_os'] or 'unknown'),

@@ -1,6 +1,6 @@
 // uba_frontend/src/App.jsx
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Database, ShieldAlert, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, User, ShieldCheck } from "lucide-react";
+import { Database, ShieldAlert, Settings, LayoutDashboard, ChevronLeft, ChevronRight, LogOut, User, ShieldCheck, Shield } from "lucide-react";
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import LanguageSwitcher from './components/LanguageSwitcher';
@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import AnomalyTriage from './pages/AnomalyTriage';
 import SettingsPage from './pages/SettingsPage';
 import AccessControlPage from './pages/AccessControlPage';
+import SelfMonitoring from './pages/SelfMonitoring';
 import LoginPage from './pages/LoginPage';
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
   { name: t('sidebar.dashboard'), icon: LayoutDashboard, path: "/" },
   { name: t('sidebar.logs'), icon: Database, path: "/logs" },
   { name: t('sidebar.anomalies'), icon: ShieldAlert, path: "/anomalies" },
+  { name: t('sidebar.self_monitoring'), icon: Shield, path: "/self-monitoring" },
   { name: t('sidebar.access_control'), icon: ShieldCheck, path: "/access-control" }
   ];
 
@@ -128,6 +130,7 @@ export default function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/logs" element={<LogExplorer />} />
             <Route path="/anomalies" element={<AnomalyTriage />} />
+            <Route path="/self-monitoring" element={<SelfMonitoring />} />
             <Route path="/access-control" element={<AccessControlPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             </Routes>

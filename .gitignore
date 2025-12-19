@@ -160,6 +160,7 @@ pnpm-lock.yaml
 *.swp
 *.swo
 *~
+.kiro
 
 # Sublime Text
 *.sublime-project

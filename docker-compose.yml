@@ -102,6 +102,21 @@ services:
     networks:
       - uba-net
 
+  # 6.5. Self-Monitoring Service
+  uba-self-monitoring:
+    build:
+      context: .
+      dockerfile: Dockerfile.self_monitoring
+    container_name: uba_self_monitoring
+    environment:
+      - DB_HOST=mysql-source
+      - MYSQL_HOST=mysql-source
+    depends_on:
+      mysql-source:
+        condition: service_healthy
+    networks:
+      - uba-net
+
   # 7. Frontend (React)
   frontend:
     build:
