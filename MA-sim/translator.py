@@ -394,16 +394,33 @@ class EnhancedSQLTranslator:
             'sales_db': 'customers',
             'hr_db': 'employees',
             'finance_db': 'invoices',
-            'marketing_db': 'leads',
+            'marketing_db': 'campaigns',
             'support_db': 'support_tickets',
-            'inventory_db': 'products',
-            'admin_db': 'user_sessions'
+            'inventory_db': 'inventory_levels',
+            'admin_db': 'system_logs'
         }
         target_table = table_map.get(target_database, 'customers')
         
+        # [FIX] Define Primary Keys for each table to avoid 1054 error
+        pk_map = {
+            'customers': 'customer_id',
+            'employees': 'employee_id',
+            'invoices': 'invoice_id',
+            'campaigns': 'campaign_id',
+            'support_tickets': 'ticket_id',
+            'inventory_levels': 'inventory_id',
+            'system_logs': 'log_id'
+        }
+        pk_col = pk_map.get(target_table, 'id')
+
+        # If default customers is used but we are not in sales_db, force safe table
+        if target_table == 'customers' and target_database != 'sales_db':
+             # Fallback to information_schema to be safe 
+             return "SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = DATABASE() LIMIT 1"
+        
         malicious_queries = {
             'sql_injection': [
-                f"SELECT * FROM {target_table} WHERE id = 1 OR 1=1--",
+                f"SELECT * FROM {target_table} WHERE {pk_col} = 1 OR 1=1--",
                 f"SELECT * FROM {target_table}; DROP TABLE {target_table};--",
                 "SELECT user(), version(), database()",
                 "SELECT 1,2 UNION SELECT table_name, column_name FROM information_schema.columns--"
@@ -416,7 +433,7 @@ class EnhancedSQLTranslator:
             ],
             'data_exfiltration': [
                 f"SELECT * FROM {target_table} LIMIT 10000",
-                f"SELECT * FROM {target_table} WHERE id > 0",
+                f"SELECT * FROM {target_table} WHERE {pk_col} > 0",
                 f"SELECT * FROM {target_table} ORDER BY 1 LIMIT 1000",
                 f"SELECT * FROM {target_database}.{target_table}"
             ],

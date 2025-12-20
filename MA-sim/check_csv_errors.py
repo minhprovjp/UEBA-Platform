@@ -1,7 +1,7 @@
 import csv
 import sys
 import collections
-from prettytable import PrettyTable
+
 
 DEFAULT_FILE = "final_clean_dataset.csv"
 
@@ -59,19 +59,14 @@ def check_errors(filename):
         return
 
     # Print Breakdown Table
-    t = PrettyTable(["Count", "Error Code & Message", "Example Query"])
-    t.align["Error Code & Message"] = "l"
-    t.align["Example Query"] = "l"
-    t.max_width["Example Query"] = 60
-    t.max_width["Error Code & Message"] = 50
+    print(f"{'Count':<8} | {'Error Code & Message':<50} | {'Example Query'}")
+    print("-" * 120)
 
     for key, count in error_counts.most_common():
         ex = error_examples[key]
         example_str = f"[{ex['user']}@{ex['db']}] {ex['query'][:100]}"
         if len(ex['query']) > 100: example_str += "..."
-        t.add_row([count, key, example_str])
-
-    print(t)
+        print(f"{count:<8} | {key:<50} | {example_str}")
     print("\n💡 TIP: 'Code 1146' usually means 'Table doesn't exist'. Run populator scripts.")
     print("💡 TIP: 'Code 1044/1045' usually means 'Access denied'. Check permissions.")
 

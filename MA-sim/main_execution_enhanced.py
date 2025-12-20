@@ -398,8 +398,11 @@ class EnhancedSQLGenerator:
         
         # Fallback to original malicious SQL generation
         try:
-            return self.translator._generate_malicious_sql({'attack_chain': attack_type}, {})
+            intent['global_strategy'] = f"malicious_template:{attack_type}"
+            intent['complexity'] = "high"
+            return self.translator._generate_malicious_sql({'attack_chain': attack_type, 'target_database': intent.get('target_database', 'sales_db')}, {})
         except:
+            intent['global_strategy'] = "malicious_fallback_error"
             return f"SELECT * FROM {attack_type}_attack"  # Final fallback
 
 def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
@@ -529,15 +532,15 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                     attack_types = ['sql_injection', 'privilege_escalation', 'data_exfiltration']
                     attack_type = random.choice(attack_types)
                 
-                # NEW: Pass agent ID and intent for scenario-based attacks
-                sql = sql_generator.generate_malicious_sql(attack_type, agent_template.agent_id, intent)
-                
                 # Enhanced database targeting for bypasses
                 if bypass_technique == "network_segmentation_bypass":
                     # Target high-value databases across network segments
                     intent['target_database'] = random.choice(['hr_db', 'finance_db', 'admin_db'])
                 else:
                     intent['target_database'] = random.choice(ENHANCED_DATABASES)
+
+                # NEW: Pass agent ID and intent for scenario-based attacks
+                sql = sql_generator.generate_malicious_sql(attack_type, agent_template.agent_id, intent)
             else:
                 # Normal users use business queries - ensure they only access allowed databases
                 accessible_databases = ROLE_DATABASE_ACCESS.get(agent_template.role, ['sales_db'])

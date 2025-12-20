@@ -15,6 +15,7 @@ import requests
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
+import os
 
 from .models import QueryContext, UserContext, BusinessContext, TemporalContext
 from .context_engine import QueryContextEngine
@@ -103,6 +104,9 @@ class DynamicSQLGenerator:
         self.successful_generations = 0
         self.fallback_usage = 0
         
+        # Load AI Query Pool
+        self.ai_query_pool = self._load_ai_query_pool()
+        
         # Generation strategies
         self._generation_strategies = {
             'context_aware': self._generate_context_aware_query,
@@ -180,7 +184,7 @@ class DynamicSQLGenerator:
             )
             
             # Log complexity decision
-            complexity_assessment = self.complexity_engine.determine_complexity_level(
+            complexity_assessment = self.complexity_engine.determine_complexity(
                 context.user_context, context.business_context, context.temporal_context
             )
             self.generation_logger.log_complexity_decision(
@@ -346,7 +350,8 @@ class DynamicSQLGenerator:
             
             # Check for learned patterns
             intent_type = intent.get('action', 'query')
-            pattern_key = f"{intent_type}_{context.user_context.role}_{context.business_context.current_workflow.value}"
+            database = intent.get('target_database', 'sales_db')
+            pattern_key = f"{intent_type}_{context.user_context.role}_{context.business_context.current_workflow.value}_{database}"
             
             if pattern_key in self.learned_patterns:
                 pattern = self.learned_patterns[pattern_key]
@@ -354,6 +359,13 @@ class DynamicSQLGenerator:
                     reasoning.append(f"Using learned pattern (success rate: {pattern.success_rate:.1%})")
                     return 'pattern_based'
             
+            # Check if AI generation is available and roll for it (30% chance for enrichment)
+            if self.ai_query_pool and random.random() < 0.3:
+                 # Verify we have queries for this database
+                 if intent.get('target_database', 'sales_db') in self.ai_query_pool:
+                     reasoning.append("Selected AI generation strategy for dataset enrichment")
+                     return 'ai_generation'
+
             # Default to context-aware generation
             reasoning.append("Using context-aware generation strategy")
             return 'context_aware'
@@ -378,63 +390,13 @@ class DynamicSQLGenerator:
             reasoning.append(f"Strategy execution error: {str(e)} - using fallback")
             return self._generation_strategies['fallback'](intent, context, reasoning)
     
-    
-    def _generate_ai_query(self, intent: Dict[str, Any], context: QueryContext, reasoning: List[str] = []) -> str:
-        """
-        Generate SQL query using local AI model (Ollama).
-        Falls back to context-aware generation if AI is unavailable or fails.
-        """
-        try:
-            # Construct Prompt
-            database = intent.get('target_database', 'sales_db')
-            action = intent.get('type', 'SELECT')
-            user_role = context.user_context.role if context else "User"
-            
-            prompt = f"Generate a {action} query for {database} database executed by {user_role}. Context: {json.dumps(intent.get('business_context', {}))}"
-            
-            reasoning.append(f"Attempting AI generation with model 'uba-sqlgen'")
-            
-            # Call Ollama API
-            url = "http://100.92.147.73:11434/api/generate"
-            payload = {
-                "model": "uba-sqlgen", # Using the base model or the custom one if created
-                "prompt": prompt,
-                "system": "You are an expert SQL Generator. Output ONLY valid SQL. No markdown.",
-                "stream": False,
-                "options": {
-                    "temperature": 0.6,
-                    "num_predict": 100
-                }
-            }
-            
-            # Short timeout to prevent lag
-            response = requests.post(url, json=payload, timeout=2.0)
-            
-            if response.status_code == 200:
-                result = response.json()
-                sql = result.get('response', '').strip()
-                # Basic validation
-                if sql and (sql.upper().startswith("SELECT") or sql.upper().startswith("UPDATE") or sql.upper().startswith("INSERT")):
-                    reasoning.append("AI generation successful")
-                    return sql.replace("```sql", "").replace("```", "").strip()
-            
-            self.logger.warning(f"AI Generation failed (Status {response.status_code}), falling back.")
-            reasoning.append("AI generation failed, using fallback strategy")
-            return self._generate_context_aware_query(intent, context, reasoning)
-            
-        except Exception as e:
-            # Silent fallback
-            self.logger.debug(f"AI Generation unavailable: {e}")
-            reasoning.append(f"AI unavailable ({str(e)}), using fallback strategy")
-            return self._generate_context_aware_query(intent, context, reasoning)
-
     def _generate_context_aware_query(self, intent: Dict[str, Any], context: QueryContext, 
                                     reasoning: List[str]) -> str:
         """Generate context-aware query using complexity engine"""
         reasoning.append("Generating context-aware query")
         
         # Assess complexity level
-        complexity_assessment = self.complexity_engine.determine_complexity_level(
+        complexity_assessment = self.complexity_engine.determine_complexity(
             context.user_context, context.business_context, context.temporal_context
         )
         
@@ -466,7 +428,8 @@ class DynamicSQLGenerator:
         
         # Find matching pattern
         intent_type = intent.get('action', 'query')
-        pattern_key = f"{intent_type}_{context.user_context.role}_{context.business_context.current_workflow.value}"
+        database = intent.get('target_database', 'sales_db')
+        pattern_key = f"{intent_type}_{context.user_context.role}_{context.business_context.current_workflow.value}_{database}"
         
         if pattern_key in self.learned_patterns:
             pattern = self.learned_patterns[pattern_key]
@@ -517,26 +480,36 @@ class DynamicSQLGenerator:
         target_database = intent.get('target_database', 'sales_db')
         action = intent.get('action', 'query')
         
-        # Simple table mapping
-        table_map = {
-            'sales_db': 'customers',
-            'hr_db': 'employees',
-            'finance_db': 'invoices',
-            'marketing_db': 'campaigns',
-            'support_db': 'support_tickets',
-            'inventory_db': 'inventory_levels',
-            'admin_db': 'user_sessions'
-        }
         
-        table = table_map.get(target_database, 'customers')
-        if target_database == 'sales_db' and table == 'customers': col = 'company_name'
-        elif target_database == 'hr_db': col = 'name'
-        elif target_database == 'finance_db': col = 'invoice_number'
-        elif target_database == 'marketing_db': col = 'campaign_name'
-        elif target_database == 'support_db': col = 'subject'
-        elif target_database == 'inventory_db': col = 'location_id'
-        elif target_database == 'admin_db': col = 'user_id'
-        else: col = 'id'
+        # Strict table mapping based on database schema
+        # [FIX] Force correct table for each database to avoid 1146 errors
+        if target_database == 'sales_db':
+            table = 'customers'
+            col = 'company_name'
+        elif target_database == 'hr_db':
+            table = 'employees'
+            col = 'name'
+        elif target_database == 'finance_db':
+            table = 'invoices'
+            col = 'invoice_number'
+        elif target_database == 'marketing_db':
+            table = 'campaigns'
+            col = 'campaign_name'
+        elif target_database == 'support_db':
+            table = 'support_tickets'
+            col = 'subject'
+        elif target_database == 'inventory_db':
+            table = 'inventory_levels'
+            col = 'product_id'
+        elif target_database == 'admin_db':
+            table = 'user_sessions'
+            col = 'user_id'
+        else:
+            # Absolute fallback - safe query for any database
+            return "SELECT table_name, table_rows FROM information_schema.tables WHERE table_schema = DATABASE() LIMIT 1;"
+            
+        # Verify table belongs to database in query construction
+        fq_table = f"{target_database}.{table}"
         
         # Generate simple query based on action
         if 'count' in action.lower():
@@ -1412,6 +1385,86 @@ class DynamicSQLGenerator:
         )
         
         return campaign_results
+
+    def _load_ai_query_pool(self) -> Dict[str, Dict[str, List[str]]]:
+        """Load pre-generated AI query pool"""
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            pool_path = os.path.join(current_dir, "ai_query_pool.json")
+            print(f"[DEBUG] Loading AI Pool from: {pool_path}")
+            try:
+                debug_log_path = r"c:\Users\User\Downloads\UBA-Platform\MA-sim\debug_gen_path_abs.log"
+                with open(debug_log_path, "w") as df:
+                    df.write(f"Generator __file__: {__file__}\n")
+                    df.write(f"Current Dir: {current_dir}\n")
+                    df.write(f"Pool Path: {pool_path}\n")
+                    df.write(f"Exists: {os.path.exists(pool_path)}\n")
+            except Exception as e:
+                print(f"Debug write failed: {e}")
+            
+            if os.path.exists(pool_path):
+                self.logger.info(f"Loading AI query pool from {pool_path}")
+                with open(pool_path, 'r', encoding='utf-8') as f:
+                    pool = json.load(f)
+                    count = sum(len(queries) for intents in pool.values() for queries in intents.values())
+                    self.logger.info(f"Loaded {count} AI-generated queries")
+                    print(f"[DEBUG] Loaded {count} queries.")
+                    return pool
+            else:
+                print(f"[DEBUG] Path does not exist: {pool_path}")
+                self.logger.warning(f"AI query pool file not found at {pool_path}")
+        except Exception as e:
+            print(f"[DEBUG] Exception loading pool: {e}")
+            self.logger.warning(f"Failed to load AI query pool: {e}")
+        return {}
+
+    def _generate_ai_query(self, intent: Dict[str, Any], context: QueryContext, 
+                          reasoning: List[str]) -> str:
+        """Generate query using pre-generated AI pool"""
+        reasoning.append("Attempting to use AI-generated query from pool")
+        
+        database = intent.get('target_database', 'sales_db')
+        action = intent.get('action', 'query')
+        
+        # Try to find matching queries in the pool
+        candidate_queries = []
+        
+        if self.ai_query_pool and database in self.ai_query_pool:
+            db_pool = self.ai_query_pool[database]
+            
+            # 1. Try exact action match (e.g., VIEW_ORDER)
+            if action in db_pool:
+                candidate_queries.extend(db_pool[action])
+                reasoning.append(f"Found exact match for action {action}")
+            
+            # 2. Try partial match or semantic mapping if no exact match
+            if not candidate_queries:
+                for pool_intent, queries in db_pool.items():
+                    # Simple semantic matching
+                    if pool_intent in action or action in pool_intent:
+                        candidate_queries.extend(queries)
+                    # Map standard actions to pool intents
+                    elif 'SEARCH' in action and 'SEARCH' in pool_intent:
+                        candidate_queries.extend(queries)
+                    elif 'VIEW' in action and 'VIEW' in pool_intent:
+                        candidate_queries.extend(queries)
+                    elif 'UPDATE' in action and 'UPDATE' in pool_intent:
+                        candidate_queries.extend(queries)
+                        
+            if candidate_queries:
+                query = random.choice(candidate_queries)
+                reasoning.append("Successfully selected AI query from pool")
+                
+                # Verify the query matches the database roughly to be safe
+                if database == 'sales_db' and 'sales_db' not in query.lower() and 'customer' not in query.lower() and 'order' not in query.lower():
+                     # Just a weak check, but let's trust the pool for now as it was generated for the DB
+                     pass
+                     
+                return query
+        
+        reasoning.append("No suitable AI query found - falling back to context-aware")
+        return self._generate_context_aware_query(intent, context, reasoning)
+
     
     def detect_apt_behavioral_patterns(self, attack_id: str) -> Dict[str, Any]:
         """Analyze APT attack for behavioral patterns and indicators"""
@@ -1678,7 +1731,8 @@ class DynamicSQLGenerator:
             intent_type = record['intent'].get('action', 'query')
             user_role = record['context_factors']['user_role']
             workflow = record['context_factors']['workflow_type']
-            pattern_key = f"{intent_type}_{user_role}_{workflow}"
+            database = record['intent'].get('target_database', 'sales_db')
+            pattern_key = f"{intent_type}_{user_role}_{workflow}_{database}"
             
             # If we have a learned pattern for this, reduce its success rate
             if pattern_key in self.learned_patterns:
@@ -1697,7 +1751,7 @@ class DynamicSQLGenerator:
             
         except Exception as e:
             self.logger.error(f"Error learning from failed query: {e}")
-    
+
     def get_database_state_info(self, database: str) -> Optional[Dict[str, Any]]:
         """
         Get database state information for context enhancement
@@ -1755,7 +1809,8 @@ class DynamicSQLGenerator:
             intent_type = record['intent'].get('action', 'query')
             user_role = record['context_factors']['user_role']
             workflow = record['context_factors']['workflow_type']
-            pattern_key = f"{intent_type}_{user_role}_{workflow}"
+            database = record['intent'].get('target_database', 'sales_db')
+            pattern_key = f"{intent_type}_{user_role}_{workflow}_{database}"
             
             if pattern_key in self.learned_patterns:
                 # Update existing pattern
@@ -1854,6 +1909,25 @@ class DynamicSQLGenerator:
         self.fallback_usage = 0
         self.generation_history.clear()
         self.logger.info("Generation statistics reset")
+
+    def generate_sql_for_intent(self, intent: Dict[str, Any], user_role: str = 'USER') -> str:
+        """
+        Wrapper to generate SQL for an intent and update the intent with metadata for the executor.
+        This ensures 'global_strategy' is available for the SIM_META tag.
+        """
+        # Ensure user_id is in intent if not present
+        if 'user_id' not in intent:
+            intent['user_id'] = intent.get('user', 'unknown')
+            
+        # Generate the query result
+        result = self.generate_query(intent)
+        
+        # KEY FIX: Update the mutable intent dictionary with the strategy
+        # This allows executor.py to read it via intent.get('global_strategy')
+        intent['global_strategy'] = result.generation_strategy
+        intent['complexity'] = result.complexity_level.value
+        
+        return result.query
 
 
 if __name__ == "__main__":

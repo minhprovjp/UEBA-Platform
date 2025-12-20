@@ -254,7 +254,7 @@ class EnhancedEmployeeAgent:
         if self.is_fatigued and random.random() < 0.2: # 20% cơ hội lỗi khi mệt
             intent["action"] = "TYPO_ERROR" # Sẽ được Translator xử lý thành SQL lỗi (1064)
             intent["is_anomaly"] = 0 # Lỗi do người, không phải hack (False Positive)
-            
+
         return intent
 
     def react(self, success):
