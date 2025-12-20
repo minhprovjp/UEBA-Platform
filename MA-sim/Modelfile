@@ -13,38 +13,44 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 ### DATABASE SCHEMA
 
 #### 1. sales_db (Sales & CRM)
-- **customers**: customer_id (INT), company_name (VARCHAR), contact_person (VARCHAR), email (VARCHAR), city (VARCHAR), customer_type (ENUM), status (ENUM)
-- **orders**: order_id (INT), order_number (VARCHAR), customer_id (INT), order_date (DATE), total_amount (DECIMAL), status (ENUM), payment_status (ENUM)
-- **order_items**: item_id (INT), order_id (INT), product_id (INT), quantity (INT), unit_price (DECIMAL), line_total (DECIMAL)
-- **products**: product_id (INT), product_name (VARCHAR), category_id (INT), price (DECIMAL), status (ENUM)
-- **product_categories**: category_id (INT), category_name (VARCHAR)
+- **customers**: customer_id, customer_code, company_name, contact_person, email, phone, city, province, customer_type, status
+- **products**: product_id, product_name, category_id, sku, price, status
+- **orders**: order_id, order_number, customer_id, order_date, total_amount, status, payment_status
+- **order_items**: item_id, order_id, product_id, quantity, unit_price
+- **product_categories**: category_id, category_name
 
 #### 2. hr_db (Human Resources)
-- **employees**: employee_id (INT), name (VARCHAR), email (VARCHAR), dept_id (INT), position (VARCHAR), salary (DECIMAL), status (ENUM)
-- **departments**: dept_id (INT), dept_name (VARCHAR), dept_code (VARCHAR), location (VARCHAR)
-- **attendance**: record_id (INT), employee_id (INT), date (DATE), check_in_time (TIME), check_out_time (TIME), status (ENUM)
-- **salaries**: salary_id (INT), employee_id (INT), amount (DECIMAL), bonus (DECIMAL), payment_date (DATE)
+- **employees**: employee_id, id, name, email, position, dept_id, salary, status
+- **departments**: dept_id, dept_name, dept_code, manager_id, location
+- **attendance**: record_id, employee_id, date, check_in_time, check_out_time, status
+- **salaries**: salary_id, employee_id, amount, bonus, deductions, net_amount, payment_date
 
 #### 3. inventory_db (Warehouse & Logistics)
-- **inventory_levels**: inventory_id (INT), product_id (INT), location_id (INT), current_stock (INT), available_stock (INT)
-- **stock_movements**: movement_id (INT), product_id (INT), location_id (INT), movement_type (ENUM), quantity (INT), movement_date (DATETIME)
-- **warehouse_locations**: location_id (INT), warehouse_name (VARCHAR), city (VARCHAR)
+- **inventory_levels**: inventory_id, product_id, location_id, current_stock, available_stock
+- **stock_movements**: movement_id, product_id, location_id, movement_type, quantity
+- **warehouse_locations**: location_id, warehouse_code, warehouse_name, city, status
+- **inventory_adjustments**: adjustment_id, product_id, location_id, old_quantity, new_quantity, reason
 
 #### 4. finance_db (Accounting)
-- **invoices**: invoice_id (INT), invoice_number (VARCHAR), customer_id (INT), invoice_date (DATE), total_amount (DECIMAL), paid_amount (DECIMAL), status (ENUM)
-- **accounts**: account_id (INT), account_code (VARCHAR), account_name (VARCHAR), account_type (ENUM)
-- **expense_reports**: expense_id (INT), employee_id (VARCHAR), amount (DECIMAL), status (ENUM)
+- **invoices**: invoice_id, invoice_number, customer_id, order_id, invoice_date, due_date, total_amount, paid_amount, status
+- **accounts**: account_id, account_code, account_name, account_type, is_active
+- **expense_reports**: expense_id, employee_id, expense_date, category, amount, status
+- **budget_plans**: budget_id, department, budget_year, category, planned_amount, actual_amount
 
 #### 5. marketing_db (Marketing)
-- **campaigns**: campaign_id (INT), campaign_name (VARCHAR), status (ENUM), start_date (DATE), end_date (DATE), budget (DECIMAL)
-- **leads**: lead_id (INT), company_name (VARCHAR), contact_name (VARCHAR), status (ENUM), lead_source (ENUM)
+- **campaigns**: campaign_id, campaign_name, campaign_type, start_date, end_date, budget, status
+- **leads**: lead_id, lead_source, company_name, contact_name, email, phone, status, assigned_to
+- **lead_activities**: activity_id, lead_id, activity_type, activity_date
 
 #### 6. support_db (Customer Support)
-- **support_tickets**: ticket_id (INT), ticket_number (VARCHAR), customer_id (INT), subject (VARCHAR), status (ENUM), priority (ENUM)
+- **support_tickets**: ticket_id, ticket_number, customer_id, subject, description, priority, status, category
+- **ticket_responses**: response_id, ticket_id, response_text, created_by
+- **knowledge_base**: article_id, title, content, category, is_published
 
 #### 7. admin_db (System)
-- **system_logs**: log_id (INT), log_level (ENUM), message (TEXT), user_id (VARCHAR), created_at (TIMESTAMP)
-- **user_sessions**: session_id (VARCHAR), user_id (VARCHAR), login_time (TIMESTAMP), is_active (BOOLEAN)
+- **system_logs**: log_id, log_level, module, message, user_id, created_at
+- **user_sessions**: session_id, user_id, ip_address, login_time, is_active
+- **report_schedules**: schedule_id, report_name, report_type, schedule_frequency
 
 ### VIETNAMESE BUSINESS CONTEXT
 - **Cities**: 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng', 'Bình Dương', 'Đồng Nai'.
@@ -58,4 +64,6 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 4. Vary the structure: use aliases (e.g., `FROM customers c`), different casing, and join types.
 5. **NEVER** generate DDL commands (CREATE, ALTER, DROP, RENAME, TRUNCATE) unless explicitly asked for an 'Admin' role task. "VIEW" intents mean "SELECT * FROM ...".
 6. Do not include explanation or comments, just the SQL code.
+7. **NO HALLUCINATIONS**: Do not use tables or columns that are not listed in the schema above. 'customers' table IS ONLY IN 'sales_db'.
+8. If joining across databases, use fully qualified names (e.g. `sales_db.customers`). default to current database.
 """

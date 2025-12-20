@@ -43,9 +43,9 @@ def generate_query(database: str, intent: str) -> str:
     
     # Specific Schema hints to guide the model (Lightweight context)
     if database == 'hr_db': prompt += "Table: employees. Columns: id, name, email, dept_id. "
-    if database == 'sales_db': prompt += "Table: customers. Columns: customer_id, company_name, contact_name. "
-    if database == 'marketing_db': prompt += "Table: campaigns. Columns: campaign_id, campaign_name, status. "
-    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount. "
+    if database == 'sales_db': prompt += "Table: customers. Columns: customer_id, company_name, contact_person. "
+    if database == 'marketing_db': prompt += "Table: campaigns. Columns: campaign_id, campaign_name, status, campaign_type. "
+    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount, account_code. "
     if database == 'support_db': prompt += "Table: support_tickets. Columns: ticket_id, subject, status. "
     if database == 'inventory_db': prompt += "Table: inventory_levels. Columns: product_id, current_stock. "
     if database == 'admin_db': prompt += "Table: system_logs. Columns: log_id, message. "
@@ -81,17 +81,47 @@ def validate_query(query: str, database: str) -> bool:
 
 def main():
     print("🚀 Starting Offline AI SQL Generation...")
+    
+    # Load existing pool if available
     pool = {}
+    total_existing = 0
+    try:
+        import os
+        if os.path.exists(OUTPUT_FILE):
+            print(f"📖 Loading existing pool from {OUTPUT_FILE}...")
+            with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
+                pool = json.load(f)
+                
+            # Count existing
+            for db, intents in pool.items():
+                for intent, queries in intents.items():
+                    total_existing += len(queries)
+            print(f"   Found {total_existing} existing queries.")
+    except Exception as e:
+        print(f"⚠️ Could not load existing pool: {e}")
+        pool = {}
 
     for db, intents in TARGETS.items():
-        pool[db] = {}
+        if db not in pool:
+            pool[db] = {}
+            
         print(f"\n📂 Database: {db}")
         for intent in intents:
-            pool[db][intent] = []
-            print(f"  Targeting: {intent}", end="", flush=True)
+            if intent not in pool[db]:
+                pool[db][intent] = []
+                
+            current_count = len(pool[db][intent])
+            if current_count >= NUM_QUERIES_PER_INTENT:
+                print(f"  Skipping {intent} (Already has {current_count} queries)")
+                continue
+                
+            print(f"  Targeting: {intent} (Current: {current_count})", end="", flush=True)
             
             attempts = 0
-            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < NUM_QUERIES_PER_INTENT * 2:
+            # We want to reach NUM_QUERIES_PER_INTENT total
+            needed = NUM_QUERIES_PER_INTENT - current_count
+            
+            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < needed * 3:
                 attempts += 1
                 q = generate_query(db, intent)
                 if q and validate_query(q, db):
@@ -102,10 +132,13 @@ def main():
                     if q not in pool[db][intent]:
                         pool[db][intent].append(q)
                         print(".", end="", flush=True)
+                    else:
+                        # Duplicate found
+                        pass
                 else:
                     print("x", end="", flush=True)
             
-            print(f" [Done: {len(pool[db][intent])}]")
+            print(f" [Total: {len(pool[db][intent])}]")
 
     print(f"\n💾 Saving pool to {OUTPUT_FILE}...")
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:

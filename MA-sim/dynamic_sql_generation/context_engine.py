@@ -62,42 +62,44 @@ class QueryContextEngine:
         """Initialize database schema information for analysis"""
         self.database_schemas = {
             'sales_db': {
-                'customers': ['customer_id', 'name', 'email', 'phone', 'city', 'company'],
-                'orders': ['order_id', 'customer_id', 'order_date', 'total_amount', 'status'],
-                'products': ['product_id', 'name', 'category', 'price', 'stock_quantity'],
-                'order_items': ['order_item_id', 'order_id', 'product_id', 'quantity', 'unit_price']
+                'customers': ['customer_id', 'customer_code', 'company_name', 'contact_person', 'email', 'phone', 'city', 'province', 'customer_type', 'status'],
+                'products': ['product_id', 'product_name', 'category_id', 'sku', 'price', 'status'],
+                'orders': ['order_id', 'order_number', 'customer_id', 'order_date', 'total_amount', 'status', 'payment_status', 'sales_person'],
+                'order_items': ['item_id', 'order_id', 'product_id', 'quantity', 'unit_price', 'line_total'],
+                'product_categories': ['category_id', 'category_name', 'parent_category_id']
             },
             'hr_db': {
-                'employees': ['employee_id', 'name', 'department', 'position', 'hire_date', 'salary'],
-                'attendance': ['attendance_id', 'employee_id', 'date', 'check_in', 'check_out'],
-                'salaries': ['salary_id', 'employee_id', 'month', 'base_salary', 'bonus', 'deductions'],
-                'departments': ['department_id', 'name', 'manager_id', 'budget']
+                'employees': ['employee_id', 'id', 'name', 'email', 'position', 'dept_id', 'salary', 'status'],
+                'departments': ['dept_id', 'dept_name', 'dept_code', 'manager_id', 'location'],
+                'attendance': ['record_id', 'employee_id', 'date', 'check_in_time', 'check_out_time', 'status'],
+                'salaries': ['salary_id', 'employee_id', 'amount', 'bonus', 'deductions', 'net_amount', 'payment_date', 'status']
             },
             'finance_db': {
-                'invoices': ['invoice_id', 'customer_id', 'amount', 'issue_date', 'due_date', 'status'],
-                'expenses': ['expense_id', 'employee_id', 'category', 'amount', 'date', 'description'],
-                'accounts': ['account_id', 'account_name', 'account_type', 'balance'],
-                'transactions': ['transaction_id', 'account_id', 'amount', 'date', 'description']
+                'invoices': ['invoice_id', 'invoice_number', 'customer_id', 'order_id', 'invoice_date', 'due_date', 'total_amount', 'paid_amount', 'status'],
+                'accounts': ['account_id', 'account_code', 'account_name', 'account_type', 'is_active'],
+                'expense_reports': ['expense_id', 'employee_id', 'expense_date', 'category', 'amount', 'status', 'approved_by'],
+                'budget_plans': ['budget_id', 'department', 'budget_year', 'category', 'planned_amount', 'actual_amount']
             },
             'marketing_db': {
-                'campaigns': ['campaign_id', 'name', 'start_date', 'end_date', 'budget', 'status'],
-                'leads': ['lead_id', 'name', 'email', 'phone', 'source', 'status'],
-                'campaign_results': ['result_id', 'campaign_id', 'metric', 'value', 'date']
+                'campaigns': ['campaign_id', 'campaign_name', 'campaign_type', 'start_date', 'end_date', 'budget', 'status'],
+                'leads': ['lead_id', 'lead_source', 'company_name', 'contact_name', 'email', 'phone', 'status', 'assigned_to'],
+                'lead_activities': ['activity_id', 'lead_id', 'activity_type', 'activity_date', 'outcome']
             },
             'support_db': {
-                'tickets': ['ticket_id', 'customer_id', 'subject', 'description', 'status', 'priority'],
-                'ticket_responses': ['response_id', 'ticket_id', 'employee_id', 'response', 'timestamp'],
-                'knowledge_base': ['article_id', 'title', 'content', 'category', 'views']
+                'support_tickets': ['ticket_id', 'ticket_number', 'customer_id', 'subject', 'description', 'priority', 'status', 'category', 'assigned_to'],
+                'ticket_responses': ['response_id', 'ticket_id', 'response_text', 'created_by', 'created_at'],
+                'knowledge_base': ['article_id', 'title', 'content', 'category', 'is_published']
             },
             'inventory_db': {
-                'products': ['product_id', 'name', 'category', 'supplier_id', 'stock_level'],
-                'suppliers': ['supplier_id', 'name', 'contact_person', 'email', 'phone'],
-                'stock_movements': ['movement_id', 'product_id', 'type', 'quantity', 'date']
+                'inventory_levels': ['inventory_id', 'product_id', 'location_id', 'current_stock', 'available_stock'],
+                'stock_movements': ['movement_id', 'product_id', 'location_id', 'movement_type', 'quantity', 'reference_type'],
+                'warehouse_locations': ['location_id', 'warehouse_code', 'warehouse_name', 'city', 'status'],
+                'inventory_adjustments': ['adjustment_id', 'product_id', 'location_id', 'old_quantity', 'new_quantity', 'reason']
             },
             'admin_db': {
-                'users': ['user_id', 'username', 'email', 'role', 'last_login'],
-                'audit_logs': ['log_id', 'user_id', 'action', 'table_name', 'timestamp'],
-                'system_config': ['config_id', 'key', 'value', 'description']
+                'system_logs': ['log_id', 'log_level', 'module', 'message', 'user_id', 'created_at'],
+                'user_sessions': ['session_id', 'user_id', 'ip_address', 'login_time', 'is_active'],
+                'report_schedules': ['schedule_id', 'report_name', 'report_type', 'schedule_frequency', 'is_active']
             }
         }
         
