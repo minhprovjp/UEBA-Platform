@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""
+Configuration file for UBA Platform MySQL simulation
+"""
+
+import os
+
+# MySQL Database Configuration (matches executor.py settings)
+MYSQL_LOG_HOST = "127.0.0.1"
+MYSQL_LOG_PORT = 3306
+MYSQL_LOG_USER = "uba_user"  # or your MySQL user
+MYSQL_LOG_PASSWORD = "password"
+MYSQL_LOG_DATABASE = "performance_schema"
+
+# Database URL for SQLAlchemy (used by perf_log_dataset_creator)
+MYSQL_LOG_DATABASE_URL = f"mysql+pymysql://{MYSQL_LOG_USER}:{MYSQL_LOG_PASSWORD}@{MYSQL_LOG_HOST}:{MYSQL_LOG_PORT}/{MYSQL_LOG_DATABASE}"
+
+# Redis Configuration
+REDIS_URL = "redis://localhost:6379/0"
+REDIS_STREAM_LOGS = "mysql_logs"
+
+# Logging Configuration
+LOGS_DIR = "logs"
+if not os.path.exists(LOGS_DIR):
+    os.makedirs(LOGS_DIR)
+
+# Simulation Configuration
+SIMULATION_DATABASES = [
+    'sales_db', 'inventory_db', 'finance_db', 'marketing_db', 
+    'support_db', 'hr_db', 'admin_db'
+]
+
+# Performance Schema Configuration
+PERFORMANCE_SCHEMA_ENABLED = True
+EVENTS_STATEMENTS_HISTORY_LONG_SIZE = 10000
+
+print("✅ Configuration loaded successfully")
