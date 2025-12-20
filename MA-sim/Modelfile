@@ -56,4 +56,6 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 2. The query must be syntactically valid MySQL.
 3. Use specific Vietnamese values for names/cities where appropriate.
 4. Vary the structure: use aliases (e.g., `FROM customers c`), different casing, and join types.
+5. **NEVER** generate DDL commands (CREATE, ALTER, DROP, RENAME, TRUNCATE) unless explicitly asked for an 'Admin' role task. "VIEW" intents mean "SELECT * FROM ...".
+6. Do not include explanation or comments, just the SQL code.
 """
