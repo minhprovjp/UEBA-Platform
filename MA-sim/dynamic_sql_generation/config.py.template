@@ -1,0 +1,392 @@
+"""
+Configuration Management for Dynamic SQL Generation System
+
+Provides configuration management for generation parameters,
+Vietnamese business data, and system settings.
+"""
+
+import json
+import os
+import random
+from datetime import datetime
+from typing import Dict, Any, Optional
+from dataclasses import dataclass, asdict
+from pathlib import Path
+
+
+@dataclass
+class GenerationConfig:
+    """Configuration for SQL generation parameters"""
+    # Query generation settings
+    max_query_complexity: int = 5
+    default_timeout_seconds: float = 30.0
+    enable_caching: bool = True
+    cache_size: int = 1000
+    
+    # Reproducibility settings
+    random_seed: Optional[int] = None
+    enable_deterministic_generation: bool = False
+    seed_rotation_interval: int = 1000  # Number of queries before seed rotation
+    
+    # Vietnamese business settings
+    enable_vietnamese_context: bool = True
+    use_cultural_constraints: bool = True
+    respect_work_hours: bool = True
+    apply_holiday_patterns: bool = True
+    
+    # Database settings
+    max_joins_per_query: int = 3
+    max_where_conditions: int = 5
+    enable_subqueries: bool = True
+    
+    # Security settings
+    enable_malicious_generation: bool = False
+    attack_sophistication_level: int = 3
+    bypass_detection_probability: float = 0.3
+    
+    # Performance settings
+    generation_timeout_ms: int = 5000
+    max_concurrent_generations: int = 10
+    enable_performance_monitoring: bool = True
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GenerationConfig':
+        """Create from dictionary"""
+        return cls(**data)
+
+
+@dataclass
+class VietnameseBusinessConfig:
+    """Configuration for Vietnamese business context"""
+    # Business hours
+    standard_start_hour: int = 8
+    standard_end_hour: int = 17
+    lunch_start_hour: int = 12
+    lunch_end_hour: int = 13
+    
+    # Cultural settings
+    hierarchy_importance: float = 0.8
+    seniority_respect_level: float = 0.9
+    overtime_acceptance_rate: float = 0.7
+    
+    # Holiday settings
+    enable_tet_patterns: bool = True
+    holiday_activity_reduction: float = 0.1
+    tet_preparation_weeks: int = 2
+    
+    # Business cycle settings
+    peak_season_months: list = None
+    low_season_months: list = None
+    
+    def __post_init__(self):
+        if self.peak_season_months is None:
+            self.peak_season_months = [6, 7, 8, 9]
+        if self.low_season_months is None:
+            self.low_season_months = [1, 2, 12]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'VietnameseBusinessConfig':
+        """Create from dictionary"""
+        return cls(**data)
+
+
+@dataclass
+class DatabaseConfig:
+    """Configuration for database-specific settings"""
+    # Database connection settings
+    connection_timeout: int = 30
+    query_timeout: int = 60
+    max_connections: int = 100
+    
+    # Database-specific generation settings
+    database_weights: Dict[str, float] = None
+    table_access_patterns: Dict[str, Dict[str, float]] = None
+    
+    # Performance settings
+    enable_query_optimization: bool = True
+    use_prepared_statements: bool = True
+    enable_connection_pooling: bool = True
+    
+    def __post_init__(self):
+        if self.database_weights is None:
+            self.database_weights = {
+                'sales_db': 0.3,
+                'hr_db': 0.15,
+                'finance_db': 0.2,
+                'marketing_db': 0.15,
+                'support_db': 0.1,
+                'inventory_db': 0.05,
+                'admin_db': 0.05
+            }
+        
+        if self.table_access_patterns is None:
+            self.table_access_patterns = {
+                'sales_db': {'customers': 0.4, 'orders': 0.3, 'products': 0.3},
+                'hr_db': {'employees': 0.5, 'attendance': 0.3, 'salaries': 0.2},
+                'finance_db': {'invoices': 0.4, 'expenses': 0.3, 'accounts': 0.3}
+            }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DatabaseConfig':
+        """Create from dictionary"""
+        return cls(**data)
+
+
+class ConfigurationManager:
+    """
+    Configuration manager for dynamic SQL generation system
+    Handles loading, saving, and managing all configuration settings
+    """
+    
+    def __init__(self, config_dir: str = "config"):
+        self.config_dir = Path(config_dir)
+        self.config_dir.mkdir(exist_ok=True)
+        
+        # Configuration files
+        self.generation_config_file = self.config_dir / "generation.json"
+        self.vietnamese_config_file = self.config_dir / "vietnamese_business.json"
+        self.database_config_file = self.config_dir / "database.json"
+        
+        # Load configurations
+        self.generation_config = self._load_generation_config()
+        self.vietnamese_config = self._load_vietnamese_config()
+        self.database_config = self._load_database_config()
+    
+    def _load_generation_config(self) -> GenerationConfig:
+        """Load generation configuration"""
+        if self.generation_config_file.exists():
+            try:
+                with open(self.generation_config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return GenerationConfig.from_dict(data)
+            except Exception as e:
+                print(f"Error loading generation config: {e}")
+                return GenerationConfig()
+        else:
+            config = GenerationConfig()
+            self._save_generation_config(config)
+            return config
+    
+    def _load_vietnamese_config(self) -> VietnameseBusinessConfig:
+        """Load Vietnamese business configuration"""
+        if self.vietnamese_config_file.exists():
+            try:
+                with open(self.vietnamese_config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return VietnameseBusinessConfig.from_dict(data)
+            except Exception as e:
+                print(f"Error loading Vietnamese config: {e}")
+                return VietnameseBusinessConfig()
+        else:
+            config = VietnameseBusinessConfig()
+            self._save_vietnamese_config(config)
+            return config
+    
+    def _load_database_config(self) -> DatabaseConfig:
+        """Load database configuration"""
+        if self.database_config_file.exists():
+            try:
+                with open(self.database_config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return DatabaseConfig.from_dict(data)
+            except Exception as e:
+                print(f"Error loading database config: {e}")
+                return DatabaseConfig()
+        else:
+            config = DatabaseConfig()
+            self._save_database_config(config)
+            return config
+    
+    def _save_generation_config(self, config: GenerationConfig):
+        """Save generation configuration"""
+        with open(self.generation_config_file, 'w', encoding='utf-8') as f:
+            json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
+    
+    def _save_vietnamese_config(self, config: VietnameseBusinessConfig):
+        """Save Vietnamese business configuration"""
+        with open(self.vietnamese_config_file, 'w', encoding='utf-8') as f:
+            json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
+    
+    def _save_database_config(self, config: DatabaseConfig):
+        """Save database configuration"""
+        with open(self.database_config_file, 'w', encoding='utf-8') as f:
+            json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
+    
+    def update_generation_config(self, **kwargs):
+        """Update generation configuration parameters"""
+        for key, value in kwargs.items():
+            if hasattr(self.generation_config, key):
+                setattr(self.generation_config, key, value)
+        self._save_generation_config(self.generation_config)
+    
+    def update_vietnamese_config(self, **kwargs):
+        """Update Vietnamese business configuration parameters"""
+        for key, value in kwargs.items():
+            if hasattr(self.vietnamese_config, key):
+                setattr(self.vietnamese_config, key, value)
+        self._save_vietnamese_config(self.vietnamese_config)
+    
+    def update_database_config(self, **kwargs):
+        """Update database configuration parameters"""
+        for key, value in kwargs.items():
+            if hasattr(self.database_config, key):
+                setattr(self.database_config, key, value)
+        self._save_database_config(self.database_config)
+    
+    def get_config_summary(self) -> Dict[str, Any]:
+        """Get summary of all configurations"""
+        return {
+            'generation': self.generation_config.to_dict(),
+            'vietnamese_business': self.vietnamese_config.to_dict(),
+            'database': self.database_config.to_dict()
+        }
+    
+    def reset_to_defaults(self):
+        """Reset all configurations to defaults"""
+        self.generation_config = GenerationConfig()
+        self.vietnamese_config = VietnameseBusinessConfig()
+        self.database_config = DatabaseConfig()
+        
+        self._save_generation_config(self.generation_config)
+        self._save_vietnamese_config(self.vietnamese_config)
+        self._save_database_config(self.database_config)
+    
+    def export_config(self, export_path: str):
+        """Export all configurations to a single file"""
+        export_data = {
+            'generation': self.generation_config.to_dict(),
+            'vietnamese_business': self.vietnamese_config.to_dict(),
+            'database': self.database_config.to_dict(),
+            'export_timestamp': str(datetime.now()),
+            'version': '1.0.0'
+        }
+        
+        with open(export_path, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+    
+    def import_config(self, import_path: str):
+        """Import configurations from a file"""
+        with open(import_path, 'r', encoding='utf-8') as f:
+            import_data = json.load(f)
+        
+        if 'generation' in import_data:
+            self.generation_config = GenerationConfig.from_dict(import_data['generation'])
+            self._save_generation_config(self.generation_config)
+        
+        if 'vietnamese_business' in import_data:
+            self.vietnamese_config = VietnameseBusinessConfig.from_dict(import_data['vietnamese_business'])
+            self._save_vietnamese_config(self.vietnamese_config)
+        
+        if 'database' in import_data:
+            self.database_config = DatabaseConfig.from_dict(import_data['database'])
+            self._save_database_config(self.database_config)
+    
+    def set_random_seed(self, seed: Optional[int] = None):
+        """Set random seed for reproducible generation"""
+        if seed is None:
+            seed = random.randint(1, 1000000)
+        
+        self.generation_config.random_seed = seed
+        self.generation_config.enable_deterministic_generation = True
+        
+        # Set seeds for all random number generators
+        random.seed(seed)
+        
+        # Set numpy seed if available
+        try:
+            import numpy as np
+            np.random.seed(seed)
+        except ImportError:
+            pass  # numpy not available, skip
+        
+        self._save_generation_config(self.generation_config)
+        return seed
+    
+    def get_current_seed(self) -> Optional[int]:
+        """Get current random seed"""
+        return self.generation_config.random_seed
+    
+    def enable_reproducible_mode(self, seed: Optional[int] = None):
+        """Enable reproducible generation mode"""
+        actual_seed = self.set_random_seed(seed)
+        self.generation_config.enable_deterministic_generation = True
+        self._save_generation_config(self.generation_config)
+        return actual_seed
+    
+    def disable_reproducible_mode(self):
+        """Disable reproducible generation mode"""
+        self.generation_config.enable_deterministic_generation = False
+        self.generation_config.random_seed = None
+        self._save_generation_config(self.generation_config)
+    
+    def rotate_seed(self):
+        """Rotate to a new random seed"""
+        if self.generation_config.enable_deterministic_generation:
+            current_seed = self.generation_config.random_seed or 42
+            new_seed = (current_seed + 1) % 1000000
+            return self.set_random_seed(new_seed)
+        return None
+
+
+# Global configuration manager instance
+_config_manager = None
+
+def get_config_manager() -> ConfigurationManager:
+    """Get global configuration manager instance"""
+    global _config_manager
+    if _config_manager is None:
+        _config_manager = ConfigurationManager()
+    return _config_manager
+
+
+def get_generation_config() -> GenerationConfig:
+    """Get generation configuration"""
+    return get_config_manager().generation_config
+
+
+def get_vietnamese_config() -> VietnameseBusinessConfig:
+    """Get Vietnamese business configuration"""
+    return get_config_manager().vietnamese_config
+
+
+def get_database_config() -> DatabaseConfig:
+    """Get database configuration"""
+    return get_config_manager().database_config
+
+
+if __name__ == "__main__":
+    # Example usage and testing
+    print("🔧 TESTING CONFIGURATION MANAGER")
+    print("=" * 50)
+    
+    # Create configuration manager
+    config_mgr = ConfigurationManager("test_config")
+    
+    print("📋 Default Configuration Summary:")
+    summary = config_mgr.get_config_summary()
+    for section, config in summary.items():
+        print(f"\n{section.upper()}:")
+        for key, value in config.items():
+            print(f"  {key}: {value}")
+    
+    # Test configuration updates
+    print(f"\n🔄 Testing Configuration Updates:")
+    config_mgr.update_generation_config(max_query_complexity=7, enable_caching=False)
+    config_mgr.update_vietnamese_config(hierarchy_importance=0.9)
+    
+    print(f"Updated max_query_complexity: {config_mgr.generation_config.max_query_complexity}")
+    print(f"Updated hierarchy_importance: {config_mgr.vietnamese_config.hierarchy_importance}")
+    
+    print(f"\n✅ Configuration manager ready for dynamic SQL generation")
