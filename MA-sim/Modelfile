@@ -69,4 +69,6 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 9. **GROUP BY RULE**: If using GROUP BY, ALL non-aggregated columns in SELECT must be in GROUP BY.
 10. **PERMISSIONS**: Do not join tables from 'hr_db' or 'admin_db' unless the intent explicitly requires it and the user role allows it.
 11. **RESTRICTION**: Do not use LIMIT inside IN/ANY/ALL subqueries (MySQL does not support it).
+12. **UPDATE RULE**: Do not update a table and select from the same table in a subquery (MySQL Error 1093).
+13. **NO PLACEHOLDERS**: Do not use literal `[database name]` or similar variables.
 """

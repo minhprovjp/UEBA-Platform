@@ -9,7 +9,7 @@ from typing import Dict, List, Any
 OLLAMA_URL = "http://100.92.147.73:11434/api/generate"
 MODEL = "uba-sqlgen"
 OUTPUT_FILE = "dynamic_sql_generation/ai_query_pool.json"
-NUM_QUERIES_PER_INTENT = 20  # Start small for testing, generally 10-20
+NUM_QUERIES_PER_INTENT = 10  # Start small for testing, generally 10-20
 
 # TARGETS
 TARGETS = {
@@ -42,15 +42,15 @@ def generate_query(database: str, intent: str) -> str:
     prompt += "Use valid schema. "
     
     # Specific Schema hints to guide the model (Lightweight context)
-    if database == 'hr_db': prompt += "Table: employees. Columns: id, name, email, dept_id. "
-    if database == 'sales_db': prompt += "Table: customers. Columns: customer_id, company_name, contact_person. "
-    if database == 'marketing_db': prompt += "Table: campaigns. Columns: campaign_id, campaign_name, status, campaign_type. "
-    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount, status (ENUM), invoice_date. NO account_id/code columns. NO 'customers' table in finance_db (use sales_db.customers). "
-    if database == 'support_db': prompt += "Table: support_tickets. Columns: ticket_id, subject, status (ENUM, not a table). "
+    if database == 'hr_db': prompt += "Table: employees. Columns: id, name, email, dept_id. Table: departments. Column: dept_name (NOT department_name). "
+    if database == 'sales_db': prompt += "Table: customers. Columns: customer_id, company_name, contact_person. Table: products (in sales_db). "
+    if database == 'marketing_db': prompt += "Table: campaigns. Columns: campaign_id, campaign_name, status, campaign_type. NO lead_assignments table. "
+    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount, status (ENUM), invoice_date. NO account_id/code columns. NO 'customers'/'products'/'orders' tables in finance_db (use sales_db.customers, sales_db.products). "
+    if database == 'support_db': prompt += "Table: support_tickets. Columns: ticket_id, subject, status (ENUM, not a table). NO support_ticket_status/enum_status tables. "
     if database == 'inventory_db': prompt += "Table: inventory_levels. Columns: product_id, current_stock. "
     if database == 'admin_db': prompt += "Table: system_logs. Columns: log_id, message. "
 
-    prompt += "Return ONLY the SQL query, no markdown. Ends with semicolon. NO LIMIT inside IN() subqueries."
+    prompt += "Return ONLY the SQL query, no markdown. Ends with semicolon. NO LIMIT inside IN() subqueries. NO '[database name]' placeholders."
 
     try:
         response = requests.post(
