@@ -68,19 +68,19 @@ DEFAULT_ML_CONFIG = {
     "max_buffer_size": 5000,
     "save_interval_sec": 60,
 
-    # AutoEncoder
-    "ae_contamination": 0.05,
+    # AutoEncoder (Tuning based on 10179 rows)
+    "ae_contamination": 0.039,  # Tỷ lệ bất thường dự kiến
     "ae_epochs": 20,
-    "ae_batch_size": 32,
+    "ae_batch_size": 64,
     "ae_hidden_neurons": [64, 32, 32, 64],
     "ae_verbose": 0,
 
-    # LightGBM
-    "lgb_n_estimators": 150,
+    # LightGBM (Tuning for Imbalance ratio 1:30.0)
+    "lgb_n_estimators": 200,
     "lgb_learning_rate": 0.05,
     "lgb_num_leaves": 31,
     "lgb_max_depth": -1,
-    "lgb_scale_pos_weight": 10,
+    "lgb_scale_pos_weight": 30.03,  # Trọng số cho lớp bất thường
 
     "inference_quantile_threshold": 0.99,
     "inference_min_threshold": 0.75
