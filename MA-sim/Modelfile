@@ -12,31 +12,44 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 
 ### DATABASE SCHEMA
 
-#### 1. sales_db (E-commerce)
-- **customers**: customer_id (INT), name (VARCHAR), email (VARCHAR), city (VARCHAR), company (VARCHAR), segment (VARCHAR)
-- **orders**: order_id (INT), customer_id (INT), order_date (DATETIME), total_amount (DECIMAL), status (VARCHAR)
-- **order_items**: id (INT), order_id (INT), product_id (INT), quantity (INT), unit_price (DECIMAL)
-- **products**: product_id (INT), name (VARCHAR), category (VARCHAR), price (DECIMAL)
-- **reviews**: review_id (INT), product_id (INT), rating (INT), comment (TEXT)
+#### 1. sales_db (Sales & CRM)
+- **customers**: customer_id (INT), company_name (VARCHAR), contact_person (VARCHAR), email (VARCHAR), city (VARCHAR), customer_type (ENUM), status (ENUM)
+- **orders**: order_id (INT), order_number (VARCHAR), customer_id (INT), order_date (DATE), total_amount (DECIMAL), status (ENUM), payment_status (ENUM)
+- **order_items**: item_id (INT), order_id (INT), product_id (INT), quantity (INT), unit_price (DECIMAL), line_total (DECIMAL)
+- **products**: product_id (INT), product_name (VARCHAR), category_id (INT), price (DECIMAL), status (ENUM)
+- **product_categories**: category_id (INT), category_name (VARCHAR)
 
 #### 2. hr_db (Human Resources)
-- **employees**: employee_id (INT), name (VARCHAR), dept_id (INT), position (VARCHAR), hire_date (DATE), salary (DECIMAL)
-- **departments**: dept_id (INT), dept_name (VARCHAR), location (VARCHAR)
-- **salaries**: id (INT), employee_id (INT), amount (DECIMAL), date (DATE)
-- **attendance**: record_id (INT), employee_id (INT), check_in (DATETIME), check_out (DATETIME), status (VARCHAR)
+- **employees**: employee_id (INT), name (VARCHAR), email (VARCHAR), dept_id (INT), position (VARCHAR), salary (DECIMAL), status (ENUM)
+- **departments**: dept_id (INT), dept_name (VARCHAR), dept_code (VARCHAR), location (VARCHAR)
+- **attendance**: record_id (INT), employee_id (INT), date (DATE), check_in_time (TIME), check_out_time (TIME), status (ENUM)
+- **salaries**: salary_id (INT), employee_id (INT), amount (DECIMAL), bonus (DECIMAL), payment_date (DATE)
 
-#### 3. finance_db (Invoicing)
-- **invoices**: invoice_id (INT), customer_id (INT), invoice_date (DATE), due_date (DATE), total_amount (DECIMAL), status (VARCHAR)
-- **transactions**: id (INT), invoice_id (INT), amount (DECIMAL), type (VARCHAR), date (DATETIME)
+#### 3. inventory_db (Warehouse & Logistics)
+- **inventory_levels**: inventory_id (INT), product_id (INT), location_id (INT), current_stock (INT), available_stock (INT)
+- **stock_movements**: movement_id (INT), product_id (INT), location_id (INT), movement_type (ENUM), quantity (INT), movement_date (DATETIME)
+- **warehouse_locations**: location_id (INT), warehouse_name (VARCHAR), city (VARCHAR)
 
-#### 4. admin_db (System)
-- **users**: id (INT), username (VARCHAR), role (VARCHAR), last_login (DATETIME)
-- **audit_logs**: id (INT), user_id (INT), action (VARCHAR), timestamp (DATETIME)
+#### 4. finance_db (Accounting)
+- **invoices**: invoice_id (INT), invoice_number (VARCHAR), customer_id (INT), invoice_date (DATE), total_amount (DECIMAL), paid_amount (DECIMAL), status (ENUM)
+- **accounts**: account_id (INT), account_code (VARCHAR), account_name (VARCHAR), account_type (ENUM)
+- **expense_reports**: expense_id (INT), employee_id (VARCHAR), amount (DECIMAL), status (ENUM)
+
+#### 5. marketing_db (Marketing)
+- **campaigns**: campaign_id (INT), campaign_name (VARCHAR), status (ENUM), start_date (DATE), end_date (DATE), budget (DECIMAL)
+- **leads**: lead_id (INT), company_name (VARCHAR), contact_name (VARCHAR), status (ENUM), lead_source (ENUM)
+
+#### 6. support_db (Customer Support)
+- **support_tickets**: ticket_id (INT), ticket_number (VARCHAR), customer_id (INT), subject (VARCHAR), status (ENUM), priority (ENUM)
+
+#### 7. admin_db (System)
+- **system_logs**: log_id (INT), log_level (ENUM), message (TEXT), user_id (VARCHAR), created_at (TIMESTAMP)
+- **user_sessions**: session_id (VARCHAR), user_id (VARCHAR), login_time (TIMESTAMP), is_active (BOOLEAN)
 
 ### VIETNAMESE BUSINESS CONTEXT
-- **Cities**: 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng'.
-- **Common Names**: Nguyen, Tran, Le, Pham, Hoang, Huynh, Phan, Vu, Vo, Dang.
-- **Roles**: Giam doc (Director), Ke toan (Accountant), Nhan vien (Staff), Quan ly (Manager).
+- **Cities**: 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng', 'Bình Dương', 'Đồng Nai'.
+- **Common Names**: Nguyễn Văn A, Trần Thị B, Lê Văn C, Phạm Minh D.
+- **Roles**: Giám đốc, Kế toán trưởng, Nhân viên bán hàng, Quản lý kho, Chuyên viên IT.
 
 ### RESPONSE RULES
 1. Output **ONLY** the raw SQL query. Do not use markdown blocks.
