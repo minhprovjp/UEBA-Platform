@@ -11,7 +11,17 @@ import sys
 import threading
 import uuid
 import mysql.connector
+import signal
+import re  # [NEW] For regex
 from datetime import datetime, timedelta
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+import colorama
+from colorama import Fore, Style
+
+# Initialize colorama
+colorama.init()
 from concurrent.futures import ThreadPoolExecutor
 
 from agents_enhanced import EnhancedEmployeeAgent, EnhancedMaliciousAgent
@@ -22,6 +32,7 @@ from obfuscator import SQLObfuscator
 from enriched_sql_library import EnrichedSQLLibrary  # NEW: Fixed enhanced query library
 from enhanced_scenarios import EnhancedScenarioManager  # NEW: Structured attack scenarios
 from enhanced_scheduler import EnhancedSimulationScheduler  # NEW: Advanced scheduling
+from dynamic_sql_generation.generator import DynamicSQLGenerator  # NEW: Advanced Dynamic Generator
 
 # --- CẤU HÌNH TURBO (Enhanced for all users) ---
 NUM_THREADS = 20           # Increased threads to handle more users
@@ -260,6 +271,10 @@ class EnhancedSQLGenerator:
     def __init__(self, db_state=None):
         self.sql_library = EnrichedSQLLibrary()
         self.translator = EnhancedSQLTranslator(db_state)
+        # Initialize the advanced dynamic generator
+        # Pass None for executor initially as we don't have it here yet, or if we do, pass it.
+        # Ideally we'd pass the executor if we want real-time DB state sync, but for now we'll rely on db_state dict.
+        self.dynamic_generator = DynamicSQLGenerator(executor=None) 
         self.scenario_manager = EnhancedScenarioManager(db_state)  # NEW: Scenario management
         self.query_cache = {}  # Cache queries by role and database
         self.active_scenarios = {}  # Track active attack scenarios by agent
@@ -279,6 +294,24 @@ class EnhancedSQLGenerator:
         action = intent.get('action', 'SELECT')
         target_database = intent.get('target_database', 'sales_db')
         
+        # Try using the advanced DynamicSQLGenerator first
+        try:
+            # Prepare context-like intent explicitly if needed, but the generator handles raw intent dicts well
+            result = self.dynamic_generator.generate_query(intent)
+            
+            if result and result.query:
+                # Capture metadata to pass to executor
+                intent['complexity'] = result.complexity_level.name if hasattr(result.complexity_level, 'name') else str(result.complexity_level)
+                intent['global_strategy'] = result.generation_strategy
+                
+                return result.query
+        except Exception as e:
+            # Fall back to translator or library if dynamic generation fails
+            print(f"[DEBUG] Dynamic generation failed for {intent.get('action')}: {e}") # Enabled logging
+            import traceback
+            traceback.print_exc()
+            pass
+
         # First try using the enhanced translator for better context-aware SQL
         try:
             sql = self.translator.translate(intent)
@@ -334,6 +367,16 @@ class EnhancedSQLGenerator:
                     self.active_scenarios[agent_id] = (scenario_name, scenario_steps, current_step + 1)
                     
                     # Generate SQL for this scenario step
+                    # Try dynamic generator first for scenarios too
+                    try:
+                        result = self.dynamic_generator.generate_query(step_intent)
+                        if result and result.query:
+                            intent['complexity'] = str(result.complexity_level)
+                            intent['global_strategy'] = f"scen:{scenario_name}:{result.generation_strategy}"
+                            return result.query
+                    except:
+                        pass
+                        
                     return self.translator.translate(step_intent)
                 else:
                     # Scenario completed, remove from active scenarios
@@ -559,14 +602,29 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                     with lock: 
                         total_queries_sent += 1
                 
-                # Enhanced logging with database context
+                # Enhanced logging with database context and colors
                 if random.random() < 0.3:
                     db_info = intent.get('target_database', 'unknown')
                     role_info = f"{agent_template.role}"
+                    
+                    # Color coding
+                    ts_color = Fore.CYAN
+                    user_color = Fore.YELLOW
+                    role_color = Fore.MAGENTA
+                    db_color = Fore.BLUE
+                    action_color = Fore.WHITE
+                    status_color = Fore.GREEN if success else Fore.RED
+                    reset = Style.RESET_ALL
+                    
                     if agent_template.is_malicious:
                         role_info += " (MALICIOUS)"
+                        role_color = Fore.RED
                     
-                    print(f"[{ts_str}] {intent['user']} ({role_info}) | {db_info} | {intent['action']} -> {'OK' if success else 'FAIL'}")
+                    print(f"{ts_color}[{ts_str}]{reset} {user_color}{intent['user']:<15}{reset} "
+                          f"{role_color}({role_info}){reset} | "
+                          f"{db_color}{db_info:<15}{reset} | "
+                          f"{action_color}{intent['action']:<20}{reset} -> "
+                          f"{status_color}{'OK' if success else 'FAIL'}{reset}")
 
             except Exception as e:
                 success = False

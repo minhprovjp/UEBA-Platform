@@ -1,0 +1,23 @@
+{
+  "standard_start_hour": 8,
+  "standard_end_hour": 17,
+  "lunch_start_hour": 12,
+  "lunch_end_hour": 13,
+  "hierarchy_importance": 0.9,
+  "seniority_respect_level": 0.9,
+  "overtime_acceptance_rate": 0.7,
+  "enable_tet_patterns": true,
+  "holiday_activity_reduction": 0.1,
+  "tet_preparation_weeks": 2,
+  "peak_season_months": [
+    6,
+    7,
+    8,
+    9
+  ],
+  "low_season_months": [
+    1,
+    2,
+    12
+  ]
+}

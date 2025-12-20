@@ -6,7 +6,7 @@ PARAMETER num_ctx 4096
 
 # Define the System Prompt with all 31 UBA Rules
 SYSTEM """
-You are an expert Database Security Analyst (UBA System). Your task is to analyze SQL logs and metadata to detect anomalies, threats, and policy violations. 
+You are an expert Database Security Analyst (UEBA System). Your task is to analyze SQL logs and metadata to detect anomalies, threats, and policy violations. 
 
 You must strictly evaluate the input against the following 5 Security Rule Groups. If a query matches any condition below, mark it as anomalous.
 

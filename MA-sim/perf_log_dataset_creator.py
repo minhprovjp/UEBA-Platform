@@ -87,34 +87,37 @@ def extract_extended_metadata(sql_text, db_user, db_host):
     meta = {
         "sim_user": db_user, 
         "sim_ip": db_host.split(':')[0], 
-        "sim_port": 0,
+        "sim_user": db_user, 
+        "sim_ip": db_host.split(':')[0], 
         "beh_type": "NORMAL", 
         "is_anomaly": 0,
         "sim_ts": None,
         "sim_prog": "Unknown",
         "sim_os": "Unknown",
         "sim_conn": "Unknown",
-        "sim_host": "Unknown"
+        "sim_host": "Unknown",
+        "sim_complexity": "unknown",
+        "sim_strategy": "unknown"
     }
     
     clean_sql = sql_text
     
     if match:
         parts = match.group(1).split('|')
-        if len(parts) >= 3:
+        if len(parts) >= 2:
             meta["sim_user"] = parts[0]
             meta["sim_ip"] = parts[1]
-            try: meta["sim_port"] = int(parts[2])
-            except: pass
             
-            for p in parts[3:]:
+            for p in parts[2:]:
                 if p.startswith("BEH:"): meta["beh_type"] = p.replace("BEH:", "")
                 if p.startswith("ANO:"): meta["is_anomaly"] = int(p.replace("ANO:", ""))
                 if p.startswith("TS:"): meta["sim_ts"] = p.replace("TS:", "")
                 if p.startswith("PROG:"): meta["sim_prog"] = p.replace("PROG:", "")
                 if p.startswith("OS:"): meta["sim_os"] = p.replace("OS:", "")
                 if p.startswith("CONN:"): meta["sim_conn"] = p.replace("CONN:", "")
-                if p.startswith("HOST:"): meta["sim_host"] = p.replace("HOST:", "")            
+                if p.startswith("HOST:"): meta["sim_host"] = p.replace("HOST:", "")
+                if p.startswith("CMP:"): meta["sim_complexity"] = p.replace("CMP:", "")
+                if p.startswith("STR:"): meta["sim_strategy"] = p.replace("STR:", "")            
             clean_sql = re.sub(pattern, "", sql_text).strip()
             
     return meta, clean_sql
@@ -181,7 +184,8 @@ def process_logs():
         "select_full_join", "select_scan", "sort_merge_passes",
         "no_index_used", "no_good_index_used",
         "connection_type",
-        "behavior_type", "is_anomaly"
+        "behavior_type", "is_anomaly",
+        "query_complexity", "generation_strategy"
     ]
     
     # Khởi tạo/Kiểm tra file CSV
@@ -205,8 +209,8 @@ def process_logs():
             e.TIMER_START, e.TIMER_END, 
             e.EVENT_ID, e.EVENT_NAME,
             e.SQL_TEXT, e.DIGEST_TEXT, e.CURRENT_SCHEMA,
-            TRUNCATE(e.TIMER_WAIT / 1000000000, 4) AS execution_time_ms,
-            TRUNCATE(e.LOCK_TIME / 1000000000, 4) AS lock_time_ms,
+            TRUNCATE(e.TIMER_WAIT / 1000000000000, 4) AS execution_time_ms,
+            TRUNCATE(e.LOCK_TIME / 1000000000000, 4) AS lock_time_ms,
             e.CPU_TIME,
             (SELECT ATTR_VALUE FROM performance_schema.session_connect_attrs a 
             WHERE a.PROCESSLIST_ID = t.PROCESSLIST_ID AND a.ATTR_NAME = 'program_name' LIMIT 1) AS program_name,
@@ -364,7 +368,9 @@ def process_logs():
                         "no_good_index_used": int(r_map['NO_GOOD_INDEX_USED'] or 0),
                         "connection_type": str(r_map['CONNECTION_TYPE'] or 'unknown'),
                         "behavior_type": meta["beh_type"],
-                        "is_anomaly": meta["is_anomaly"]
+                        "is_anomaly": meta["is_anomaly"],
+                        "query_complexity": meta["sim_complexity"],
+                        "generation_strategy": meta["sim_strategy"]
                     }
                     records.append(rec)
 

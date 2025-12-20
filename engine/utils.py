@@ -20,6 +20,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import *
 
+# Fallback configuration if not in config.py
+if 'ACTIVE_RESPONSE_AUDIT_LOG_PATH' not in globals():
+    ACTIVE_RESPONSE_AUDIT_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'logs', 'active_response_audit.log')
+    # Ensure logs directory exists
+    os.makedirs(os.path.dirname(ACTIVE_RESPONSE_AUDIT_LOG_PATH), exist_ok=True)
+
+
 # --- Import GeoIP (Xử lý nếu chưa cài thư viện) ---
 try:
     import geoip2.database

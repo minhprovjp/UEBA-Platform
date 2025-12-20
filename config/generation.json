@@ -1,0 +1,22 @@
+{
+  "max_query_complexity": 5,
+  "default_timeout_seconds": 30.0,
+  "enable_caching": true,
+  "cache_size": 1000,
+  "random_seed": null,
+  "enable_deterministic_generation": false,
+  "seed_rotation_interval": 1000,
+  "enable_vietnamese_context": true,
+  "use_cultural_constraints": true,
+  "respect_work_hours": true,
+  "apply_holiday_patterns": true,
+  "max_joins_per_query": 3,
+  "max_where_conditions": 5,
+  "enable_subqueries": true,
+  "enable_malicious_generation": false,
+  "attack_sophistication_level": 3,
+  "bypass_detection_probability": 0.3,
+  "generation_timeout_ms": 5000,
+  "max_concurrent_generations": 10,
+  "enable_performance_monitoring": true
+}

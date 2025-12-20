@@ -1,0 +1,34 @@
+{
+  "connection_timeout": 30,
+  "query_timeout": 60,
+  "max_connections": 100,
+  "database_weights": {
+    "sales_db": 0.3,
+    "hr_db": 0.15,
+    "finance_db": 0.2,
+    "marketing_db": 0.15,
+    "support_db": 0.1,
+    "inventory_db": 0.05,
+    "admin_db": 0.05
+  },
+  "table_access_patterns": {
+    "sales_db": {
+      "customers": 0.4,
+      "orders": 0.3,
+      "products": 0.3
+    },
+    "hr_db": {
+      "employees": 0.5,
+      "attendance": 0.3,
+      "salaries": 0.2
+    },
+    "finance_db": {
+      "invoices": 0.4,
+      "expenses": 0.3,
+      "accounts": 0.3
+    }
+  },
+  "enable_query_optimization": true,
+  "use_prepared_statements": true,
+  "enable_connection_pooling": true
+}

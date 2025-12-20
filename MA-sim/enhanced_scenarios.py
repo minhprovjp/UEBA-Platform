@@ -347,19 +347,31 @@ class EnhancedScenarioManager:
         })
         
         # Exfiltrate from each target database
+        # Exfiltrate from each target database
         for db in target_databases:
-            scenario.extend([
-                {
-                    "user": user, "role": "ATTACKER", "action": "DUMP_CUSTOMERS", "params": {},
+            if db == 'sales_db':
+                actions = [("DUMP_CUSTOMERS", "khách hàng"), ("DUMP_ORDERS", "đơn hàng")]
+            elif db == 'hr_db':
+                actions = [("DUMP_EMPLOYEES", "nhân viên"), ("DUMP_SALARIES", "lương")]
+            elif db == 'finance_db':
+                actions = [("DUMP_INVOICES", "hóa đơn"), ("DUMP_ACCOUNTS", "tài khoản")]
+            elif db == 'inventory_db':
+                actions = [("DUMP_INVENTORY", "kho"), ("DUMP_MOVEMENTS", "vận chuyển")]
+            elif db == 'marketing_db':
+                actions = [("DUMP_LEADS", "khách hàng tiềm năng"), ("DUMP_CAMPAIGNS", "chiến dịch")]
+            elif db == 'support_db':
+                actions = [("DUMP_TICKETS", "hỗ trợ")]
+            elif db == 'admin_db':
+                actions = [("DUMP_LOGS", "hệ thống")]
+            else:
+                actions = [("DUMP_DATA", "dữ liệu")]
+
+            for action, name in actions:
+                scenario.append({
+                    "user": user, "role": "ATTACKER", "action": action, "params": {},
                     "target_database": db, "is_anomaly": 1,
-                    "description": f"Đánh cắp dữ liệu khách hàng từ {db}"
-                },
-                {
-                    "user": user, "role": "ATTACKER", "action": "DUMP_ORDERS", "params": {},
-                    "target_database": db, "is_anomaly": 1,
-                    "description": f"Đánh cắp dữ liệu đơn hàng từ {db}"
-                }
-            ])
+                    "description": f"Đánh cắp dữ liệu {name} từ {db}"
+                })
         
         # Cover tracks
         scenario.append({
