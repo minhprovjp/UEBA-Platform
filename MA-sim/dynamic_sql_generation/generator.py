@@ -392,12 +392,12 @@ class DynamicSQLGenerator:
             
             prompt = f"Generate a {action} query for {database} database executed by {user_role}. Context: {json.dumps(intent.get('business_context', {}))}"
             
-            reasoning.append(f"Attempting AI generation with model 'seneca'")
+            reasoning.append(f"Attempting AI generation with model 'uba-sqlgen'")
             
             # Call Ollama API
             url = "http://100.92.147.73:11434/api/generate"
             payload = {
-                "model": "seneca", # Using the base model or the custom one if created
+                "model": "uba-sqlgen", # Using the base model or the custom one if created
                 "prompt": prompt,
                 "system": "You are an expert SQL Generator. Output ONLY valid SQL. No markdown.",
                 "stream": False,
