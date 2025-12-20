@@ -45,8 +45,8 @@ def generate_query(database: str, intent: str) -> str:
     if database == 'hr_db': prompt += "Table: employees. Columns: id, name, email, dept_id. "
     if database == 'sales_db': prompt += "Table: customers. Columns: customer_id, company_name, contact_person. "
     if database == 'marketing_db': prompt += "Table: campaigns. Columns: campaign_id, campaign_name, status, campaign_type. "
-    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount, account_code. "
-    if database == 'support_db': prompt += "Table: support_tickets. Columns: ticket_id, subject, status. "
+    if database == 'finance_db': prompt += "Table: invoices. Columns: invoice_id, customer_id, total_amount, status (ENUM), invoice_date. NO account_id/code columns. "
+    if database == 'support_db': prompt += "Table: support_tickets. Columns: ticket_id, subject, status (ENUM, not a table). "
     if database == 'inventory_db': prompt += "Table: inventory_levels. Columns: product_id, current_stock. "
     if database == 'admin_db': prompt += "Table: system_logs. Columns: log_id, message. "
 
