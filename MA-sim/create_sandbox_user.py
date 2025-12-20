@@ -111,13 +111,37 @@ def setup_real_users():
     print("👤 CREATING VIETNAMESE MEDIUM-SIZED SALES COMPANY USERS & PERMISSIONS...")
     conn = get_conn()
     cur = conn.cursor()
+
+    # Danh sách các user đặc biệt cần xóa (hardcoded users)
+    special_users = [
+        "nguyen_noi_bo", "thuc_tap_sinh", "khach_truy_cap", 
+        "dich_vu_he_thong", "nhan_vien_tam", "tu_van_ngoai"
+    ]
+
+    # 1. Xóa user cũ (bao gồm user tự sinh có đuôi _user, user hiện tại trong list config, và các user đặc biệt)
+    print("🧹 Đang dọn dẹp user cũ...")
     
-    # 1. Xóa user cũ (dev_user, sale_user...)
-    cur.execute("SELECT User, Host FROM mysql.user WHERE User LIKE '%_user%'")
-    for u, h in cur.fetchall(): 
-        if u not in ['root', 'mysql.session', 'mysql.sys', 'mysql.infoschema', 'uba_user']:
-            try: cur.execute(f"DROP USER '{u}'@'{h}'")
-            except: pass
+    # Lấy danh sách tất cả user trong DB để kiểm tra
+    cur.execute("SELECT User, Host FROM mysql.user")
+    all_existing_users = cur.fetchall()
+
+    for u, h in all_existing_users:
+        # Điều kiện xóa:
+        # 1. User có trong danh sách đặc biệt (special_users)
+        # 2. HOẶC User có vẻ là user được sinh ra (bạn có thể điều chỉnh logic này nếu muốn)
+        # Lưu ý: Code cũ của bạn lọc theo '%_user%', nhưng user mới sinh ra lại theo tên (vd: nguyen_van_a).
+        # Tốt nhất là xóa tất cả ngoại trừ các user hệ thống quan trọng.
+        
+        is_system_user = u in ['root', 'mysql.session', 'mysql.sys', 'mysql.infoschema', 'uba_user']
+        
+        # Nếu user nằm trong danh sách đặc biệt HOẶC không phải system user (để reset lại toàn bộ nhân viên)
+        if (u in special_users or not is_system_user):
+            try:
+                cur.execute(f"DROP USER '{u}'@'{h}'")
+                print(f"   Deleted old user: {u}")
+            except Exception as e:
+                # Bỏ qua nếu lỗi (ví dụ user đang login)
+                pass
 
     # 2. Define Vietnamese medium-sized sales company structure (80-120 employees)
     # Enhanced structure with 7-database access
