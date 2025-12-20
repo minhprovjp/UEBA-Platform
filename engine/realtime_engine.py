@@ -74,86 +74,99 @@ def ensure_group(r: Redis, stream: str, group: str):
 
 def handle_email_alerts_async(results: dict):
     """
-    Xử lý gửi email (Passive Response) tương thích với cấu trúc Rule mới.
+    Xử lý gửi email (Passive Response)
     """
     global LAST_EMAIL_SENT_TIME, PENDING_VIOLATIONS
 
-    # 1. Thu thập dữ liệu
+    # 1. Thu thập dữ liệu tóm tắt từ batch hiện tại
     current_batch_summary = []
+
     # Set để theo dõi các dòng log đã xử lý
     processed_log_indices = set()
 
-    # Hàm helper nội bộ
-    def add_violation_from_group(df, group_name_fallback):
-        if df is not None and not df.empty:
+    def add_violation_category(df, category_title):
+        if df is None or df.empty:
+            return
 
-            new_logs = df[~df.index.isin(processed_log_indices)]
-            if new_logs.empty:
-                return
-            # Cập nhật danh sách đã xử lý
-            processed_log_indices.update(new_logs.index.tolist())
+        new_logs = df[~df.index.isin(processed_log_indices)]
 
-            if 'specific_rule' in new_logs.columns:
-                grouped = new_logs.groupby('specific_rule')
-                iterator = grouped
+        if new_logs.empty:
+            return
+
+        # Cập nhật danh sách đã xử lý
+        processed_log_indices.update(new_logs.index.tolist())
+
+        # 2. Tổng hợp danh sách các Rule cụ thể đã vi phạm để đưa vào mô tả
+        specific_rules_desc = "Detected behaviors: "
+        if 'specific_rule' in new_logs.columns:
+            # Lấy danh sách các rule unique, loại bỏ None/Rỗng
+            unique_rules = new_logs['specific_rule'].dropna().unique().tolist()
+            # Làm sạch list
+            clean_rules = set()
+            for r in unique_rules:
+                if r:
+                    parts = [p.strip() for p in r.split(';')]
+                    clean_rules.update(parts)
+
+            if clean_rules:
+                specific_rules_desc += ", ".join(sorted(list(clean_rules)))
             else:
-                iterator = [(group_name_fallback, new_logs)]
+                specific_rules_desc += "General anomaly detected"
+        else:
+            specific_rules_desc += "Anomaly detected (No specific rule detail)"
 
-            for rule_name, sub_df in iterator:
-                if sub_df.empty: continue
+        # 3. Trích xuất chi tiết User/IP (Target Aggregation)
+        if 'user' in new_logs.columns and 'client_ip' in new_logs.columns:
+            users_ips = new_logs.groupby(['user', 'client_ip'], observed=True).size().reset_index().apply(
+                lambda x: f"{x['user']}@{x['client_ip']}", axis=1
+            ).unique().tolist()
+        elif 'user' in new_logs.columns:
+            users_ips = new_logs['user'].unique().tolist()
+        else:
+            users_ips = ["Unknown"]
 
-                # Trích xuất chi tiết User/IP
-                if 'user' in sub_df.columns and 'client_ip' in sub_df.columns:
-                    users_ips = sub_df.groupby(['user', 'client_ip'], observed=True).size().reset_index().apply(
-                        lambda x: f"{x['user']}@{x['client_ip']}", axis=1
-                    ).unique().tolist()
-                elif 'user' in sub_df.columns:
-                    users_ips = sub_df['user'].unique().tolist()
-                else:
-                    users_ips = ["Unknown"]
+        # 4. Xử lý thời gian (Time Range Aggregation)
+        time_col = 'start_time' if 'start_time' in new_logs.columns else 'timestamp'
+        first_time = new_logs[time_col].min()
+        last_time = new_logs[time_col].max()
 
-                # Xử lý cột thời gian (hỗ trợ cả session 'start_time' và log 'timestamp')
-                time_col = 'start_time' if 'start_time' in sub_df.columns else 'timestamp'
+        # 5. Thêm vào danh sách tóm tắt (1 Item duy nhất cho cả nhóm)
+        current_batch_summary.append({
+            'title': category_title,  # Tiêu đề nhóm (VD: TECHNICAL ATTACKS)
+            'count': len(new_logs),  # Tổng số lượng vi phạm
+            'first_time': first_time,
+            'last_time': last_time,
+            'desc': specific_rules_desc,  # Mô tả chứa danh sách các rule cụ thể
+            'targets': users_ips
+        })
 
-                # Mô tả (Description) dựa trên tên Rule
-                description = f"Detected in group {group_name_fallback}"
-                if "SQL Injection" in rule_name:
-                    description = "Contains SQL injection patterns/signatures"
-                elif "Sensitive" in rule_name:
-                    description = "Unauthorized access to sensitive tables"
-                elif "Late Night" in rule_name:
-                    description = "Activity outside allowed business hours"
-                elif "Brute-force" in rule_name:
-                    description = "Multiple failed login attempts followed by success"
-                elif "multi_table" in str(rule_name) or "Multi" in group_name_fallback:
-                    description = "Session accessing multiple distinct tables rapidly"
+    # --- THỨ TỰ GỌI (ƯU TIÊN ĐỘ NGHIÊM TRỌNG) ---
+    # 1. TECHNICAL ATTACKS
+    add_violation_category(results.get("rule_technical"), "TECHNICAL ATTACKS")
 
-                current_batch_summary.append({
-                    'title': str(rule_name),
-                    'count': len(sub_df),
-                    'first_time': sub_df[time_col].min(),
-                    'last_time': sub_df[time_col].max(),
-                    'desc': description,
-                    'targets': users_ips
-                })
-    # ORDER
-    # 1. Technical Attacks (SQLi, DoS...)
-    add_violation_from_group(results.get("rule_technical"), "Technical Attack")
+    # 2. DATA DESTRUCTION
+    add_violation_category(results.get("rule_destruction"), "DATA DESTRUCTION")
 
-    # 2. Data Destruction
-    add_violation_from_group(results.get("rule_destruction"), "Data Destruction")
+    # 3. INSIDER THREATS
+    add_violation_category(results.get("rule_insider"), "INSIDER THREATS")
 
-    # 3. Insider Threats
-    add_violation_from_group(results.get("rule_insider"), "Insider Threat")
+    # 4. ACCESS ANOMALIES
+    add_violation_category(results.get("rule_access"), "ACCESS ANOMALIES")
 
-    # 4. Access Anomalies
-    add_violation_from_group(results.get("rule_access"), "Access Anomaly")
+    # 5. MULTI-TABLE ACCESS
+    add_violation_category(results.get("rule_multi_table"), "MULTI-TABLE ACCESS")
 
-    # 5. Behavior & Multi-table
-    add_violation_from_group(results.get("rule_behavior_profile"), "Behavioral Anomaly")
-    add_violation_from_group(results.get("rule_multi_table"), "Multi-Table Scanning")
+    # 6. BEHAVIORAL ANOMALY (Profile deviation, ML)
+    add_violation_category(results.get("rule_behavior_profile"), "BEHAVIORAL ANOMALY")
 
-    # --- LOGIC GỬI THREAD GIỮ NGUYÊN ---
+    ml_df = results.get("anomalies_ml")
+    if ml_df is not None and not ml_df.empty:
+        ml_df = ml_df.copy()
+        if 'specific_rule' not in ml_df.columns:
+            ml_df['specific_rule'] = 'AI Detected Anomaly'
+        add_violation_category(ml_df, "BEHAVIORAL ANOMALY")
+
+    # --- LOGIC GỬI THREAD (GIỮ NGUYÊN) ---
     if current_batch_summary:
         PENDING_VIOLATIONS.extend(current_batch_summary)
 
