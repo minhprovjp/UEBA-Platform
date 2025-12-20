@@ -68,4 +68,5 @@ Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and
 8. If joining across databases, use fully qualified names (e.g. `sales_db.customers`). default to current database.
 9. **GROUP BY RULE**: If using GROUP BY, ALL non-aggregated columns in SELECT must be in GROUP BY.
 10. **PERMISSIONS**: Do not join tables from 'hr_db' or 'admin_db' unless the intent explicitly requires it and the user role allows it.
+11. **RESTRICTION**: Do not use LIMIT inside IN/ANY/ALL subqueries (MySQL does not support it).
 """
