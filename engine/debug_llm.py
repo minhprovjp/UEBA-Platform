@@ -17,7 +17,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - [LLM_Debugger] - %(message)s")
 log = logging.getLogger("LLM_Debugger")
 
-OLLAMA_HOST = "http://192.168.2.199:11434"
+OLLAMA_HOST = "http://100.92.147.73:11434"
 OLLAMA_MODEL = "sqlcoder"
 SRC_DIALECT = "postgres" 
 

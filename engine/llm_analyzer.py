@@ -170,7 +170,7 @@ Based on all the provided context and the query itself, perform the following an
   "is_anomalous": boolean,
   "confidence_score": float,
   "anomaly_type": "string (e.g., 'Security Vulnerability', 'Performance Issue', 'Suspicious Behavior', 'Normal Operation')",
-  "security_risk_level": "string ('None', 'Low', 'Medium', 'High', 'Critical')",
+  "risk_level": "string ('None', 'Low', 'Medium', 'High', 'Critical')",
   "performance_impact": "string ('None', 'Low', 'Medium', 'High')",
   "summary": "A one-sentence, non-technical summary of your finding.",
   "detailed_analysis": "A detailed, technical explanation of WHY you reached your conclusion, referencing the context provided and the query structure.",
@@ -224,7 +224,7 @@ Review the preliminary analysis critically. Your task is to produce a definitive
 1.  **Policy Violation Check:** Explicitly state which policies (if any) this query violates.
 2. **Re-evaluate is_anomalous flag:** Do you agree with the initial assessment? Correct it if it's a false positive or false negative.
 3. **Challenge anomaly_type:** Is the initial classification correct? Be more specific. Could it be a combination of types (e.g., both a 'Performance Issue' and 'Suspicious Behavior')?
-4. **Refine security_risk_level:** Is the risk level appropriate? A SELECT * on a public table is 'Low' risk, but on a customers table, it's 'High'.
+4. **Refine risk_level:** Is the risk level appropriate? A SELECT * on a public table is 'Low' risk, but on a customers table, it's 'High'.
 5. **Deepen detailed_analysis:** Go beyond the obvious. Explain why it's a risk. Instead of "SQL Injection possible," say "The query contains a classic '1'='1' tautology, a textbook SQL injection pattern designed to bypass authentication."
 6. **Strengthen recommendation:** Make it more specific and actionable. Instead of "Check with user," suggest "Immediately contact user '{anomaly_row.get('user', 'N/A')}' to verify business purpose. If unverified, consider temporarily disabling the account and review all recent activity from IP '{anomaly_row.get('client_ip', 'N/A')}'."
 7. **Update confidence_score:** Your confidence in THIS (your final) analysis.
@@ -257,7 +257,7 @@ Final Output: Return ONLY the refined JSON object in the same, original format. 
                 "detailed_analysis": f"Internal Error: {str(e)}",
                 "is_anomalous": False,
                 "confidence_score": 0.0,
-                "security_risk_level": "Unknown",
+                "risk_level": "Unknown",
                 "recommendation": "Check backend logs."
             }
         }
@@ -340,7 +340,7 @@ You are a Database Security Intelligence Analyst. Your task is to analyze a stat
   "is_threatening_behavior": boolean, 
   "confidence_score": float,
   "behavior_type": "string (e.g., 'Data Reconnaissance', 'Complex Reporting/Analytics', 'ETL Process', 'Suspicious Probing')",
-  "detailed_analysis": "Your detailed reasoning. Explain how the statistical profile led to your conclusion. For example: 'The high number of SELECT queries combined with access to unrelated tables like 'users', 'system_config', and 'product_logs' strongly suggests a reconnaissance attempt to map the database schema.'",
+  "reasoning": "Your detailed reasoning. Explain how the statistical profile led to your conclusion. For example: 'The high number of SELECT queries combined with access to unrelated tables like 'users', 'system_config', and 'product_logs' strongly suggests a reconnaissance attempt to map the database schema.'",
   "recommendation": "Actionable advice for the security team based on this profile."
 }}
 """

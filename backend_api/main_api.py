@@ -820,7 +820,7 @@ def analyze_anomaly_with_llm_endpoint(
                 "is_anomalous": False,
                 "confidence_score": 0.0,
                 "recommendation": "Check backend logs.",
-                "security_risk_level": "Unknown"
+                "risk_level": "Unknown"
             }
         }
 
