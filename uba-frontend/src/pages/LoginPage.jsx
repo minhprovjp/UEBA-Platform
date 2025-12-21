@@ -13,7 +13,7 @@ export default function LoginPage({ onLoginSuccess }) {
   const { t } = useTranslation();
 
   const handleLogin = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     setLoading(true);
     
     try {
@@ -32,7 +32,59 @@ export default function LoginPage({ onLoginSuccess }) {
       onLoginSuccess();
       
     } catch (error) {
-      toast.error(t('login.failed'));
+      console.error("Full Login Error Object:", error);
+
+      let errorMessage = "";
+
+      // -----------------------------------------------------------
+      // CASE 1: SERVER RESPONDED (Error 4xx, 5xx)
+      // -----------------------------------------------------------
+      if (error.response) {
+        // Priority 1: Get specific message from Backend (e.g., "Incorrect username or password")
+        const serverMessage = error.response.data?.detail;
+
+        if (serverMessage) {
+            if (typeof serverMessage === 'object' && Array.isArray(serverMessage)) {
+                // Handle validation errors (array of objects)
+                errorMessage = serverMessage.map(err => err.msg).join(', ');
+            } else {
+                errorMessage = serverMessage; 
+            }
+        } 
+        // Priority 2: Guess based on status code
+        else if (error.response.status === 401) {
+            errorMessage = "Invalid credentials (401).";
+        } else if (error.response.status === 500) {
+            errorMessage = "Internal Server Error (500). Please check backend logs.";
+        } else if (error.response.status === 404) {
+            errorMessage = "Login API endpoint not found (404).";
+        } else {
+            errorMessage = `Server Error: ${error.response.status} ${error.response.statusText}`;
+        }
+      } 
+      
+      // -----------------------------------------------------------
+      // CASE 2: NO RESPONSE (Server down, Network error)
+      // -----------------------------------------------------------
+      else if (error.request) {
+        if (error.code === 'ERR_NETWORK') {
+            errorMessage = "Cannot connect to Server!";
+        } else if (error.code === 'ECONNABORTED') {
+            errorMessage = "Connection timed out. Server took too long to respond.";
+        } else {
+            errorMessage = "Network Error. No response received from server.";
+        }
+      } 
+      
+      // -----------------------------------------------------------
+      // CASE 3: REQUEST SETUP ERROR
+      // -----------------------------------------------------------
+      else {
+        errorMessage = `Client Error: ${error.message}`;
+      }
+
+      // Display the final English error message
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }

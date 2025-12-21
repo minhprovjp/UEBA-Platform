@@ -886,7 +886,7 @@ def check_data_destruction(df, rule_config):
     
     # Rule 26. Old Data Modification (Sửa dữ liệu cũ)
     idx_old_data = []
-    old_data_access = df[df['query'].str.contains("2019|2020|2021|2022|2023|2024", regex=True, na=False)]
+    old_data_access = df[df['query'].str.contains("2019|2020|2021", regex=True, na=False)]
     idx_old_data.extend(old_data_access.index.tolist())
     if idx_old_data: anomalies['Old Data Modification'] = list(set(idx_old_data))
 

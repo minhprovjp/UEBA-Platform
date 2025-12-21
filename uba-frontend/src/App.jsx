@@ -12,6 +12,7 @@ import SettingsPage from './pages/SettingsPage';
 import AccessControlPage from './pages/AccessControlPage';
 import SelfMonitoring from './pages/SelfMonitoring';
 import LoginPage from './pages/LoginPage';
+import { Toaster } from 'sonner'; 
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -36,7 +37,12 @@ export default function App() {
   if (isLoading) return <div className="h-screen bg-black flex items-center justify-center text-white">Loading...</div>;
 
   if (!isAuthenticated) {
-    return <LoginPage onLoginSuccess={() => setIsAuthenticated(true)} />;
+    return (
+      <>
+        <LoginPage onLoginSuccess={() => setIsAuthenticated(true)} />
+        <Toaster richColors position="top-right" />
+      </>
+    );
   }
 
   // Helper render Nav Item
@@ -64,6 +70,8 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden">
+
+      <Toaster position="top-right" richColors />
       
       {/* SIDEBAR: Width thay đổi dựa trên isCollapsed */}
       <nav 

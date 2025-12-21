@@ -188,12 +188,12 @@ export const useFeedbackMutation = () => {
   return useMutation({
     mutationFn: (payload) => apiClient.post('/api/feedback/', payload),
     onSuccess: (data) => {
-      toast.success(data.data.message || "Đã gửi feedback thành công!");
+      toast.success(data.data.message || "Feedback submitted successfully.!");
       // Tải lại dữ liệu anomalies để cập nhật (nếu cần)
       queryClient.invalidateQueries(['anomalies']); 
     },
     onError: (error) => {
-      toast.error("Gửi feedback thất bại: " + error.message);
+      toast.error("Sending feedback failed: " + error.message);
     }
   });
 };
@@ -203,10 +203,10 @@ export const useAnalyzeMutation = () => {
   return useMutation({
     mutationFn: (anomalyData) => apiClient.post('/api/llm/analyze-anomaly', anomalyData),
     onSuccess: () => {
-      toast.success("Đã gửi yêu cầu phân tích AI!");
+      toast.success("AI analysis request has been submitted!");
     },
     onError: (error) => {
-      toast.error("Phân tích AI thất bại: " + error.message);
+      toast.error("AI analysis failed: " + error.message);
     }
   });
 };
@@ -217,12 +217,12 @@ export const useUpdateConfigMutation = () => {
   return useMutation({
     mutationFn: (configData) => apiClient.put('/api/engine/config', configData),
     onSuccess: (data) => {
-      toast.success(data.data.message || "Lưu cấu hình thành công!");
+      toast.success(data.data.message || "Configuration saved successfully!");
       // Tải lại config
       queryClient.invalidateQueries(['config']);
     },
     onError: (error) => {
-      toast.error("Lưu cấu hình thất bại: " + error.message);
+      toast.error("Configuration save failed: " + error.message);
     }
   });
 };

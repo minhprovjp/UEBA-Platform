@@ -12,7 +12,7 @@ export const apiClient = axios.create({
   timeout: 120000,
 });
 
-// [NEW] Interceptor: Tự động chèn Token vào Header trước khi gửi request
+// Interceptor: Tự động chèn Token vào Header trước khi gửi request
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('uba_token');
   if (token) {
@@ -21,13 +21,20 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// [NEW] Interceptor: Nếu gặp lỗi 401 (Unauthorized), tự động đá ra Login
+// Interceptor: Nếu gặp lỗi 401 (Unauthorized), tự động đá ra Login
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      localStorage.removeItem('uba_token');
-      window.location.href = '/'; // Reload về trang chủ (sẽ bị chặn lại ở Login)
+      const requestUrl = error.config.url || '';
+      const isLoginRequest = requestUrl.includes('/api/login') || requestUrl.includes('/login');
+
+      if (!isLoginRequest) {
+          // Chỉ đá ra ngoài nếu KHÔNG PHẢI là đang đăng nhập
+          // (Ví dụ: đang xem Dashboard mà token hết hạn)
+          localStorage.removeItem('uba_token');
+          window.location.href = '/'; 
+      }
     }
     return Promise.reject(error);
   }
