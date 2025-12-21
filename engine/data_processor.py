@@ -1,12 +1,12 @@
 # UBA-PLATFORM/engine/data_processor.py
 """
 ================================================================================
-MODULE XỬ LÝ DỮ LIỆU CHÍNH (REFACTORED FOR CASCADING LOGIC)
+MODULE XỬ LÝ DỮ LIỆU CHÍNH (REFACTORED WITH PYTORCH LSTM)
 ================================================================================
 Luồng xử lý:
 1. Feature Engineering
 2. Rule-Based Detection (Lọc)
-3. ML Detection (Chạy trên log sạch)
+3. ML Detection (Chạy trên log sạch - Hybrid LSTM + LightGBM)
 4. Active Response (Tổng hợp vi phạm & Đề xuất khóa user)
 """
 
@@ -25,16 +25,14 @@ from datetime import datetime
 from pathlib import Path
 from redis import Redis
 
-# --- Tắt log rác của thư viện parser SQL ---
-logging.getLogger('sqlglot').setLevel(logging.ERROR)
+# --- Import PyTorch ---
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
-# --- Import PyOD ---
-try:
-    from pyod.models.auto_encoder import AutoEncoder
-except ImportError as e:
-    logging.warning(f"DEBUG ERROR: {e}")
-    logging.warning("PyOD/AutoEncoder not found. Install via 'pip install pyod tensorflow torch'.")
-    AutoEncoder = None
+# --- Tắt log rác ---
+logging.getLogger('sqlglot').setLevel(logging.ERROR)
 
 from sklearn.preprocessing import StandardScaler
 
@@ -62,30 +60,166 @@ CAT_MAP_PATH = os.path.join(MODELS_DIR, "cat_features_map.joblib")
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+# ==============================================================================
+# 1. CLASSES LSTM AUTOENCODER (PYTORCH)
+# ==============================================================================
+
+class LSTMAE_Module(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super(LSTMAE_Module, self).__init__()
+        # Encoder: Nén chuỗi đầu vào (batch, seq, feat) -> (batch, 1, hidden)
+        self.encoder = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+        # Decoder: Tái tạo lại chuỗi
+        self.decoder = nn.LSTM(hidden_dim, input_dim, batch_first=True)
+
+    def forward(self, x):
+        # x shape: (batch, seq_len, input_dim)
+        _, (hidden, _) = self.encoder(x)
+        # Hidden state shape: (1, batch, hidden_dim)
+        # Ta cần lặp lại hidden state này cho mỗi bước thời gian để decoder bung ra
+        # Permute -> (batch, 1, hidden) -> Repeat -> (batch, seq_len, hidden)
+        hidden_expanded = hidden.permute(1, 0, 2).repeat(1, x.size(1), 1)
+        
+        # Output shape: (batch, seq_len, input_dim)
+        output, _ = self.decoder(hidden_expanded)
+        return output
+
+class DeepLSTMAutoEncoder:
+    """
+    Wrapper class để giả lập hành vi giống PyOD (fit, predict, labels_)
+    nhưng chạy bằng PyTorch LSTM bên dưới.
+    """
+    def __init__(self, sequence_length=5, hidden_dim=64, epochs=10, contamination=0.05, batch_size=64):
+        self.seq_len = sequence_length
+        self.hidden_dim = hidden_dim
+        self.epochs = epochs
+        self.contamination = contamination
+        self.batch_size = batch_size
+        self.model = None
+        self.labels_ = None # Sẽ chứa 0 (bình thường) hoặc 1 (bất thường)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.threshold_ = 0
+
+    def _create_sequences(self, X):
+        """
+        Chuyển đổi dữ liệu 2D (Sample, Feat) thành 3D (Sample, Seq, Feat)
+        Sử dụng Sliding Window tối ưu tốc độ bằng numpy strides.
+        """
+        if len(X) <= self.seq_len:
+            return np.array([])
+        
+        # Đảm bảo dữ liệu liên tục trong bộ nhớ để tránh lỗi as_strided
+        X = np.ascontiguousarray(X)
+
+        num_samples = len(X) - self.seq_len + 1
+        sub_shape = (num_samples, self.seq_len, X.shape[1])
+        sub_strides = (X.strides[0], X.strides[0], X.strides[1])
+        
+        Xs = np.lib.stride_tricks.as_strided(
+            X,
+            shape=sub_shape,
+            strides=sub_strides,
+            writeable=False
+        )
+        
+        # Copy ra mảng mới để tách biệt bộ nhớ, tránh side-effect khi convert sang Tensor
+        return Xs.copy()
+
+    def fit(self, X):
+        # 1. Chuẩn bị dữ liệu chuỗi
+        # X ở đây kỳ vọng đã được sort theo User & Time bên ngoài
+        X_seq = self._create_sequences(X)
+        
+        if len(X_seq) == 0:
+            # Fallback nếu dữ liệu quá ít: Gán nhãn 0 hết
+            self.labels_ = np.zeros(len(X))
+            return self
+
+        self.input_dim = X_seq.shape[2]
+        
+        # Chuyển sang Tensor
+        dataset = TensorDataset(torch.tensor(X_seq, dtype=torch.float32).to(self.device))
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+
+        # 2. Khởi tạo Model
+        self.model = LSTMAE_Module(self.input_dim, self.hidden_dim).to(self.device)
+        optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        criterion = nn.MSELoss()
+
+        # 3. Training Loop
+        self.model.train()
+        for epoch in range(self.epochs):
+            for batch in dataloader:
+                batch_x = batch[0]
+                optimizer.zero_grad()
+                output = self.model(batch_x)
+                loss = criterion(output, batch_x)
+                loss.backward()
+                optimizer.step()
+
+        # 4. Tính toán Threshold (Ngưỡng) sau khi train
+        self.model.eval()
+        with torch.no_grad():
+            X_tensor = torch.tensor(X_seq, dtype=torch.float32).to(self.device)
+            reconstructions = self.model(X_tensor)
+            
+            # Tính MSE cho từng mẫu (giảm chiều seq và feat)
+            # loss shape: (batch_size, )
+            loss = torch.mean((X_tensor - reconstructions) ** 2, dim=[1, 2]).cpu().numpy()
+        
+        # Xác định ngưỡng dựa trên contamination (ví dụ top 5% lỗi cao nhất là bất thường)
+        if len(loss) > 0:
+            self.threshold_ = np.percentile(loss, 100 * (1 - self.contamination))
+            seq_labels = (loss > self.threshold_).astype(int)
+        else:
+            self.threshold_ = 0
+            seq_labels = np.array([])
+        
+        # 5. Gán nhãn (Labels)
+        # Vì tạo sequence làm mất (seq_len - 1) dòng đầu, ta cần pad thêm 0 vào đầu
+        # để độ dài labels_ khớp với độ dài X ban đầu.
+        padding = np.zeros(self.seq_len - 1, dtype=int)
+        self.labels_ = np.concatenate([padding, seq_labels])
+        
+        return self
+
+# ==============================================================================
+# 2. CONFIGURATION
+# ==============================================================================
+
 # Cấu hình tham số ML mặc định
 DEFAULT_ML_CONFIG = {
-    "min_train_size": 50,
+    "min_train_size": 100,      # Tăng lên 100 vì LSTM cần chuỗi dữ liệu
     "max_buffer_size": 5000,
     "save_interval_sec": 60,
 
-    # AutoEncoder (Tuning based on 10179 rows)
-    "ae_contamination": 0.039,  # Tỷ lệ bất thường dự kiến
+    # --- Cấu hình LSTM Autoencoder (MỚI) ---
+    "ae_contamination": 0.039,
     "ae_epochs": 20,
     "ae_batch_size": 64,
-    "ae_hidden_neurons": [64, 32, 32, 64],
+    
+    # [FIX] Số nguyên (int) thay vì list, khớp với LSTMAE_Module
+    "ae_hidden_dim": 64,       
+    
+    # [THÊM] Độ dài chuỗi quan sát
+    "ae_sequence_length": 5,   
+
     "ae_verbose": 0,
 
-    # LightGBM (Tuning for Imbalance ratio 1:30.0)
+    # --- Cấu hình LightGBM ---
     "lgb_n_estimators": 200,
     "lgb_learning_rate": 0.05,
     "lgb_num_leaves": 31,
     "lgb_max_depth": -1,
-    "lgb_scale_pos_weight": 30.03,  # Trọng số cho lớp bất thường
+    "lgb_scale_pos_weight": 30.03,
 
     "inference_quantile_threshold": 0.99,
     "inference_min_threshold": 0.75
 }
 
+# ==============================================================================
+# 3. PRODUCTION ENGINE CLASS
+# ==============================================================================
 
 class ProductionUBAEngine:
     def __init__(self, config=None):
@@ -193,9 +327,6 @@ class ProductionUBAEngine:
         if len(self.training_buffer) < self.MIN_TRAIN_SIZE:
             return False
 
-        if AutoEncoder is None:
-            return False
-
         exclude_cols = [
             'timestamp', 'event_id',
             'query', 'normalized_query', 'error_message',
@@ -207,7 +338,11 @@ class ProductionUBAEngine:
         potential_feats = self.training_buffer.select_dtypes(include=[np.number, 'category', 'object']).columns.tolist()
         self.features = [f for f in potential_feats if f not in exclude_cols]
 
-        X = self.training_buffer[self.features].copy()
+        # [FIX] QUAN TRỌNG: Sắp xếp dữ liệu theo User và Thời gian trước khi train
+        # Để LSTM học được chuỗi hành vi liền mạch của từng người
+        df_sorted = self.training_buffer.sort_values(by=['user', 'timestamp']).copy()
+
+        X = df_sorted[self.features].copy()
 
         cat_cols = ['user', 'client_ip', 'database', 'command_type']
         current_mapping = {}
@@ -229,19 +364,22 @@ class ProductionUBAEngine:
                     X_ae[col] = X_ae[col].cat.codes
 
             scaler = StandardScaler()
-            X_ae_scaled = scaler.fit_transform(X_ae)
+            # Convert sang float32 để nhẹ gánh cho PyTorch
+            X_ae_scaled = scaler.fit_transform(X_ae).astype(np.float32)
 
-            ae = AutoEncoder(
-                hidden_neuron_list=self.config["ae_hidden_neurons"],
-                epoch_num=self.config["ae_epochs"],
-                batch_size=self.config["ae_batch_size"],
+            # --- START NEW CODE: LSTM Autoencoder ---
+            ae = DeepLSTMAutoEncoder(
+                sequence_length=self.config.get("ae_sequence_length", 5),
+                hidden_dim=self.config.get("ae_hidden_dim", 64),
+                epochs=self.config.get("ae_epochs", 20),
                 contamination=self.config["ae_contamination"],
-                verbose=0,
-                random_state=42
+                batch_size=self.config.get("ae_batch_size", 64)
             )
 
+            # Fit mô hình (Hàm này đã tự xử lý chuyển đổi chuỗi 3D bên trong)
             ae.fit(X_ae_scaled)
             pseudo_labels = ae.labels_
+            # --- END NEW CODE ---
 
             lgb_model = lgb.LGBMClassifier(
                 n_estimators=self.config["lgb_n_estimators"],
@@ -254,6 +392,8 @@ class ProductionUBAEngine:
             )
 
             lgb_cat_cols = [c for c in cat_cols if c in X.columns]
+            
+            # Lưu ý: pseudo_labels được sinh ra từ X đã sort, nên X đưa vào LGBM cũng phải là X (đã sort)
             lgb_model.fit(X, pseudo_labels, categorical_feature=lgb_cat_cols)
 
             self.save_production_model(lgb_model, self.features)
@@ -261,7 +401,7 @@ class ProductionUBAEngine:
             return True
 
         except Exception as e:
-            logger.error(f"Training core failed: {e}")
+            logger.error(f"Training core failed: {e}", exc_info=True)
             return False
 
     def train_and_update(self, df_enhanced):
@@ -347,22 +487,18 @@ def _aggregate_multi_table_alerts(df_rule_multi):
     grouped = df_sorted.groupby(['user', pd.Grouper(key='timestamp', freq='5Min')], observed=False)
 
     for (user, time_window), group in grouped:
-        # Nếu nhóm này ít hơn 2 bảng thì có thể không đáng gọi là session tấn công lớn (tùy logic)
-        # Nhưng vì rule gốc đã lọc rồi, nên ta cứ aggregate hết.
         
         client_ip = 'unknown'
         if 'client_ip' in group.columns and not group['client_ip'].empty:
             client_ip = group['client_ip'].iloc[0]
 
         # Lấy danh sách bảng bị truy cập trong session này
-        # (Cần trích xuất lại tên bảng từ query vì trong df_rule_multi có thể chưa có cột clean list)
         from engine.utils import get_tables_with_sqlglot  # Import hàm này
 
         all_tables = set()
         queries_details = []
 
         for _, row in group.iterrows():
-            # Lấy tên bảng (Dùng lại hàm utils hoặc regex đơn giản để tối ưu tốc độ)
             tbls = get_tables_with_sqlglot(row['query'])
             all_tables.update(tbls)
 
@@ -398,16 +534,14 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     if input_df is None or input_df.empty:
         return {"all_logs": pd.DataFrame(), "anomalies_ml": pd.DataFrame()}
 
-    # 1. LOAD CONFIG (NGAY ĐẦU HÀM ĐỂ TRÁNH LỖI VARIABLE SCOPE)
+    # 1. LOAD CONFIG
     full_config = load_engine_config_dynamic()
     rules_json_config = full_config.get('security_rules', {})
-
-    # Merge config params (Ưu tiên config từ file JSON)
     combined_rules_config = {**(config_params or {}), **rules_json_config}
 
     df_logs = input_df.copy()
 
-    # 2. PREPROCESSING & FEATURES (Làm trên toàn bộ batch để đảm bảo tính nhất quán)
+    # 2. PREPROCESSING & FEATURES
     for col in ['rows_returned', 'rows_affected', 'execution_time_ms']:
         if col not in df_logs.columns:
             df_logs[col] = 0
@@ -425,11 +559,10 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     df_logs = df_enhanced
 
     # ==========================================================================
-    # 3. RULE-BASED DETECTION (CHẠY TRƯỚC ĐỂ LỌC)
+    # 3. RULE-BASED DETECTION
     # ==========================================================================
     logging.info("--- Phase 1: Running Rules ---")
 
-    # --- A. Các Rule Mới (Advanced) ---
     try:
         dict_access = check_access_anomalies(df_logs, combined_rules_config)
         dict_insider = check_insider_threats(df_logs, combined_rules_config)
@@ -437,7 +570,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         dict_destruction = check_data_destruction(df_logs, combined_rules_config)
         dict_multi_table = check_multi_table_anomalies(df_logs, combined_rules_config)
 
-        # Chuyển Dict thành DataFrame (Gán nhãn specific_rule)
         df_rule_access = process_rule_results(df_logs, dict_access, 'ACCESS_ANOMALY')
         df_rule_insider = process_rule_results(df_logs, dict_insider, 'INSIDER_THREAT')
         df_rule_technical = process_rule_results(df_logs, dict_technical, 'TECHNICAL_ATTACK')
@@ -448,21 +580,17 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         df_rule_access = df_rule_insider = df_rule_technical = df_rule_destruction = df_rule_multi = pd.DataFrame()
 
     anomalies_user_time = pd.DataFrame()
-    # Tính profile đơn giản
+    # Redis Profiling
     try:
         redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
-        
-        # 1. Lấy ngưỡng từ Config (Mặc định là 5 nếu không tìm thấy)
         profile_threshold = combined_rules_config.get('thresholds', {}).get('min_occurrences_threshold', 5)
 
-        # 2. KIỂM TRA (DETECTION)
         current_indices_to_check = df_logs.index.difference(
             set(df_rule_access.index).union(df_rule_insider.index).union(df_rule_technical.index)
         )
         df_to_check = df_logs.loc[current_indices_to_check]
         
         if not df_to_check.empty:
-            # Truyền profile_threshold vào hàm check
             bad_indices = check_behavior_redis(redis_client, df_to_check, min_threshold=profile_threshold)
             
             if bad_indices:
@@ -474,18 +602,15 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                     lambda x: f"Access at {x.hour}h is rare (< {profile_threshold} times in history)"
                 )
 
-        # 3. HỌC (LEARNING)
+        # Learning
         df_to_learn = df_logs[~df_logs.index.isin(df_rule_technical.index)]
         update_behavior_redis(redis_client, df_to_learn)
-        
         redis_client.close()
         
     except Exception as e:
         logging.error(f"Redis Behavioral Profiling Failed: {e}")
-        # Fallback: Nếu lỗi Redis, bỏ qua rule này, không làm crash hệ thống
         anomalies_user_time = pd.DataFrame()
 
-    # GOM TẤT CẢ LOG VI PHẠM
     rule_caught_indices = set(
         df_rule_access.index.tolist() +
         df_rule_insider.index.tolist() +
@@ -498,20 +623,19 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
     logging.info(f"Phase 1 Complete. Rules caught {len(rule_caught_indices)} logs.")
 
     # ==========================================================================
-    # 4. FILTERING & ML DETECTION (CHẠY TRÊN LOG SẠCH)
+    # 4. FILTERING & ML DETECTION
     # ==========================================================================
 
-    # Lọc bỏ log đã bị Rule bắt
     df_for_ml = df_logs[~df_logs.index.isin(rule_caught_indices)].copy()
     anomalies_ml = pd.DataFrame()
 
     if not df_for_ml.empty:
         logging.info(f"--- Phase 2: Running ML on {len(df_for_ml)} clean logs ---")
 
-        # 1. Train Background (Chỉ học trên log sạch -> Model chuẩn hơn)
+        # 1. Train Background
         uba_engine.train_and_update(df_for_ml)
 
-        # 2. Predict (Tìm unknown anomalies)
+        # 2. Predict
         if uba_engine.model and uba_engine.features:
             try:
                 X = df_for_ml.copy()
@@ -519,7 +643,6 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                     if f not in X.columns: X[f] = 0
                 X = X[uba_engine.features]
 
-                # Categorical handling
                 for col in X.columns:
                     if col in uba_engine.cat_mapping:
                         known_cats = uba_engine.cat_mapping[col]
@@ -534,12 +657,10 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                 scores = uba_engine.model.predict_proba(X)[:, 1]
                 df_for_ml['ml_anomaly_score'] = scores
 
-                # Ngưỡng động
                 q_thresh = DEFAULT_ML_CONFIG["inference_quantile_threshold"]
                 min_thresh = DEFAULT_ML_CONFIG["inference_min_threshold"]
                 threshold = max(np.quantile(scores, q_thresh), min_thresh) if len(scores) > 0 else min_thresh
 
-                # Chỉ lấy những cái vượt ngưỡng
                 anomalies_ml = df_for_ml[scores >= threshold].copy()
                 if not anomalies_ml.empty:
                     anomalies_ml['behavior_group'] = 'ML_DETECTED'
@@ -550,110 +671,72 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
         logging.info("All logs caught by Rules. Skipping ML.")
 
     # ========================================================
-    # TÍNH TOÁN AGGREGATE
+    # AGGREGATE & ACTIVE RESPONSE
     # ========================================================
     anomalies_multi_table_agg = _aggregate_multi_table_alerts(df_rule_multi)
 
-    # ========================================================
-    # CHUẨN BỊ DỮ LIỆU ACTIVE RESPONSE
-    # ========================================================
     users_to_lock_list = []
-
-    # 1. Thu thập tất cả các vi phạm từ CÁC NHÓM
     list_of_violation_dfs = []
     
     ar_config = full_config.get("active_response_config", {})
     threshold = ar_config.get("max_violation_threshold", 3)
 
-    # Danh sách các DataFrame chứa vi phạm (Point-in-time)
     violation_sources = [
-        df_rule_access,
-        df_rule_insider,
-        df_rule_technical,
-        df_rule_destruction
+        df_rule_access, df_rule_insider, df_rule_technical, df_rule_destruction
     ]
 
     for df in violation_sources:
         if not df.empty and 'user' in df.columns:
-            # Lấy thêm client_ip để xử lý
             cols = ['user']
             if 'client_ip' in df.columns: cols.append('client_ip')
             list_of_violation_dfs.append(df[cols].copy())
 
-    # Xử lý riêng cho Multi-table (Session based)
     if not anomalies_multi_table_agg.empty and 'user' in anomalies_multi_table_agg.columns:
         temp_df = anomalies_multi_table_agg[['user']].copy()
         if 'client_ip' not in temp_df.columns: temp_df['client_ip'] = 'unknown'
         list_of_violation_dfs.append(temp_df)
 
-    # 2. USER VI PHẠM NGHIÊM TRỌNG (ZERO TOLERANCE)
     critical_users = set()
-
-    # Nhóm Technical Attacks
     if not df_rule_technical.empty and 'user' in df_rule_technical.columns:
         critical_users.update(df_rule_technical['user'].unique())
-
-    # Nhóm Data Destruction
     if not df_rule_destruction.empty and 'user' in df_rule_destruction.columns:
         critical_users.update(df_rule_destruction['user'].unique())
 
-
-    # 3. TỔNG HỢP VÀ RA QUYẾT ĐỊNH
     if list_of_violation_dfs:
         all_violations_df = pd.concat(list_of_violation_dfs, ignore_index=True)
-
-        # Đếm tổng số vi phạm của mỗi user
         user_violation_counts = all_violations_df.groupby('user', observed=False).size().reset_index(
             name='total_violation_count')
 
-        # --- LOGIC QUYẾT ĐỊNH KHÓA ---
         offenders = user_violation_counts[
             (user_violation_counts['total_violation_count'] >= threshold) |
             (user_violation_counts['user'].isin(critical_users))
             ].copy()
-        # Đánh dấu lý do
+        
         def get_lock_reason(row):
             if row['user'] in critical_users:
                 return f"CRITICAL VIOLATION (Zero Tolerance) - Count: {row['total_violation_count']}"
             return f"Threshold Exceeded - Count: {row['total_violation_count']}"
 
         if not offenders.empty:
-            # Thêm cột lý do cụ thể
             offenders['lock_reason'] = offenders.apply(get_lock_reason, axis=1)
-
-            # Chuyển thành list dictionary
             users_to_lock_list = offenders.to_dict('records')
 
-
     # ========================================================
-    # CẬP NHẬT LẠI THÔNG TIN RULE VÀO LOG TỔNG (df_logs)
-    # Để Log Explorer hiển thị được tên Rule
+    # UPDATE LOGS & RETURN
     # ========================================================
-    
-    # 1. Danh sách các DataFrame chứa kết quả Rule
     detection_sources = [
-        df_rule_access,
-        df_rule_insider,
-        df_rule_technical,
-        df_rule_destruction,
-        df_rule_multi,
-        anomalies_user_time, 
-        anomalies_ml
+        df_rule_access, df_rule_insider, df_rule_technical,
+        df_rule_destruction, df_rule_multi, anomalies_user_time, anomalies_ml
     ]
 
-    # 2. Đảm bảo cột ghi lý do tồn tại trong df_logs
     if 'unusual_activity_reason' not in df_logs.columns:
         df_logs['unusual_activity_reason'] = None
     
-    # 3. Duyệt qua từng nguồn phát hiện và cập nhật vào df_logs
     for source_df in detection_sources:
         if source_df is not None and not source_df.empty:
-            # Chỉ lấy các index có trong df_logs (để an toàn)
             common_indices = source_df.index.intersection(df_logs.index)
             
             if not common_indices.empty:
-                # Lấy tên rule từ cột 'specific_rule' hoặc 'anomaly_type'
-                # Ưu tiên 'specific_rule' (do hàm process_rule_results tạo ra)
                 if 'specific_rule' in source_df.columns:
                     rule_series = source_df.loc[common_indices, 'specific_rule']
                 elif 'behavior_group' in source_df.columns:
@@ -661,51 +744,31 @@ def load_and_process_data(input_df: pd.DataFrame, config_params: dict) -> dict:
                 else:
                     rule_series = pd.Series("Detected by System", index=common_indices)
 
-                # Cập nhật vào df_logs
-                # Lưu ý: Nếu 1 log dính nhiều rule, code này sẽ ghi đè rule cuối cùng (hoặc bạn có thể nối chuỗi)
                 df_logs.loc[common_indices, 'unusual_activity_reason'] = rule_series
                 df_logs.loc[common_indices, 'is_anomaly'] = 1
 
-    # ========================================================
-    # TỔNG HỢP KẾT QUẢ CUỐI CÙNG
-    # ========================================================
-    # Tổng hợp toàn bộ index bất thường (Rule + ML)
     all_anomalous_indices = rule_caught_indices.union(set(anomalies_ml.index.tolist()))
-
-    # Log bình thường = Không dính Rule VÀ Không dính ML
     normal_activities = df_logs[~df_logs.index.isin(all_anomalous_indices)].copy()
 
-    # Mapping kết quả trả về
     results = {
         "all_logs": df_logs,
-
-        # ML
         "anomalies_ml": anomalies_ml,
-
-        # Rule
         "rule_access": df_rule_access,
         "rule_insider": df_rule_insider,
         "rule_technical": df_rule_technical,
         "rule_destruction": df_rule_destruction,
         "rule_behavior_profile": anomalies_user_time,
-
-        # Rule (Session Level)
         "rule_multi_table": anomalies_multi_table_agg,
-
-        # Active Response Data
-        "users_to_lock": users_to_lock_list,  # List [{'user': 'abc', 'total_violation_count': 5}]
-
+        "users_to_lock": users_to_lock_list,
         "normal_activities": normal_activities,
     }
 
     logging.info(f"Processing complete. Rules: {len(rule_caught_indices)}, ML: {len(anomalies_ml)}")
     return results
 
-
 # --------------------------- Model I/O ---------------------------
 def save_model_and_scaler(model, scaler, path):
     joblib.dump({'model': model, 'scaler': scaler}, path)
-
 
 def load_model_and_scaler(path):
     if os.path.exists(path):
