@@ -55,11 +55,6 @@ DATABASE: admin_db
   - TABLE system_logs: log_id (INT), log_level (enum('info','warning','error','critical')), module (VARCHAR), message (TEXT), user_id (VARCHAR), ip_address (VARCHAR), created_at (TIMESTAMP)
   - TABLE user_sessions: session_id (VARCHAR), user_id (VARCHAR), ip_address (VARCHAR), user_agent (TEXT), login_time (TIMESTAMP), last_activity (TIMESTAMP), is_active (INT)
 
-### VIETNAMESE BUSINESS CONTEXT
-- **Cities**: 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng', 'Bình Dương', 'Đồng Nai'.
-- **Common Names**: Nguyễn Văn A, Trần Thị B, Lê Văn C, Phạm Minh D.
-- **Roles**: Giám đốc, Kế toán trưởng, Nhân viên bán hàng, Quản lý kho, Chuyên viên IT.
-
 ### RESPONSE RULES
 1. Output **ONLY** the raw SQL query. Do not use markdown blocks.
 2. The query must be syntactically valid MySQL.

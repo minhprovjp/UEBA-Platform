@@ -54,6 +54,70 @@ def dry_run_query(query: str, database: str) -> bool:
             conn.rollback() # Double safety
             conn.close()
 
+def fetch_valid_values() -> Dict[str, str]:
+    """
+    Fetches a sample of valid IDs and names from the DB to guide the LLM.
+    Returns a dictionary of context strings per database.
+    """
+    context_map = {}
+    conn = None
+    try:
+        config = DB_CONFIG.copy()
+        # Connect to sales_db first as it has core data
+        config["database"] = "sales_db" 
+        conn = mysql.connector.connect(**config)
+        cursor = conn.cursor()
+
+        # Sales Context
+        cursor.execute("SELECT customer_id FROM sales_db.customers LIMIT 20")
+        cust_ids = [str(r[0]) for r in cursor.fetchall()]
+        
+        cursor.execute("SELECT product_id, product_name FROM sales_db.products LIMIT 20")
+        prod_data = cursor.fetchall()
+        prod_ids = [str(r[0]) for r in prod_data]
+        # product_names = [r[1] for r in prod_data] # useful? maybe simple lists are better
+
+        cursor.execute("SELECT order_id FROM sales_db.orders LIMIT 20")
+        order_ids = [str(r[0]) for r in cursor.fetchall()]
+
+        sales_ctx = f"Valid customer_ids: {', '.join(cust_ids)}. Valid product_ids: {', '.join(prod_ids)}. Valid order_ids: {', '.join(order_ids)}."
+        context_map['sales_db'] = sales_ctx
+        context_map['finance_db'] = sales_ctx # Finance needs customers/orders too
+        context_map['inventory_db'] = f"Valid product_ids: {', '.join(prod_ids)}."
+
+        # Marketing Context
+        cursor.execute("SELECT lead_id FROM marketing_db.leads LIMIT 20")
+        lead_ids = [str(r[0]) for r in cursor.fetchall()]
+        
+        cursor.execute("SELECT campaign_id FROM marketing_db.campaigns LIMIT 10")
+        camp_ids = [str(r[0]) for r in cursor.fetchall()]
+        
+        marketing_ctx = f"Valid lead_ids: {', '.join(lead_ids)}. Valid campaign_ids: {', '.join(camp_ids)}."
+        context_map['marketing_db'] = marketing_ctx
+
+        # Support Context
+        cursor.execute("SELECT ticket_id FROM support_db.support_tickets LIMIT 20")
+        ticket_ids = [str(r[0]) for r in cursor.fetchall()]
+        context_map['support_db'] = f"Valid ticket_ids: {', '.join(ticket_ids)}. Valid customer_ids: {', '.join(cust_ids)}."
+
+        # HR Context
+        cursor.execute("SELECT employee_id FROM hr_db.employees LIMIT 20")
+        emp_ids = [str(r[0]) for r in cursor.fetchall()]
+        context_map['hr_db'] = f"Valid employee_ids: {', '.join(emp_ids)}."
+        
+        # Admin Context
+        context_map['admin_db'] = "Valid log_ids: 1, 2, 3... (assume exists)."
+
+        print("✅ Fetched valid DB values for context.")
+        return context_map
+
+    except Exception as e:
+        print(f"⚠️ Could not fetch valid values: {e}")
+        return {}
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
+
 # CONFIG
 OLLAMA_URL = "http://100.92.147.73:11434/api/generate"
 MODEL = "uba-sqlgen"
@@ -85,11 +149,14 @@ TARGETS = {
     ]
 }
 
-def generate_query(database: str, intent: str) -> str:
+def generate_query(database: str, intent: str, context_data: str = "") -> str:
     prompt = f"Generate a MySQL query for {database}. "
     prompt += f"Intent: {intent}. "
     prompt += "Use valid schema. "
     
+    if context_data:
+        prompt += f"DATA CONTEXT: {context_data} "
+
     # Specific Schema hints to guide the model (Lightweight context)
     if database == 'hr_db': prompt += "Table: employees. Columns: id, name, email, dept_id. Table: departments. Column: dept_name (NOT department_name). "
     if database == 'sales_db': 
@@ -118,7 +185,7 @@ def generate_query(database: str, intent: str) -> str:
 
     if database == 'admin_db': prompt += "Table: system_logs. Columns: log_id, message. Table: user_sessions. "
 
-    prompt += "Return ONLY the SQL query, no markdown. Ends with semicolon. NO LIMIT inside IN() subqueries. NO '[database name]' placeholders."
+    prompt += "Return ONLY the SQL query, no markdown. Ends with semicolon. NO LIMIT inside IN() subqueries. NO '[database name]' placeholders. Use the DATA CONTEXT IDs for filtering."
 
     try:
         response = requests.post(
@@ -200,6 +267,10 @@ def validate_query(query: str, database: str) -> bool:
 def main():
     print("🚀 Starting Offline AI SQL Generation...")
     
+    # Pre-fetch valid IDs for context
+    print("🔍 Fetching valid context data from live DB...")
+    db_context_map = fetch_valid_values()
+
     # Load existing pool if available
     pool = {}
     total_existing = 0
@@ -224,6 +295,10 @@ def main():
             pool[db] = {}
             
         print(f"\n📂 Database: {db}")
+        
+        # Get context for this DB
+        current_context = db_context_map.get(db, "")
+
         for intent in intents:
             if intent not in pool[db]:
                 pool[db][intent] = []
@@ -239,9 +314,9 @@ def main():
             # We want to reach NUM_QUERIES_PER_INTENT total
             needed = NUM_QUERIES_PER_INTENT - current_count
             
-            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < needed * 5:
+            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < needed * 3:
                 attempts += 1
-                q = generate_query(db, intent)
+                q = generate_query(db, intent, current_context)
                 if q and validate_query(q, db):
                     # Clean up
                     q = q.replace('```sql', '').replace('```', '').strip()
@@ -254,6 +329,8 @@ def main():
                             print(".", end="", flush=True)
                         else:
                             # print(f"Invalid SQL: {q}")
+                            # If it failed dry run, it might be due to stale ID in hallucination vs valid ID context
+                            # But with context injection, failure rate should drop
                             print("x", end="", flush=True)
                     else:
                         # Duplicate found
