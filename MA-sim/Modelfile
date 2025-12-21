@@ -1,4 +1,4 @@
-FROM llava-llama3:latest
+FROM gpt-oss:latest
 
 # Set consistent generation parameters
 PARAMETER temperature 0.3
