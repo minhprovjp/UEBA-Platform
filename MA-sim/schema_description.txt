@@ -1,16 +1,4 @@
-FROM seneca:latest
-
-# Set consistent generation parameters
-PARAMETER temperature 0.3
-PARAMETER num_ctx 4096
-PARAMETER stop "```"
-PARAMETER stop ";"
-
-SYSTEM """
-You are an expert Data Analyst and SQL Developer for the 'UEBA-Platform', a Vietnamese enterprise system.
-Your goal is to generate VALID, REALISTIC MySQL queries based on user intent and business context.
-
-### DATABASE SCHEMA
+DATABASE SCHEMA:
 
 DATABASE: sales_db
   - TABLE customer_contacts: contact_id (INT), customer_id (INT), contact_name (VARCHAR), position (VARCHAR), email (VARCHAR), phone (VARCHAR), is_primary (INT)
@@ -20,11 +8,15 @@ DATABASE: sales_db
   - TABLE orders: order_id (INT), order_number (VARCHAR), customer_id (INT), order_date (DATE), delivery_date (DATE), subtotal (DECIMAL), tax_amount (DECIMAL), discount_amount (DECIMAL), total_amount (DECIMAL), status (enum('draft','confirmed','processing','shipped','delivered','cancelled')), payment_status (enum('pending','partial','paid','overdue')), sales_person (VARCHAR), notes (TEXT), created_at (TIMESTAMP), updated_at (TIMESTAMP)
   - TABLE product_categories: category_id (INT), category_name (VARCHAR), parent_category_id (INT), description (TEXT), created_at (TIMESTAMP)
   - TABLE products: product_id (INT), product_name (VARCHAR), category_id (INT), sku (VARCHAR), price (DECIMAL), cost_price (DECIMAL), supplier_name (VARCHAR), description (TEXT), status (enum('active','inactive','discontinued')), created_at (TIMESTAMP), updated_at (TIMESTAMP)
+  - TABLE view_order: customer_id (INT), company_name (VARCHAR), contact_person (VARCHAR)
+  - TABLE view_order_details: customer_id (INT), company_name (VARCHAR), contact_person (VARCHAR)
+  - TABLE view_order_summary: customer_id (INT), order_number (VARCHAR), order_date (DATE), total_amount (DECIMAL)
 
 DATABASE: hr_db
   - TABLE attendance: record_id (INT), employee_id (INT), date (DATE), attendance_date (DATE), check_in_time (time), check_out_time (time), status (enum('present','absent','late','half_day','sick_leave','vacation')), notes (TEXT), created_at (TIMESTAMP)
   - TABLE departments: dept_id (INT), dept_name (VARCHAR), dept_code (VARCHAR), manager_id (INT), budget (DECIMAL), location (VARCHAR), created_at (TIMESTAMP)
   - TABLE employees: employee_id (INT), id (INT), name (VARCHAR), email (VARCHAR), position (VARCHAR), dept_id (INT), salary (DECIMAL), hire_date (DATE), status (enum('active','inactive','terminated')), phone (VARCHAR), address (TEXT), created_at (TIMESTAMP), updated_at (TIMESTAMP)
+  - TABLE payroll: id (INT), employee_id (INT), amount (DECIMAL), payment_date (DATE)
   - TABLE salaries: salary_id (INT), employee_id (INT), amount (DECIMAL), bonus (DECIMAL), deductions (DECIMAL), net_amount (DECIMAL), payment_date (DATE), salary_month (INT), salary_year (year), status (enum('pending','paid','cancelled')), created_at (TIMESTAMP)
 
 DATABASE: inventory_db
@@ -37,6 +29,7 @@ DATABASE: finance_db
   - TABLE accounts: account_id (INT), account_code (VARCHAR), account_name (VARCHAR), account_type (enum('asset','liability','equity','revenue','expense')), parent_account_id (INT), is_active (INT), created_at (TIMESTAMP)
   - TABLE budget_plans: budget_id (INT), department (VARCHAR), budget_year (year), budget_month (INT), category (VARCHAR), planned_amount (DECIMAL), actual_amount (DECIMAL), variance (DECIMAL), created_at (TIMESTAMP), updated_at (TIMESTAMP)
   - TABLE expense_reports: expense_id (INT), employee_id (VARCHAR), expense_date (DATE), category (enum('travel','meals','office_supplies','marketing','training','other')), amount (DECIMAL), description (TEXT), receipt_attached (INT), status (enum('draft','submitted','approved','rejected','paid')), approved_by (VARCHAR), approved_date (DATE), created_at (TIMESTAMP)
+  - TABLE expenses: id (INT), type (VARCHAR), amount (DECIMAL), approved_by (VARCHAR)
   - TABLE invoices: invoice_id (INT), invoice_number (VARCHAR), customer_id (INT), order_id (INT), invoice_date (DATE), due_date (DATE), subtotal (DECIMAL), tax_amount (DECIMAL), total_amount (DECIMAL), paid_amount (DECIMAL), balance (DECIMAL), status (enum('draft','sent','paid','overdue','cancelled')), payment_terms (INT), created_at (TIMESTAMP)
 
 DATABASE: marketing_db
@@ -47,31 +40,11 @@ DATABASE: marketing_db
 DATABASE: support_db
   - TABLE feedback: id (INT), ticket_id (INT), rating (INT), comment (TEXT)
   - TABLE knowledge_base: article_id (INT), title (VARCHAR), content (TEXT), category (VARCHAR), tags (VARCHAR), view_count (INT), is_published (INT), created_by (VARCHAR), created_at (TIMESTAMP), updated_at (TIMESTAMP)
-  - TABLE support_tickets: ticket_id (INT), ticket_number (VARCHAR), customer_id (INT), subject (VARCHAR), description (TEXT), priority (enum('low','medium','high','urgent')), status (enum('open','in_progress','waiting_customer','resolved','closed')), category (enum('technical','billing','product_info','complaint','feature_request')), assigned_to (VARCHAR), resolution (TEXT), created_at (TIMESTAMP), updated_at (TIMESTAMP), resolved_at (TIMESTAMP)
+  - TABLE support_tickets: ticket_id (INT), ticket_number (VARCHAR), customer_id (INT), subject (VARCHAR), description (TEXT), priority (enum('low','medium','high','urgent')), status (enum('open','in_progress','waiting_customer','resolved','closed')), category (enum('technical','billing','product_info','complaint','feature_request')), assigned_to (VARCHAR), created_by (VARCHAR), resolution (TEXT), created_at (TIMESTAMP), updated_at (TIMESTAMP), resolved_at (TIMESTAMP)
   - TABLE ticket_responses: response_id (INT), ticket_id (INT), response_text (TEXT), is_internal (INT), created_by (VARCHAR), created_at (TIMESTAMP)
+  - TABLE tickets: id (INT), customer_id (INT), subject (VARCHAR), status (VARCHAR), priority (VARCHAR)
 
 DATABASE: admin_db
   - TABLE report_schedules: schedule_id (INT), report_name (VARCHAR), report_type (enum('sales','inventory','financial','hr','marketing')), schedule_frequency (enum('daily','weekly','monthly','quarterly')), recipients (TEXT), parameters (json), last_run (TIMESTAMP), next_run (TIMESTAMP), is_active (INT), created_at (TIMESTAMP)
   - TABLE system_logs: log_id (INT), log_level (enum('info','warning','error','critical')), module (VARCHAR), message (TEXT), user_id (VARCHAR), ip_address (VARCHAR), created_at (TIMESTAMP)
   - TABLE user_sessions: session_id (VARCHAR), user_id (VARCHAR), ip_address (VARCHAR), user_agent (TEXT), login_time (TIMESTAMP), last_activity (TIMESTAMP), is_active (INT)
-
-### VIETNAMESE BUSINESS CONTEXT
-- **Cities**: 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ', 'Hải Phòng', 'Bình Dương', 'Đồng Nai'.
-- **Common Names**: Nguyễn Văn A, Trần Thị B, Lê Văn C, Phạm Minh D.
-- **Roles**: Giám đốc, Kế toán trưởng, Nhân viên bán hàng, Quản lý kho, Chuyên viên IT.
-
-### RESPONSE RULES
-1. Output **ONLY** the raw SQL query. Do not use markdown blocks.
-2. The query must be syntactically valid MySQL.
-3. Use specific Vietnamese values for names/cities where appropriate.
-4. Vary the structure: use aliases (e.g., `FROM customers c`), different casing, and join types.
-5. **NEVER** generate DDL commands (CREATE, ALTER, DROP, RENAME, TRUNCATE) unless explicitly asked for an 'Admin' role task. "VIEW" intents mean "SELECT * FROM ...".
-6. Do not include explanation or comments, just the SQL code.
-7. **NO HALLUCINATIONS**: Do not use tables or columns that are not listed in the schema above. 'customers' table IS ONLY IN 'sales_db'. 'invoices' has NO 'account_code'.
-8. If joining across databases, use fully qualified names (e.g. `sales_db.customers`). default to current database.
-9. **GROUP BY RULE**: If using GROUP BY, ALL non-aggregated columns in SELECT must be in GROUP BY.
-10. **PERMISSIONS**: Do not join tables from 'hr_db' or 'admin_db' unless the intent explicitly requires it and the user role allows it.
-11. **RESTRICTION**: Do not use LIMIT inside IN/ANY/ALL subqueries (MySQL does not support it).
-12. **UPDATE RULE**: Do not update a table and select from the same table in a subquery (MySQL Error 1093).
-13. **NO PLACEHOLDERS**: Do not use literal `[database name]` or similar variables.
-"""

@@ -72,11 +72,56 @@ def generate_query(database: str, intent: str) -> str:
         print(f"Error generating for {database}:{intent}: {e}")
     return None
 
+import re
+
 def validate_query(query: str, database: str) -> bool:
     if not query: return False
-    if "SELECT" not in query.upper() and "UPDATE" not in query.upper(): return False
-    if "..." in query: return False # Hallucination
-    if database == 'hr_db' and 'full_name' in query: return False # Bad schema
+    q_upper = query.upper()
+    
+    # 1. Basic SQL Validation
+    if "SELECT" not in q_upper and "UPDATE" not in q_upper: return False
+    if "..." in query: return False # Hallucination logic
+    if "[DATABASE NAME]" in q_upper: return False # Placeholder
+    
+    # 2. Reject Hyphens in Table Names (e.g. order-items)
+    # Handle backticks: `order-items`
+    if re.search(r'[`\'"]?[a-zA-Z0-9_]+-[a-zA-Z0-9_]+[`\'"]?', query):
+        return False
+
+    # 3. Reject Known Hallucinations per DB
+    if database == 'finance_db':
+        # No products or customers table in finance_db
+        if re.search(r'finance_db\.(products|customers|orders)', query, re.IGNORECASE): return False
+        if re.search(r'\b(products|customers|orders)\b', query, re.IGNORECASE) and "sales_db" not in query:
+             pass 
+
+    if database == 'support_db':
+        if "support_ticket_status" in query: return False
+        if "enum_status" in query: return False
+        if "lead_activities" in query: return False
+
+    if database == 'marketing_db':
+        if "lead_assignments" in query: return False
+        if "lead_activity" in query: return False
+
+    if database == 'sales_db':
+        if "order_item " in query: return False # Singular is wrong
+        if "ORDER_ITEM " in query: return False
+
+    # 4. Reject MySQL 1093 Pattern (Update target in FROM clause)
+    if "UPDATE" in q_upper and "SELECT" in q_upper:
+        match = re.search(r'UPDATE\s+([a-zA-Z0-9_.]+)', query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1).split('.')[-1]
+            if re.search(r'FROM\s+([a-zA-Z0-9_.]+\.)?' + re.escape(table_name) + r'\b', query, re.IGNORECASE):
+                return False
+
+    # 5. Bad Joins (heuristic)
+    # order_items does NOT have customer_id.
+    # Catch: order_items.customer_id, oi.customer_id, etc.
+    if re.search(r'\b(order_items|oi)\.customer_id\b', query, re.IGNORECASE): return False
+    if "customers.customer_id" in query and "order_items.customer_id" in query: return False
+
     return True
 
 def main():
