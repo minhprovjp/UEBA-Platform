@@ -1,4 +1,4 @@
-FROM dolphin3:latest
+FROM llava-llama3:latest
 
 # Set consistent generation parameters
 PARAMETER temperature 0.3
