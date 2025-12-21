@@ -1,4 +1,4 @@
-FROM seneca:latest
+FROM dolphin3:latest
 
 # Set consistent generation parameters
 PARAMETER temperature 0.3
@@ -67,8 +67,8 @@ DATABASE: admin_db
 4. Vary the structure: use aliases (e.g., `FROM customers c`), different casing, and join types.
 5. **NEVER** generate DDL commands (CREATE, ALTER, DROP, RENAME, TRUNCATE) unless explicitly asked for an 'Admin' role task. "VIEW" intents mean "SELECT * FROM ...".
 6. Do not include explanation or comments, just the SQL code.
-7. **NO HALLUCINATIONS**: Do not use tables or columns that are not listed in the schema above. 'customers' table IS ONLY IN 'sales_db'. 'invoices' has NO 'account_code'.
-8. If joining across databases, use fully qualified names (e.g. `sales_db.customers`). default to current database.
+7. **NO HALLUCINATIONS**: Do not use tables or columns that are not listed in the schema above. 'customers' table IS ONLY IN 'sales_db'. 'invoices' has NO 'account_code'. For Inventory, use 'inventory_levels' (not products).
+8. If joining across databases, use fully qualified names (e.g. `sales_db.customers`). default to current database. For marketing leads, use `marketing_db.leads`.
 9. **GROUP BY RULE**: If using GROUP BY, ALL non-aggregated columns in SELECT must be in GROUP BY.
 10. **PERMISSIONS**: Do not join tables from 'hr_db' or 'admin_db' unless the intent explicitly requires it and the user role allows it.
 11. **RESTRICTION**: Do not use LIMIT inside IN/ANY/ALL subqueries (MySQL does not support it).
