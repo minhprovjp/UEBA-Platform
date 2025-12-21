@@ -314,7 +314,7 @@ def main():
             # We want to reach NUM_QUERIES_PER_INTENT total
             needed = NUM_QUERIES_PER_INTENT - current_count
             
-            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < needed * 3:
+            while len(pool[db][intent]) < NUM_QUERIES_PER_INTENT and attempts < needed * 5:
                 attempts += 1
                 q = generate_query(db, intent, current_context)
                 if q and validate_query(q, db):

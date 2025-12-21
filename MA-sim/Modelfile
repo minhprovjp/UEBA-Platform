@@ -1,4 +1,4 @@
-FROM gpt-oss:latest
+FROM deepseek-coder-v2:latest
 
 # Set consistent generation parameters
 PARAMETER temperature 0.3
