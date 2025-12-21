@@ -1,4 +1,4 @@
-FROM deepseek-coder-v2:latest
+FROM Qwen3-Writer:latest
 
 # Set consistent generation parameters
 PARAMETER temperature 0.3
