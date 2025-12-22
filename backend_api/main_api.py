@@ -583,7 +583,8 @@ def list_event_anomalies(skip: int = 0, limit: int = 100,
         reason=r.reason,
         score=r.score,
         scope="log",
-        details=None
+        details=None,
+        ai_analysis=r.ai_analysis
     ) for r in rows]
 
 # --- Danh sách Aggregate-level anomalies (chuẩn paging) ---
@@ -618,7 +619,8 @@ def list_aggregate_anomalies(skip: int = 0, limit: int = 100,
         reason=r.reason,
         score=r.severity,
         scope=r.scope,
-        details=r.details
+        details=r.details,
+        ai_analysis=r.ai_analysis
     ) for r in rows]
 
 @app.get("/api/anomalies/",response_model=List[schemas.UnifiedAnomaly],tags=["Anomalies"])
@@ -651,6 +653,7 @@ def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(
                 score=a.score,
                 scope="log",
                 details=None,
+                ai_analysis=a.ai_analysis
             )
         )
 
@@ -679,6 +682,7 @@ def read_unified_anomalies(skip: int = 0,limit: int = 100,db: Session = Depends(
                 score=a.severity,
                 scope=a.scope,
                 details=a.details,
+                ai_analysis=a.ai_analysis
             )
         )
 
@@ -736,9 +740,6 @@ def analyze_anomaly_with_llm_endpoint(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """
-    Nhận thông tin và yêu cầu LLM phân tích. Hỗ trợ cả Event, Aggregate và Raw Log.
-    """
     try:
         # Load config
         engine_config = load_config()
@@ -747,44 +748,39 @@ def analyze_anomaly_with_llm_endpoint(
         
         req_id = request.id
         anomaly_data = None
+        record = None # Biến lưu object DB để update sau này
         
-        # --- LOGIC MỚI: XỬ LÝ ID TỪ NHIỀU NGUỒN KHÁC NHAU ---
-        
-        # Trường hợp 1: Raw Log từ Log Explorer (ID dạng "log-12345")
+        # --- 1. LẤY DỮ LIỆU ---
         if req_id.startswith("log-"):
+            # Log thường không lưu lại kết quả AI vào bảng logs vì quá lớn
             db_id = int(req_id.split("-")[1])
             log_record = db.query(models.AllLogs).filter(models.AllLogs.id == db_id).first()
             if log_record:
-                # Convert SQLAlchemy object to Dict
                 anomaly_data = {c.name: getattr(log_record, c.name) for c in log_record.__table__.columns}
-                # Gán type giả để AI biết đây là log thường cần rà soát
                 anomaly_data['anomaly_type'] = "Manual Investigation (Log Explorer)"
         
-        # Trường hợp 2: Event Anomaly (ID dạng "event-123")
         elif req_id.startswith("event-"):
             db_id = int(req_id.split("-")[1])
             record = db.query(models.Anomaly).filter(models.Anomaly.id == db_id).first()
             if record:
                 anomaly_data = {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
-        # Trường hợp 3: Aggregate Anomaly (ID dạng "agg-456")
         elif req_id.startswith("agg-"):
             db_id = int(req_id.split("-")[1])
             record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == db_id).first()
             if record:
                 anomaly_data = {c.name: getattr(record, c.name) for c in record.__table__.columns}
-                # Aggregate cần xử lý query đặc biệt
                 if not anomaly_data.get('query') and anomaly_data.get('details'):
                      anomaly_data['query'] = f"SESSION DATA: {str(anomaly_data['details'])[:500]}..."
 
         if not anomaly_data:
              raise HTTPException(status_code=404, detail=f"Data not found for ID: {req_id}")
 
-        # Xử lý query null
         if not anomaly_data.get('query'):
              anomaly_data['query'] = "N/A (No query provided)"
 
-        # GỌI AI PHÂN TÍCH
+        # --- 2. GỌI AI PHÂN TÍCH ---
+        print(f"Start analyzing {req_id}...")
         analysis_result = analyze_query_with_llm(
             anomaly_row=anomaly_data,
             anomaly_type_from_system=anomaly_data.get('anomaly_type', 'Unknown'),
@@ -795,24 +791,34 @@ def analyze_anomaly_with_llm_endpoint(
         if not analysis_result:
             raise ValueError("Analyzer returned None")
 
-        # [LƯU Ý] Ta không lưu kết quả phân tích của Log thường vào DB 
-        # (vì bảng AllLogs thường rất lớn và không có cột ai_analysis), chỉ trả về cho UI xem.
+        # --- 3. LƯU VÀO DB ---
+        # Logic an toàn: Ưu tiên lấy 'final_analysis', nếu không có thì lấy toàn bộ
+        data_to_save = analysis_result.get("final_analysis") or analysis_result
+        
+        # Import flag_modified để ép buộc SQLAlchemy nhận biết thay đổi trong cột JSON
+        from sqlalchemy.orm.attributes import flag_modified
+
         if req_id.startswith("event-"):
             record = db.query(models.Anomaly).filter(models.Anomaly.id == int(req_id.split("-")[1])).first()
             if record:
-                record.ai_analysis = analysis_result.get("final_analysis")
+                record.ai_analysis = data_to_save
+                flag_modified(record, "ai_analysis") # <--- QUAN TRỌNG: Đánh dấu đã sửa
                 db.commit()
+                db.refresh(record) # <--- QUAN TRỌNG: Làm tươi dữ liệu
                 
         elif req_id.startswith("agg-"):
             record = db.query(models.AggregateAnomaly).filter(models.AggregateAnomaly.id == int(req_id.split("-")[1])).first()
             if record:
-                record.ai_analysis = analysis_result.get("final_analysis")
+                record.ai_analysis = data_to_save
+                flag_modified(record, "ai_analysis") # <--- QUAN TRỌNG
                 db.commit()
+                db.refresh(record)
 
         return analysis_result
         
     except Exception as e:
-        print(f"Lỗi API AI: {str(e)}")
+        print(f"Error in AI API: {str(e)}")
+        # Trả về lỗi giả để UI không bị crash
         return {
             "final_analysis": {
                 "summary": "Analysis Process Failed",

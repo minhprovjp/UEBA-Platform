@@ -16,6 +16,7 @@ class AnomalyBase(BaseModel):
     score: Optional[float] = None
     reason: Optional[str] = None
     status: str
+    ai_analysis: Optional[Dict[str, Any]] = None
 
 # --- Schema để trả về cho người dùng ---
 # Kế thừa từ AnomalyBase và thêm các trường chỉ có sau khi đã được lưu vào CSDL (như id).

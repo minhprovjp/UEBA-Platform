@@ -64,20 +64,12 @@ export const AnomalyDetailModal = ({
       <div className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
         {/* 1. Header Cards: Risk Level & Confidence */}
         <div className="grid grid-cols-2 gap-3">
-          <div className={`p-3 rounded-lg border flex items-center justify-between ${getRiskColor(data.risk_level)}`}>
+          <div className={`p-3 rounded-lg border flex items-center justify-between ${getRiskColor(data.security_risk_level)}`}>
             <div className="flex items-center gap-2">
               <ShieldAlert className="w-4 h-4" />
               <span className="text-xs font-bold uppercase tracking-wider">{t('modal.risk_level')}</span>
             </div>
-            <span className="text-sm font-bold capitalize">{data.risk_level || 'Unknown'}</span>
-          </div>
-
-          <div className="p-3 rounded-lg border border-purple-900/30 bg-purple-900/10 text-purple-300 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4" />
-              <span className="text-xs font-bold uppercase tracking-wider">{t('modal.confidence')}</span>
-            </div>
-            <span className="text-sm font-bold">{(data.confidence_score * 100).toFixed(0)}%</span>
+            <span className="text-sm font-bold capitalize">{data.security_risk_level || 'Unknown'}</span>
           </div>
         </div>
 
