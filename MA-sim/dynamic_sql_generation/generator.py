@@ -99,10 +99,21 @@ class DynamicSQLGenerator:
         self.learned_patterns: Dict[str, QueryPattern] = {}
         self.generation_history: List[Dict[str, Any]] = []
         
-        # Performance metrics
         self.total_generations = 0
         self.successful_generations = 0
         self.fallback_usage = 0
+        
+        # ID CACHE for Template Hydration
+        self.id_cache = {
+             "customer_ids": [],
+             "product_ids": [],
+             "order_ids": [],
+             "lead_ids": [],
+             "campaign_ids": [],
+             "ticket_ids": [],
+             "employee_ids": [],
+             "invoice_ids": []
+        }
         
         # Load AI Query Pool
         self.ai_query_pool = self._load_ai_query_pool()
@@ -831,17 +842,9 @@ class DynamicSQLGenerator:
             reasoning.append("Bypassed temporal restrictions with extended date ranges")
         
         # Bypass role-based access with UNION injection disguised as business logic
-        if context.user_context.role not in ['ADMIN', 'MANAGEMENT'] and "WHERE" in enhanced_query.upper():
-            # Add UNION to access additional data sources
-            enhanced_query = enhanced_query.rstrip(';')
-            enhanced_query += """
-            UNION ALL
-            SELECT /*cross_reference_validation*/ * FROM (
-                SELECT TOP 100 * FROM employees WHERE department = 'Phòng Tài Chính'
-                UNION ALL
-                SELECT TOP 100 * FROM customers WHERE status = 'active'
-            ) AS business_validation;"""
-            reasoning.append("Added cross-reference validation bypass")
+        # [FIXED] Disabled for normal query cleanliness
+        if False and context.user_context.role not in ['ADMIN', 'MANAGEMENT'] and "WHERE" in enhanced_query.upper():
+             pass
         
         # Bypass monitoring with Vietnamese business timing patterns
         if context.temporal_context.is_lunch_break:
@@ -852,14 +855,12 @@ class DynamicSQLGenerator:
         # Bypass audit trails with legitimate batch processing patterns
         if context.business_context.current_workflow.value == 'financial_reporting':
             # Disguise as legitimate batch processing
-            enhanced_query = enhanced_query.replace("FROM", "FROM /*batch_processing_job*/")
-            reasoning.append("Disguised as legitimate batch processing")
+            # [FIXED] Removed comment injection for cleanliness
+            pass 
         
         # Bypass connection limits with connection pooling simulation
-        enhanced_query = enhanced_query.replace(
-            "SELECT",
-            "SELECT /*connection_pool_optimization*/"
-        )
+        # [FIXED] Removed unconditional comment injection
+        pass
         
         return enhanced_query
     
@@ -1460,10 +1461,64 @@ class DynamicSQLGenerator:
                      # Just a weak check, but let's trust the pool for now as it was generated for the DB
                      pass
                      
-                return query
+                # HYDRATE THE TEMPLATE
+                hydrated_query = self._hydrate_template(query)
+                return hydrated_query
         
         reasoning.append("No suitable AI query found - falling back to context-aware")
         return self._generate_context_aware_query(intent, context, reasoning)
+
+    def update_id_cache(self, new_cache: Dict[str, List[Any]]):
+        """Update the ID cache with fresh values from the database"""
+        self.logger.info(f"Updating ID Cache. Customers: {len(new_cache.get('customer_ids', []))}")
+        self.id_cache.update(new_cache)
+
+    def _hydrate_template(self, template: str) -> str:
+        """Fill values into SQL template using id_cache"""
+        if "{" not in template:
+            return template
+            
+        hydrated = template
+        
+        # Define mappings from placeholder to cache key
+        mappings = {
+            "{customer_id}": "customer_ids",
+            "{product_id}": "product_ids",
+            "{order_id}": "order_ids",
+            "{lead_id}": "lead_ids",
+            "{campaign_id}": "campaign_ids",
+            "{ticket_id}": "ticket_ids",
+            "{employee_id}": "employee_ids",
+            "{invoice_id}": "invoice_ids"
+        }
+        
+        # 1. Replace IDs
+        for placeholder, cache_key in mappings.items():
+            if placeholder in hydrated:
+                available_ids = self.id_cache.get(cache_key, [])
+                if available_ids:
+                    # Replace ALL occurrences with different random choices? 
+                    # Or same choice? Usually same choice per query is safer for consistency
+                    # But if we have "id = {id} OR id = {id}", we might want different.
+                    # For now, let's just pick one random ID per query execution for simplicity
+                    chosen_id = str(random.choice(available_ids))
+                    hydrated = hydrated.replace(placeholder, chosen_id)
+                else:
+                    # Fallback if cache empty
+                    hydrated = hydrated.replace(placeholder, "1")
+        
+        # 2. Replace Dates
+        if "{start_date}" in hydrated:
+             hydrated = hydrated.replace("{start_date}", f"{datetime.now().strftime('%Y-%m-01')}")
+        if "{end_date}" in hydrated:
+             hydrated = hydrated.replace("{end_date}", f"{datetime.now().strftime('%Y-%m-%d')}")
+             
+        # 3. Replace Status matchers
+        if "{status}" in hydrated:
+            statuses = ['active', 'pending', 'closed', 'new', 'won', 'paid']
+            hydrated = hydrated.replace("{status}", f"{random.choice(statuses)}")
+            
+        return hydrated
 
     
     def detect_apt_behavioral_patterns(self, attack_id: str) -> Dict[str, Any]:

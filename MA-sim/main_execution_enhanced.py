@@ -33,6 +33,8 @@ from enriched_sql_library import EnrichedSQLLibrary  # NEW: Fixed enhanced query
 from enhanced_scenarios import EnhancedScenarioManager  # NEW: Structured attack scenarios
 from enhanced_scheduler import EnhancedSimulationScheduler  # NEW: Advanced scheduling
 from dynamic_sql_generation.generator import DynamicSQLGenerator  # NEW: Advanced Dynamic Generator
+from query_pool_loader import QueryPoolLoader  # NEW: Pre-generated query pool integration
+from placeholder_values import fill_query_template  # NEW: Template placeholder replacement
 
 # --- CẤU HÌNH TURBO (Enhanced for all users) ---
 NUM_THREADS = 20           # Increased threads to handle more users
@@ -268,7 +270,7 @@ def configure_anomaly_scenario(scenario="balanced"):
 class EnhancedSQLGenerator:
     """Enhanced SQL generator using both enriched query library and translator"""
     
-    def __init__(self, db_state=None):
+    def __init__(self, db_state=None, query_pool=None):
         self.sql_library = EnrichedSQLLibrary()
         self.translator = EnhancedSQLTranslator(db_state)
         # Initialize the advanced dynamic generator
@@ -278,6 +280,88 @@ class EnhancedSQLGenerator:
         self.scenario_manager = EnhancedScenarioManager(db_state)  # NEW: Scenario management
         self.query_cache = {}  # Cache queries by role and database
         self.active_scenarios = {}  # Track active attack scenarios by agent
+        
+        # NEW: Query pool integration
+        self.query_pool = query_pool  # QueryPoolLoader instance
+        self.pool_hit_count = 0
+        self.pool_miss_count = 0
+        
+        # Hydrate ID cache immediately
+        self._refresh_dynamic_ids()
+
+    def _refresh_dynamic_ids(self):
+        """Fetch real IDs from the database to hydrate templates"""
+        print("🔄 Fetching active IDs from database for template hydration...")
+        id_cache = {}
+        
+        try:
+            # Connection Config (matching executor.py)
+            config = {
+                "host": "localhost",
+                "user": "root", 
+                "password": "root",
+                "connect_timeout": 5
+            }
+            
+            conn = mysql.connector.connect(**config)
+            cursor = conn.cursor()
+            
+            # 1. Fetch Customer IDs
+            try:
+                cursor.execute("SELECT customer_id FROM sales_db.customers LIMIT 100")
+                id_cache["customer_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+            
+            # 2. Fetch Product IDs
+            try:
+                cursor.execute("SELECT product_id FROM sales_db.products LIMIT 100")
+                id_cache["product_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+
+            # 3. Fetch Order IDs
+            try:
+                cursor.execute("SELECT order_id FROM sales_db.orders ORDER BY order_date DESC LIMIT 100")
+                id_cache["order_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+            
+            # 4. Fetch Employee IDs
+            try:
+                cursor.execute("SELECT employee_id FROM hr_db.employees LIMIT 50")
+                id_cache["employee_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+            
+            # 5. Fetch Campaign IDs
+            try:
+                 cursor.execute("SELECT campaign_id FROM marketing_db.campaigns LIMIT 50")
+                 id_cache["campaign_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+
+            # 6. Fetch Lead IDs
+            try:
+                 cursor.execute("SELECT lead_id FROM marketing_db.leads LIMIT 50")
+                 id_cache["lead_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+
+            # 7. Fetch Ticket IDs
+            try:
+                 cursor.execute("SELECT ticket_id FROM support_db.support_tickets LIMIT 50")
+                 id_cache["ticket_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+            
+            # 8. Fetch Invoice IDs
+            try:
+                 cursor.execute("SELECT invoice_number FROM finance_db.invoices LIMIT 50")
+                 id_cache["invoice_ids"] = [row[0] for row in cursor.fetchall()]
+            except: pass
+
+            conn.close()
+            
+            # Update the generator's cache
+            self.dynamic_generator.update_id_cache(id_cache)
+            print(f"✅ ID Cache Updated. Customers: {len(id_cache.get('customer_ids', []))}")
+            
+        except Exception as e:
+            print(f"❌ Failed to refresh IDs: {e}")
     
     def get_queries_for_role_and_database(self, role, database, complexity='ALL'):
         """Get appropriate queries for role and database combination"""
@@ -290,10 +374,29 @@ class EnhancedSQLGenerator:
         return self.query_cache[cache_key]
     
     def generate_sql_for_intent(self, intent, user_role):
-        """Generate SQL based on intent and user role using both enriched library and translator"""
+        """Generate SQL based on intent and user role using query pool first, then fallback methods"""
         action = intent.get('action', 'SELECT')
         target_database = intent.get('target_database', 'sales_db')
         
+        # NEW: Try query pool first (if available)
+        if self.query_pool and self.query_pool.loaded:
+            pool_query = self.query_pool.get_query(target_database, action)
+            if pool_query:
+                self.pool_hit_count += 1
+                # Hydrate template with actual values
+                hydrated_query = fill_query_template(pool_query)
+                # Add metadata for tracking
+                intent['source'] = 'query_pool'
+                intent['complexity'] = 'pool_generated'
+                intent['global_strategy'] = 'pre_generated_pool'
+                return hydrated_query
+            else:
+                self.pool_miss_count += 1
+                # Log miss for analysis
+                if self.pool_miss_count % 50 == 0:  # Every 50 misses
+                    print(f"\n⚠️  Query pool miss #{self.pool_miss_count}: {target_database}.{action}")
+        
+        # Fallback to dynamic generation
         # Try using the advanced DynamicSQLGenerator first
         try:
             # Prepare context-like intent explicitly if needed, but the generator handles raw intent dicts well
@@ -303,6 +406,7 @@ class EnhancedSQLGenerator:
                 # Capture metadata to pass to executor
                 intent['complexity'] = result.complexity_level.name if hasattr(result.complexity_level, 'name') else str(result.complexity_level)
                 intent['global_strategy'] = result.generation_strategy
+                intent['source'] = 'dynamic_generator'
                 
                 return result.query
         except Exception as e:
@@ -316,6 +420,7 @@ class EnhancedSQLGenerator:
         try:
             sql = self.translator.translate(intent)
             if sql and not sql.startswith("SELECT 'Missing") and not sql.startswith("SELECT 'Error"):
+                intent['source'] = 'translator'
                 return sql
         except Exception as e:
             # Fall back to library-based generation
@@ -330,9 +435,11 @@ class EnhancedSQLGenerator:
         
         if queries:
             sql = random.choice(queries)
+            intent['source'] = 'templates'
             return sql
         else:
             # Final fallback to basic safe query based on database
+            intent['source'] = 'fallback_safe'
             if target_database == 'sales_db':
                 return "SELECT COUNT(*) FROM sales_db.customers WHERE status = 'active'"
             elif target_database == 'marketing_db':
@@ -351,7 +458,72 @@ class EnhancedSQLGenerator:
                 return "SELECT 1"
     
     def generate_malicious_sql(self, attack_type='sql_injection', agent_id=None, intent=None):
-        """Generate malicious SQL using structured scenarios or fallback methods"""
+        """Generate malicious SQL using query pool first, then structured scenarios or fallback methods"""
+        
+        target_database = intent.get('target_database', 'sales_db') if intent else 'sales_db'
+        
+        # NEW: Try query pool first for attack queries
+        if self.query_pool and self.query_pool.loaded:
+            # Comprehensive mapping of attack actions to pool intent names
+            attack_intent_map = {
+                # Attack chain names
+                'sql_injection': 'SQL_INJECTION',
+                'data_exfiltration': 'DATA_EXFILTRATION',
+                'privilege_escalation': 'PRIVILEGE_ESCALATION',
+                'advanced_sqli': 'SQL_INJECTION',
+                'backdoor_creation': 'PRIVILEGE_ESCALATION',
+                
+                # Individual attack actions from attack_chains
+                'SQLI_CLASSIC': 'SQL_INJECTION',
+                'SQLI_UNION': 'UNION_ATTACK',
+                'SQLI_BLIND': 'SQL_INJECTION',
+                'DUMP_CUSTOMERS': 'DATA_EXFILTRATION',
+                'DUMP_ORDERS': 'DATA_EXFILTRATION',
+                'DUMP_EMPLOYEES': 'SALARY_DATA_THEFT' if target_database == 'hr_db' else 'DATA_EXFILTRATION',
+                'CHECK_PRIVILEGES': 'PRIVILEGE_ESCALATION',
+                'ESCALATE_PRIVS': 'PRIVILEGE_ESCALATION',
+                'ADMIN_ACCESS': 'PRIVILEGE_ESCALATION',
+                'CREATE_BACKDOOR': 'PRIVILEGE_ESCALATION',
+                'MODIFY_DATA': 'INVOICE_MANIPULATION' if target_database == 'finance_db' else 'PRICE_MANIPULATION' if target_database == 'inventory_db' else 'DATA_EXFILTRATION',
+                'COVER_TRACKS': 'LOG_TAMPERING',
+                'RECON_SCHEMA': 'PRIVILEGE_ESCALATION',
+                'ENUM_TABLES': 'UNION_ATTACK',
+                'ENUM_COLUMNS': 'UNION_ATTACK',
+                
+                # Rule-bypassing actions
+                'MALICIOUS_ACTIVITY': 'SQL_INJECTION',
+                'LUNCH_ATTACK': 'DATA_EXFILTRATION',
+                'HOLIDAY_ATTACK': 'DATA_EXFILTRATION',
+                'CROSS_SEGMENT_ATTACK': 'PRIVILEGE_ESCALATION',
+                
+                # Database-specific attacks
+                'SALARY_DATA_THEFT': 'SALARY_DATA_THEFT',
+                'EMPLOYEE_INFO_EXTRACTION': 'EMPLOYEE_INFO_EXTRACTION',
+                'CAMPAIGN_DATA_THEFT': 'CAMPAIGN_DATA_THEFT',
+                'LEAD_EXTRACTION': 'LEAD_EXTRACTION',
+                'FINANCIAL_DATA_THEFT': 'FINANCIAL_DATA_THEFT',
+                'INVOICE_MANIPULATION': 'INVOICE_MANIPULATION',
+                'TICKET_DATA_EXTRACTION': 'TICKET_DATA_EXTRACTION',
+                'STOCK_DATA_THEFT': 'STOCK_DATA_THEFT',
+                'PRICE_MANIPULATION': 'PRICE_MANIPULATION',
+                'LOG_TAMPERING': 'LOG_TAMPERING',
+                'SESSION_HIJACKING': 'SESSION_HIJACKING'
+            }
+            
+            pool_intent = attack_intent_map.get(attack_type, attack_type.upper())
+            pool_query = self.query_pool.get_query(target_database, pool_intent)
+            
+            if pool_query:
+                self.pool_hit_count += 1
+                # Hydrate template with actual values
+                hydrated_query = fill_query_template(pool_query)
+                if intent:
+                    intent['source'] = 'attack_query_pool'
+                    intent['complexity'] = 'attack_pool'
+                    intent['global_strategy'] = f'attack_pool:{pool_intent}'
+                return hydrated_query
+            else:
+                self.pool_miss_count += 1
         
         # NEW: Use structured scenarios for sophisticated attacks
         if agent_id and intent and intent.get('attack_chain'):
@@ -373,6 +545,7 @@ class EnhancedSQLGenerator:
                         if result and result.query:
                             intent['complexity'] = str(result.complexity_level)
                             intent['global_strategy'] = f"scen:{scenario_name}:{result.generation_strategy}"
+                            intent['source'] = 'scenario_dynamic'
                             return result.query
                     except:
                         pass
@@ -398,11 +571,15 @@ class EnhancedSQLGenerator:
         
         # Fallback to original malicious SQL generation
         try:
-            intent['global_strategy'] = f"malicious_template:{attack_type}"
-            intent['complexity'] = "high"
-            return self.translator._generate_malicious_sql({'attack_chain': attack_type, 'target_database': intent.get('target_database', 'sales_db')}, {})
+            if intent:
+                intent['global_strategy'] = f"malicious_template:{attack_type}"
+                intent['complexity'] = "high"
+                intent['source'] = 'malicious_translator'
+            return self.translator._generate_malicious_sql({'attack_chain': attack_type, 'target_database': target_database}, {})
         except:
-            intent['global_strategy'] = "malicious_fallback_error"
+            if intent:
+                intent['global_strategy'] = "malicious_fallback_error"
+                intent['source'] = 'malicious_fallback'
             return f"SELECT * FROM {attack_type}_attack"  # Final fallback
 
 def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
@@ -692,9 +869,30 @@ def main():
     user_config = load_enhanced_config()
     users_map = user_config.get("users", {})
     
-    # Initialize enhanced SQL generator with database state
+    # NEW: Load pre-generated query pool
+    print("\n" + "="*60)
+    print("📦 LOADING PRE-GENERATED QUERY POOL")
+    print("="*60)
+    query_pool = QueryPoolLoader()
+    pool_loaded = query_pool.load_pool("dynamic_sql_generation/ai_query_pool.json")
+    
+    if pool_loaded:
+        stats = query_pool.get_pool_stats()
+        print(f"✅ Query Pool Integration: ACTIVE")
+        print(f"   Pool coverage: {stats['coverage_percentage']:.1f}%")
+        print(f"   Missing combinations: {stats['missing_combinations']}")
+        if stats['missing_combinations'] > 0:
+            print(f"   🔄 Will fallback to dynamic generation for missing queries")
+    else:
+        print(f"⚠️  Query Pool Integration: INACTIVE")
+        print(f"   Will use dynamic generation for all queries")
+        query_pool = None
+    
+    print("="*60 + "\n")
+    
+    # Initialize enhanced SQL generator with database state and query pool
     db_state = user_config.get("db_state", {})
-    sql_generator = EnhancedSQLGenerator(db_state)
+    sql_generator = EnhancedSQLGenerator(db_state, query_pool)
     
     # NEW: Initialize enhanced scheduler for sophisticated time management
     enhanced_scheduler = None

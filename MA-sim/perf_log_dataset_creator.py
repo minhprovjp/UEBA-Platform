@@ -87,8 +87,6 @@ def extract_extended_metadata(sql_text, db_user, db_host):
     meta = {
         "sim_user": db_user, 
         "sim_ip": db_host.split(':')[0], 
-        "sim_user": db_user, 
-        "sim_ip": db_host.split(':')[0], 
         "beh_type": "NORMAL", 
         "is_anomaly": 0,
         "sim_ts": None,
