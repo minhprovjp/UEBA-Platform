@@ -17,7 +17,7 @@ MYSQL_LOG_DATABASE_URL = f"mysql+pymysql://{MYSQL_LOG_USER}:{MYSQL_LOG_PASSWORD}
 
 # Redis Configuration
 REDIS_URL = "redis://localhost:6379/0"
-REDIS_STREAM_LOGS = "mysql_logs"
+REDIS_STREAM_LOGS = "uba:logs"
 
 # Logging Configuration
 LOGS_DIR = "logs"

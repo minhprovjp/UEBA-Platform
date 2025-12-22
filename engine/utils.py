@@ -288,7 +288,7 @@ def save_logs_to_parquet(records: list) -> int:
 
         os.makedirs(STAGING_DATA_DIR, exist_ok=True)  # <-- thêm dòng này
 
-        filename = f"MYSQL_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
+        filename = f"MySQL_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}.parquet"
         file_path = os.path.join(STAGING_DATA_DIR, filename)
         df.to_parquet(file_path, engine='pyarrow', index=False)
         # logging.info(f"Đã lưu {len(df)} bản ghi từ MYSQL vào file: {filename}")
