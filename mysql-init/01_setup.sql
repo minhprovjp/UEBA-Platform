@@ -3,11 +3,18 @@
 -- ============================================================
 DROP DATABASE IF EXISTS uba_db;
 CREATE DATABASE IF NOT EXISTS uba_db CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+
+DROP USER IF EXISTS 'uba_user'@'localhost'
 -- Tạo user uba_user nếu chưa có
 CREATE USER IF NOT EXISTS 'uba_user'@'%' IDENTIFIED BY 'password';
 -- Cấp quyền đọc bảng log cho uba_user
 -- GRANT SELECT ON uba_db.* TO 'uba_user'@'localhost';
-GRANT SELECT ON uba_db.* TO 'uba_user'@'%';
+FLUSH PRIVILEGES;
+GRANT CREATE USER ON *.* TO 'uba_user'@'localhost';
+GRANT SELECT ON mysql.user TO 'uba_user'@'localhost';
+GRANT PROCESS ON *.* TO 'uba_user'@'localhost';
+GRANT CONNECTION_ADMIN ON *.* TO 'uba_user'@'localhost';
+GRANT RELOAD ON *.* TO 'uba_user'@'localhost';
 
 -- Áp dụng quyền ngay lập tức
 FLUSH PRIVILEGES;
