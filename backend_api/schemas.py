@@ -65,6 +65,7 @@ class AnomalyAnalysisRequest(BaseModel):
     reason: Optional[str] = None
     # Thêm trường này để Backend biết xử lý kiểu event hay session
     details: Optional[Dict[str, Any]] = None
+    language: Optional[str] = "en"
     
 # === THÊM SCHEMA MỚI CHO FEEDBACK ===
 class FeedbackCreate(BaseModel):

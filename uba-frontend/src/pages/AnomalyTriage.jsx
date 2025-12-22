@@ -8,7 +8,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next';
 
 export default function AnomalyTriage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   // State quản lý bộ lọc
   const [filters, setFilters] = useState({
@@ -102,7 +102,14 @@ export default function AnomalyTriage() {
   // Xử lý gọi phân tích AI
   const handleAnalyze = () => {
     if (!selectedLog) return;
-    analyzeMutation.mutate(selectedLog, {
+
+    // Tạo object dữ liệu gửi đi, kèm theo ngôn ngữ hiện tại
+    const payload = {
+      ...selectedLog,
+      language: i18n.language // Sẽ là 'vi' hoặc 'en'
+    };
+
+    analyzeMutation.mutate(payload, {
       onSuccess: (res) => {
         const data = res.data || res; 
         setSelectedLog(prev => ({

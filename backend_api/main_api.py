@@ -785,30 +785,34 @@ def analyze_anomaly_with_llm_endpoint(
         if not analysis_result:
             raise ValueError("Analyzer returned None")
 
-        try:
-            # Lấy phần data chính cần dịch
-            target_data = analysis_result.get("final_analysis")
-            
-            if target_data:
-                translator = GoogleTranslator(source='auto', target='vi')
-                
-                # Các trường cần dịch
-                fields_to_translate = ["summary", "detailed_analysis", "recommendation"]
-                
-                for field in fields_to_translate:
-                    if field in target_data and isinstance(target_data[field], str):
-                        # Thực hiện dịch
-                        translated_text = translator.translate(target_data[field])
-                        target_data[field] = translated_text
-                        
-                # Cập nhật lại vào biến chính
-                analysis_result["final_analysis"] = target_data
-                print(f"Log {req_id}: Translated AI result to Vietnamese.")
-                
-        except Exception as trans_error:
-            print(f"Translation Error (Saving English version instead): {trans_error}")
+        # --- PHẦN 3: XỬ LÝ NGÔN NGỮ ---
+        
+        # Kiểm tra ngôn ngữ yêu cầu từ Frontend
+        user_lang = request.language 
+        print(f"Request Language: {user_lang}") # Debug log
 
-        # --- 3. LƯU VÀO DB ---
+        # CHỈ DỊCH NẾU LÀ TIẾNG VIỆT ('vi')
+        if user_lang == 'vi':
+            try:
+                target_data = analysis_result.get("final_analysis")
+                if target_data:
+                    # Import ở đầu file hoặc import tại đây nếu chưa có
+                    from deep_translator import GoogleTranslator 
+                    translator = GoogleTranslator(source='auto', target='vi')
+                    
+                    fields_to_translate = ["summary", "detailed_analysis", "recommendation"]
+                    
+                    for field in fields_to_translate:
+                        if field in target_data and isinstance(target_data[field], str):
+                            translated_text = translator.translate(target_data[field])
+                            target_data[field] = translated_text
+                            
+                    analysis_result["final_analysis"] = target_data
+                    print(f"Log {request.id}: Translated to Vietnamese.")
+            except Exception as trans_error:
+                print(f"Translation Error: {trans_error}")
+
+        # --- 4. LƯU VÀO DB ---
         # Logic an toàn: Ưu tiên lấy 'final_analysis', nếu không có thì lấy toàn bộ
         data_to_save = analysis_result.get("final_analysis") or analysis_result
         
