@@ -1,0 +1,26 @@
+{
+    "behavioral_detection": {
+        "learning_window_hours": 72,
+        "min_events_for_baseline": 100,
+        "anomaly_threshold": 2.5,
+        "monitored_users": ["uba_user"],
+        "thresholds": {
+            "connection_frequency_multiplier": 4.0,
+            "session_duration_multiplier": 6.0,
+            "concurrent_session_limit": 5,
+            "query_frequency_multiplier": 5.0,
+            "new_host_risk_score": 0.6,
+            "unusual_time_risk_score": 0.4
+        },
+        "learning_phase": {
+            "enabled": true,
+            "high_confidence_only": true,
+            "min_baseline_maturity_hours": 24,
+            "min_pattern_diversity": {
+                "min_hosts": 1,
+                "min_active_hours": 2,
+                "min_commands": 1
+            }
+        }
+    }
+}

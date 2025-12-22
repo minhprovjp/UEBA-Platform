@@ -102,17 +102,28 @@ class BaselineBehavior:
     concurrent_session_threshold: int = 0
     query_frequency_threshold: float = 0.0
     
-    def is_established(self) -> bool:
-        """Check if baseline is sufficiently established"""
+    def is_established(self, min_events: int = 50) -> bool:
+        """
+        Check if baseline is sufficiently established
+        
+        Args:
+            min_events: Minimum number of events required (default: 50)
+            
+        Returns:
+            True if baseline is sufficiently established for anomaly detection
+        """
         if not self.profile_end:
             return False
         
         profile_duration = (self.profile_end - self.profile_start).total_seconds()
-        min_duration = 1 * 3600  # At least 1 hour of data (reduced for testing)
+        min_duration = 24 * 3600  # At least 24 hours of data for reliable baseline
         
+        # Require sufficient time, events, and diversity
         return (profile_duration >= min_duration and 
                 len(self.typical_hosts) > 0 and
-                self.connection_frequency_per_hour > 0)
+                self.connection_frequency_per_hour > 0 and
+                len(self.active_hours) >= 2 and  # Active in at least 2 different hours
+                len(self.typical_commands) >= 1)  # At least 1 command pattern observed
 
 
 @dataclass
@@ -172,9 +183,9 @@ class BehavioralAnomalyDetector(DetectionInterface):
         self._anomaly_lock = threading.Lock()
         
         # Learning parameters
-        self._learning_window_hours = 24  # Hours to collect baseline data
-        self._min_events_for_baseline = 50  # Minimum events needed for baseline
-        self._anomaly_threshold = 2.0  # Standard deviations for anomaly detection
+        self._learning_window_hours = 72  # Hours to collect baseline data (increased)
+        self._min_events_for_baseline = 100  # Minimum events needed for baseline (increased)
+        self._anomaly_threshold = 2.5  # Standard deviations for anomaly detection (increased)
     
     def _load_detection_config(self):
         """Load detection configuration"""
@@ -182,21 +193,21 @@ class BehavioralAnomalyDetector(DetectionInterface):
             config = self.config_manager.load_config()
             detection_config = config.get('behavioral_detection', {})
             
-            self._learning_window_hours = detection_config.get('learning_window_hours', 24)
-            self._min_events_for_baseline = detection_config.get('min_events_for_baseline', 50)
-            self._anomaly_threshold = detection_config.get('anomaly_threshold', 2.0)
+            self._learning_window_hours = detection_config.get('learning_window_hours', 72)  # Increased to 72 hours
+            self._min_events_for_baseline = detection_config.get('min_events_for_baseline', 100)  # Increased to 100 events
+            self._anomaly_threshold = detection_config.get('anomaly_threshold', 2.5)  # Increased threshold
             
             # Users to monitor
             self._monitored_users = detection_config.get('monitored_users', ['uba_user'])
             
             # Anomaly detection thresholds
             self._thresholds = detection_config.get('thresholds', {
-                'connection_frequency_multiplier': 3.0,
-                'session_duration_multiplier': 5.0,
-                'concurrent_session_limit': 3,
-                'query_frequency_multiplier': 4.0,
-                'new_host_risk_score': 0.7,
-                'unusual_time_risk_score': 0.5
+                'connection_frequency_multiplier': 4.0,  # More conservative
+                'session_duration_multiplier': 6.0,      # More conservative
+                'concurrent_session_limit': 5,           # Higher limit
+                'query_frequency_multiplier': 5.0,       # More conservative
+                'new_host_risk_score': 0.6,             # Lower initial risk
+                'unusual_time_risk_score': 0.4           # Lower initial risk
             })
             
             self.logger.info("Behavioral detection configuration loaded")
@@ -206,12 +217,12 @@ class BehavioralAnomalyDetector(DetectionInterface):
             # Use safe defaults
             self._monitored_users = ['uba_user']
             self._thresholds = {
-                'connection_frequency_multiplier': 3.0,
-                'session_duration_multiplier': 5.0,
-                'concurrent_session_limit': 3,
-                'query_frequency_multiplier': 4.0,
-                'new_host_risk_score': 0.7,
-                'unusual_time_risk_score': 0.5
+                'connection_frequency_multiplier': 4.0,
+                'session_duration_multiplier': 6.0,
+                'concurrent_session_limit': 5,
+                'query_frequency_multiplier': 5.0,
+                'new_host_risk_score': 0.6,
+                'unusual_time_risk_score': 0.4
             }
     
     def start_detection(self) -> bool:
@@ -491,12 +502,111 @@ class BehavioralAnomalyDetector(DetectionInterface):
         try:
             user = event.user_account
             
-            # Skip if no baseline established
-            if user not in self._baselines or not self._baselines[user].is_established():
+            # Skip if no baseline established or insufficient learning data
+            if user not in self._baselines:
                 return anomalies
-            
+                
             baseline = self._baselines[user]
             
+            # Check if baseline is sufficiently established
+            if not baseline.is_established():
+                return anomalies
+            
+            # Additional check: ensure we have enough events for reliable detection
+            pattern = self._connection_patterns.get(user)
+            if pattern and len(pattern.connection_times) < self._min_events_for_baseline:
+                return anomalies
+            
+            # Check baseline maturity - avoid false positives during early learning
+            profile_age_hours = (datetime.now(timezone.utc) - baseline.profile_start).total_seconds() / 3600
+            if profile_age_hours < self._learning_window_hours:
+                # During learning phase, only detect high-confidence anomalies
+                return self._detect_high_confidence_anomalies_only(event, baseline)
+            
+            # Full anomaly detection for mature baselines
+            return self._detect_all_anomalies(event, baseline)
+            
+        except Exception as e:
+            self.logger.error(f"Error analyzing event for anomalies: {e}")
+        
+        return anomalies
+    
+    def _detect_high_confidence_anomalies_only(self, event: InfrastructureEvent, 
+                                             baseline: BaselineBehavior) -> List[AnomalyDetection]:
+        """Detect only high-confidence anomalies during learning phase"""
+        anomalies = []
+        user = event.user_account
+        
+        try:
+            # Only detect severe anomalies during learning phase
+            
+            # 1. Excessive concurrent sessions (high confidence)
+            concurrent_count = self._count_concurrent_sessions(user, event.timestamp)
+            if concurrent_count > max(baseline.concurrent_session_threshold, 5):  # Higher threshold during learning
+                anomaly = AnomalyDetection(
+                    detection_id=str(uuid.uuid4()),
+                    timestamp=event.timestamp,
+                    user=user,
+                    anomaly_type="excessive_concurrent_sessions",
+                    severity=ThreatLevel.HIGH,
+                    confidence=0.9,  # High confidence
+                    baseline_value=baseline.concurrent_session_threshold,
+                    observed_value=concurrent_count,
+                    deviation_score=concurrent_count / max(baseline.concurrent_session_threshold, 1),
+                    context={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type,
+                        "max_baseline_sessions": baseline.max_concurrent_sessions,
+                        "learning_phase": True
+                    }
+                )
+                anomalies.append(anomaly)
+            
+            # 2. Connections from completely new IP ranges (high confidence)
+            if event.source_ip not in baseline.typical_hosts:
+                # Check if it's from a completely different subnet
+                event_ip_parts = event.source_ip.split('.')[:3]  # First 3 octets
+                is_new_subnet = True
+                
+                for known_host in baseline.typical_hosts:
+                    known_ip_parts = known_host.split('.')[:3]
+                    if event_ip_parts == known_ip_parts:
+                        is_new_subnet = False
+                        break
+                
+                if is_new_subnet and len(baseline.typical_hosts) >= 2:  # Only if we have established patterns
+                    anomaly = AnomalyDetection(
+                        detection_id=str(uuid.uuid4()),
+                        timestamp=event.timestamp,
+                        user=user,
+                        anomaly_type="new_subnet_connection",
+                        severity=ThreatLevel.HIGH,
+                        confidence=0.8,
+                        baseline_value=list(baseline.typical_hosts),
+                        observed_value=event.source_ip,
+                        deviation_score=1.0,
+                        context={
+                            "event_id": event.event_id,
+                            "event_type": event.event_type,
+                            "typical_hosts": list(baseline.typical_hosts),
+                            "learning_phase": True,
+                            "new_subnet": True
+                        }
+                    )
+                    anomalies.append(anomaly)
+            
+        except Exception as e:
+            self.logger.error(f"Error detecting high-confidence anomalies: {e}")
+        
+        return anomalies
+    
+    def _detect_all_anomalies(self, event: InfrastructureEvent, 
+                            baseline: BaselineBehavior) -> List[AnomalyDetection]:
+        """Detect all types of anomalies for mature baselines"""
+        anomalies = []
+        user = event.user_account
+        
+        try:
             # Check for new host anomaly
             if event.source_ip not in baseline.typical_hosts:
                 anomaly = AnomalyDetection(
@@ -589,7 +699,7 @@ class BehavioralAnomalyDetector(DetectionInterface):
                 anomalies.append(anomaly)
             
         except Exception as e:
-            self.logger.error(f"Error analyzing event for anomalies: {e}")
+            self.logger.error(f"Error detecting all anomalies: {e}")
         
         return anomalies
     
