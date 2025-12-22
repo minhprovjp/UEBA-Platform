@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, or_, text, cast, Text
 import re 
 from pathlib import Path
+from deep_translator import GoogleTranslator
 
 # Import self_monitoring router
 from . import self_monitoring_api
@@ -53,14 +54,7 @@ app = FastAPI(
 )
 
 # Cấu hình CORS (Giữ nguyên, rất quan trọng cho Frontend)
-origins = [
-    "http://localhost:5173",  # Địa chỉ của Vite React dev server
-    "http://localhost:3000",
-    "http://10.12.112.11:5173",  
-    "http://10.12.112.11:3000",
-    "http://http://100.92.147.73/:5173",  
-    "http://http://100.92.147.73/:3000",
-]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -790,6 +784,29 @@ def analyze_anomaly_with_llm_endpoint(
         
         if not analysis_result:
             raise ValueError("Analyzer returned None")
+
+        try:
+            # Lấy phần data chính cần dịch
+            target_data = analysis_result.get("final_analysis")
+            
+            if target_data:
+                translator = GoogleTranslator(source='auto', target='vi')
+                
+                # Các trường cần dịch
+                fields_to_translate = ["summary", "detailed_analysis", "recommendation"]
+                
+                for field in fields_to_translate:
+                    if field in target_data and isinstance(target_data[field], str):
+                        # Thực hiện dịch
+                        translated_text = translator.translate(target_data[field])
+                        target_data[field] = translated_text
+                        
+                # Cập nhật lại vào biến chính
+                analysis_result["final_analysis"] = target_data
+                print(f"Log {req_id}: Translated AI result to Vietnamese.")
+                
+        except Exception as trans_error:
+            print(f"Translation Error (Saving English version instead): {trans_error}")
 
         # --- 3. LƯU VÀO DB ---
         # Logic an toàn: Ưu tiên lấy 'final_analysis', nếu không có thì lấy toàn bộ

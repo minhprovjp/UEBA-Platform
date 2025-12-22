@@ -234,7 +234,7 @@ export const useAuditLogs = () => {
             const { data } = await apiClient.get('/api/system/audit-logs');
             return data;
         },
-        refetchInterval: 1000, // Tự động refresh mỗi 10s để thấy log mới nhất
+        refetchInterval: 1000, // Tự động refresh mỗi 1s để thấy log mới nhất
     });
 };
 

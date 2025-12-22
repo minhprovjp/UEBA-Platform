@@ -23,7 +23,7 @@ if not SECRET_KEY:
     raise ValueError("FATAL: SECRET_KEY chưa được cấu hình trong file .env!")
 
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 10
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login")
