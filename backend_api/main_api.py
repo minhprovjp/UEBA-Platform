@@ -27,7 +27,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from engine.config_manager import load_config, save_config
     from engine.utils import save_feedback_to_csv
-    from engine.llm_analyzer_dual import analyze_query_with_llm
+    from engine.llm_analyzer import analyze_query_with_llm
 except ImportError as e:
     print("="*50)
     print(f"LỖI IMPORT NGHIÊM TRỌNG: {e}")
@@ -820,7 +820,7 @@ def analyze_anomaly_with_llm_endpoint(
                 "is_anomalous": False,
                 "confidence_score": 0.0,
                 "recommendation": "Check backend logs.",
-                "risk_level": "Unknown"
+                "security_risk_level": "Unknown"
             }
         }
 

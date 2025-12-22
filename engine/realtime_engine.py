@@ -154,17 +154,17 @@ def handle_email_alerts_async(results: dict):
     add_violation_category(results.get("rule_access"), "ACCESS ANOMALIES")
 
     # 5. MULTI-TABLE ACCESS
-    add_violation_category(results.get("rule_multi_table"), "MULTI-TABLE ACCESS")
+    # add_violation_category(results.get("rule_multi_table"), "MULTI-TABLE ACCESS")
 
-    # 6. BEHAVIORAL ANOMALY (Profile deviation, ML)
-    add_violation_category(results.get("rule_behavior_profile"), "BEHAVIORAL ANOMALY")
+    # # 6. BEHAVIORAL ANOMALY (Profile deviation, ML)
+    # add_violation_category(results.get("rule_behavior_profile"), "BEHAVIORAL ANOMALY")
 
-    ml_df = results.get("anomalies_ml")
-    if ml_df is not None and not ml_df.empty:
-        ml_df = ml_df.copy()
-        if 'specific_rule' not in ml_df.columns:
-            ml_df['specific_rule'] = 'AI Detected Anomaly'
-        add_violation_category(ml_df, "BEHAVIORAL ANOMALY")
+    # ml_df = results.get("anomalies_ml")
+    # if ml_df is not None and not ml_df.empty:
+    #     ml_df = ml_df.copy()
+    #     if 'specific_rule' not in ml_df.columns:
+    #         ml_df['specific_rule'] = 'AI Detected Anomaly'
+    #     add_violation_category(ml_df, "BEHAVIORAL ANOMALY")
 
     # --- LOGIC GỬI THREAD (GIỮ NGUYÊN) ---
     if current_batch_summary:
