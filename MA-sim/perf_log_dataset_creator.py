@@ -182,8 +182,7 @@ def process_logs():
         "select_full_join", "select_scan", "sort_merge_passes",
         "no_index_used", "no_good_index_used",
         "connection_type",
-        "behavior_type", "is_anomaly",
-        "query_complexity", "generation_strategy"
+        "behavior_type", "is_anomaly"
     ]
     
     # Khởi tạo/Kiểm tra file CSV
@@ -366,9 +365,7 @@ def process_logs():
                         "no_good_index_used": int(r_map['NO_GOOD_INDEX_USED'] or 0),
                         "connection_type": str(r_map['CONNECTION_TYPE'] or 'unknown'),
                         "behavior_type": meta["beh_type"],
-                        "is_anomaly": meta["is_anomaly"],
-                        "query_complexity": meta["sim_complexity"],
-                        "generation_strategy": meta["sim_strategy"]
+                        "is_anomaly": meta["is_anomaly"]
                     }
                     records.append(rec)
 

@@ -288,6 +288,49 @@ class EnhancedSQLGenerator:
         
         # Hydrate ID cache immediately
         self._refresh_dynamic_ids()
+    
+    def _can_access_database(self, role, database):
+        """Check if a role has permission to access a database"""
+        allowed_databases = ROLE_DATABASE_ACCESS.get(role, [])
+        return database in allowed_databases
+    
+    def _is_cross_database_join_allowed(self, role, query):
+        """Check if a query contains cross-database JOINs that violate permissions"""
+        if not query:
+            return True
+        
+        query_upper = query.upper()
+        allowed_databases = set(ROLE_DATABASE_ACCESS.get(role, []))
+        
+        # Extract all database references from the query
+        # Pattern: database_name.table_name
+        import re
+        db_refs = re.findall(r'\b([a-z_]+_db)\.[a-z_]+', query, re.IGNORECASE)
+        
+        # Check if all referenced databases are allowed
+        for db_ref in db_refs:
+            db_name = db_ref.lower()
+            if db_name not in allowed_databases:
+                print(f"⚠️  Permission violation: {role} cannot access {db_name}")
+                return False
+        
+        return True
+    
+    def _generate_safe_fallback(self, database, role):
+        """Generate safe fallback query when permission violation is detected"""
+        # Table mapping for each database
+        safe_tables = {
+            'sales_db': ('customers', 'company_name'),
+            'marketing_db': ('campaigns', 'campaign_name'),
+            'support_db': ('support_tickets', 'subject'),
+            'hr_db': ('employees', 'name'),
+            'finance_db': ('invoices', 'invoice_number'),
+            'inventory_db': ('inventory_levels', 'product_id'),
+            'admin_db': ('user_sessions', 'user_id')
+        }
+        
+        table, column = safe_tables.get(database, ('customers', 'company_name'))
+        return f"SELECT * FROM {database}.{table} ORDER BY {column} LIMIT 10;"
 
     def _refresh_dynamic_ids(self):
         """Fetch real IDs from the database to hydrate templates"""
@@ -759,6 +802,14 @@ def enhanced_user_worker(agent_template, sql_generator, v_clock, stop_event):
                     intent['target_database'] = accessible_databases[0]
                 
                 sql = sql_generator.generate_sql_for_intent(intent, agent_template.role)
+                
+                # PERMISSION VALIDATION: Check for cross-database violations
+                if not sql_generator._is_cross_database_join_allowed(agent_template.role, sql):
+                    # Permission violation detected - generate safe fallback query
+                    print(f"🚫 Blocked unsafe cross-database query for {agent_template.role}")
+                    # Generate safe query within user's primary database  
+                    safe_db = intent.get('target_database', accessible_databases[0])
+                    sql = sql_generator._generate_safe_fallback(safe_db, agent_template.role)
             
             # Apply obfuscation if needed
             if intent.get('obfuscate', False) or (agent_template.is_malicious and ENABLE_OBFUSCATION):
