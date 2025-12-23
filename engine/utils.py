@@ -794,9 +794,9 @@ def check_technical_attacks(df, rule_config):
     # Rule 17. Client/OS Mismatch
     # Phát hiện tool tấn công trong blacklist (sqlmap, nmap...)
     idx_client = []
-    whitelist = signatures.get('allowed_programs', [])
-    if 'program_name' in df.columns and not whitelist:
-        pattern_bad = "|".join(re.escape(p) for p in whitelist)
+    disallowed_programs = signatures.get('disallowed_programs', [])
+    if 'program_name' in df.columns and disallowed_programs:
+        pattern_bad = "|".join(re.escape(p) for p in disallowed_programs)
         bad_clients = df[df['program_name'].str.contains(pattern_bad, case=False, na=False)]
         idx_client.extend(bad_clients.index.tolist())
     if idx_client: anomalies['Client Mismatch'] = list(set(idx_client))
@@ -812,10 +812,11 @@ def check_technical_attacks(df, rule_config):
     # Rule 19. Index Evasion / Full Join
     # Logic: Không dùng index hoặc Full Join
     idx_no_index = []
+    min_rows_threshold = thresholds.get('index_evasion_min_rows', 1000)  # Configurable threshold
     if 'no_index_used' in df.columns and 'select_full_join' in df.columns:
         bad_scans = df[(df['no_index_used'] == 1) | (df['select_full_join'] == 1)]
         # Chỉ bắt nếu quét nhiều dòng để tránh false positive cho bảng nhỏ
-        bad_scans = bad_scans[bad_scans['rows_examined'] > 100] 
+        bad_scans = bad_scans[bad_scans['rows_examined'] > min_rows_threshold] 
         idx_no_index.extend(bad_scans.index.tolist())
     if idx_no_index: anomalies['Index Evasion'] = list(set(idx_no_index))
 
