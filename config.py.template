@@ -15,17 +15,18 @@ import os
 from dotenv import load_dotenv
 
 # ==============================================================================
-# I. KHỞI TẠO BIẾN MÔI TRƯỜNG VÀ CÁC ĐƯỜNG DẪN CỐT LÕI
+# I. CẤU HÌNH BIẾN MÔI TRƯỜNG (ENVIRONMENT VARIABLES)
 # ==============================================================================
-
 # Lệnh này sẽ tìm và tải các biến từ một file có tên là `.env` trong thư mục gốc.
 # `override=True` đảm bảo rằng giá trị trong file `.env` sẽ được ưu tiên.
 load_dotenv(override=True)
 
-# --- Đường dẫn cho quá trình Phân tích Log (Parsing) ---
+# ==============================================================================
+# II. CẤU HÌNH ĐƯỜNG DẪN VÀ FILE
+# ==============================================================================
+# Mục này định nghĩa tất cả các đường dẫn file mà ứng dụng sử dụng.
 
 # Lấy đường dẫn đến thư mục gốc của project một cách tự động.
-# Điều này giúp project có thể chạy trên bất kỳ máy nào mà không cần sửa đường dẫn.
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # --- CÁC ĐƯỜNG DẪN ĐƯỢC TÍNH TOÁN DỰA TRÊN THƯ MỤC GỐC ---
@@ -34,19 +35,17 @@ STAGING_DATA_DIR = os.path.join(DATA_DIR, "staging")                    # Nơi c
 ARCHIVE_DATA_DIR = os.path.join(DATA_DIR, "archive")                    # (Tùy chọn) Nơi lưu trữ file đã xử lý
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 ENGINE_DIR = os.path.join(PROJECT_ROOT, "engine")
-MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch_mysql")   # Thư mục để lưu trữ các file log đã phân tích bị không đồng bộ
-    
-# ==============================================================================
-# II. CẤU HÌNH ĐƯỜNG DẪN FILE CHI TIẾT
-# ==============================================================================
-# Các đường dẫn này giờ đây được xây dựng một cách an toàn.
+
+# Thư mục để lưu trữ các file log đã phân tích bị không đồng bộ
+MYSQL_MISMATCH_ARCHIVE_DIR = os.path.join(LOGS_DIR, "mismatch")
+
 
 # Thêm URL PostgreSQL:
 # Thay 'user:password' và 'db_name' cho đúng
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://uba_user:password@localhost:5432/uba_db")
 
 # Hãy đảm bảo user/password này có quyền SELECT trên bảng mysql.general_log
-MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost/mysql"
+MYSQL_LOG_DATABASE_URL = "mysql+mysqlconnector://uba_user:password@localhost:3306"
 
 # SQLite cũ:
 # DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'app_database.db')}"
@@ -58,11 +57,15 @@ RULES_CONFIG_FILE_PATH = os.path.join(ENGINE_DIR, "rules_config.json")
 # Đây là file ĐẦU VÀO cho script `log_parser.py`.
 # !! BẠN CẦN SỬA ĐƯỜNG DẪN NÀY CHO ĐÚNG VỚI MÁY CỦA BẠN TRONG SCRIPT PARSER !!
 # `r""` (raw string) được dùng để tránh các lỗi liên quan đến dấu `\` trên Windows.
+SOURCE_MYSQL_LOG_PATH = r"C:/mysql_logs/query.log"
 
 # ------ Posstgresql log config ----------
 SOURCE_POSTGRES_LOG_PATH = r'C:/psql_logs'
+
 PARSED_POSTGRES_LOG_FILE_PATH = os.path.join(LOGS_DIR, "parsed_postgres_logs.parquet")
+
 POSTGRES_PARSER_SCRIPT_PATH = os.path.join(ENGINE_DIR, "postgres_log_parser.py")
+
 POSTGRES_STATE_FILE_PATH = os.path.join(LOGS_DIR, ".postgres_parser_state.json")
 
 # ------ MySQL log config ---------
@@ -90,45 +93,38 @@ DIRECTORIES_TO_CREATE = [
 for dir_path in DIRECTORIES_TO_CREATE:
     os.makedirs(dir_path, exist_ok=True)
 
-# ==============================================================================
-# III. CẤU HÌNH CÁC LUẬT PHÁT HIỆN BẤT THƯỜNG
-# ==============================================================================
-# Các giá trị mặc định cho các ngưỡng và tham số của các luật phân tích.
+# Tên file CSV sẽ được tạo ra sau khi `log_parser.py` chạy.
+PARSED_MYSQL_LOG_PARQUET_PATH = os.path.join(LOGS_DIR, "parsed_mysql_logs.parquet")
+STAGING_DATA_DIR = os.path.join(DATA_DIR, "staging")   # Nơi chứa các file Parquet chờ xử lý
+ARCHIVE_DATA_DIR = os.path.join(DATA_DIR, "archive")   # (Tùy chọn) Nơi lưu trữ file đã xử lý
 
-# --- LUẬT 1: Truy vấn Giờ Khuya (Late Night Query) ---
-LATE_NIGHT_START_TIME_DEFAULT = dt_time(0, 0)    # Bắt đầu từ 00:00 (nửa đêm)
-LATE_NIGHT_END_TIME_DEFAULT = dt_time(5, 0)      # Kết thúc trước 05:00 sáng
+# --- Đường dẫn cho các mô hình AI và Feedback ---
 
-# --- LUẬT 2: Kết xuất Dữ liệu Lớn (Large Data Dump) ---
-# Danh sách các tên bảng (viết thường) được coi là có kích thước lớn.
-KNOWN_LARGE_TABLES_DEFAULT = [ 'customers', 'products', 'orders', 'order_items', 'test_log', 'another_table', 'sensitive_data' ]
+# Thư mục chính để chứa tất cả các mô hình AI đã được huấn luyện.
+MODELS_DIR = "trained_models"
 
-# --- LUẬT 3: Truy cập Nhiều Bảng (Multiple Table Access) ---
-TIME_WINDOW_DEFAULT_MINUTES = 5             # Khung thời gian để xét một session (phút).
-MIN_DISTINCT_TABLES_THRESHOLD_DEFAULT = 3   # Số lượng bảng riêng biệt tối thiểu để bị coi là bất thường.
+# Thư mục con để chứa các mô hình AI được huấn luyện riêng cho từng người dùng.
+USER_MODELS_DIR = os.path.join(MODELS_DIR, "user_models")
 
-# --- LUẬT 4: Truy cập Bảng Nhạy Cảm (Sensitive Table Access) ---
-SENSITIVE_TABLES_DEFAULT = ['salaries', 'attendance', 'departments', 'employees', "hr_db.salaries", "hr_db.employees", "mysql.user", "information_schema.columns" ] 
-ALLOWED_USERS_FOR_SENSITIVE_DEFAULT = ['dev_user_0', 'dev_user_1', 'dev_user_2', 'hr_user_0', 'hr_user_1']
-SAFE_HOURS_START_DEFAULT = 8                # Giờ làm việc an toàn bắt đầu từ 08:00
-SAFE_HOURS_END_DEFAULT = 17                 # và kết thúc trước 18:00.
-SAFE_WEEKDAYS_DEFAULT = list(range(0, 5))   # Ngày làm việc an toàn: 0=Thứ 2, ..., 4=Thứ 6.
+# Tên file CSV để lưu trữ các phản hồi (feedback) từ người dùng.
+FEEDBACK_FILE_PATH = 'feedback.csv'
 
-# --- LUẬT 5: Hoạt động User Bất thường (Unusual User Activity) ---
-# Sử dụng phân vị (quantile) để xác định "giờ hoạt động bình thường" của mỗi user.
-QUANTILE_START_DEFAULT = 0.15               # Mốc 15% thời gian hoạt động sớm nhất.
-QUANTILE_END_DEFAULT = 0.85                 # Mốc 85% thời gian hoạt động muộn nhất.
-MIN_QUERIES_FOR_PROFILE_DEFAULT = 10        # Số lượng truy vấn tối thiểu cần có để xây dựng hồ sơ hành vi.
+# Tên file JSON để lưu danh sách các model AI đã được xác thực thành công.
+VALID_MODELS_FILE_PATH = 'valid_models.json'
+
+# Tên file log cho các hành động phản ứng chủ động (Active Response)
+ACTIVE_RESPONSE_AUDIT_LOG_PATH = os.path.join(PROJECT_ROOT, "active_response_audit.log")  
 
 SUSPICIOUS_FUNCTIONS = ['sleep', 'benchmark', 'load_file', 'updatexml', 'extractvalue']
 PRIVILEGE_COMMANDS = ['grant', 'revoke', 'create user', 'drop user', 'alter user']
 
 # ==============================================================================
-# IV. CẤU HÌNH CÁC DỊCH VỤ NGOÀI VÀ HỆ THỐNG
+# III. CẤU HÌNH CÁC DỊCH VỤ NGOÀI VÀ HỆ THỐNG
 # ==============================================================================
 
-# --- 1. Cấu hình Theo dõi File (File Watcher) ---
+# --- 1. Cấu hình Theo dõi File ---
 # Thời gian (giây) mà ứng dụng sẽ chờ giữa mỗi lần kiểm tra file log.
+
 ENGINE_SLEEP_INTERVAL_SECONDS = 60
 
 # --- 2. Cấu hình Server Ollama ---
@@ -144,40 +140,31 @@ PENDING_VIOLATIONS = []       # Buffer chứa các vi phạm đang chờ gửi
 # Đọc các giá trị từ file .env đã được load ở đầu file.
 # os.getenv("KEY", "default_value") sẽ lấy giá trị của biến môi trường "KEY",
 # nếu không tìm thấy, nó sẽ sử dụng "default_value".
-# ALERT_EMAIL_SETTINGS = {
-#     # Địa chỉ máy chủ SMTP (ví dụ: 'smtp.gmail.com').
-#     "smtp_server": os.getenv("SMTP_SERVER"),
+ALERT_EMAIL_SETTINGS = {
+    # Địa chỉ máy chủ SMTP (ví dụ: 'smtp.gmail.com').
+    "smtp_server": os.getenv("SMTP_SERVER"),
     
-#     # Cổng SMTP (thường là 587 cho TLS hoặc 465 cho SSL).
-#     "smtp_port": os.getenv("SMTP_PORT"),
+    # Cổng SMTP (thường là 587 cho TLS hoặc 465 cho SSL).
+    "smtp_port": os.getenv("SMTP_PORT"),
     
-#     # Địa chỉ email người gửi.
-#     "sender_email": os.getenv("SENDER_EMAIL"),
+    # Địa chỉ email người gửi.
+    "sender_email": os.getenv("SENDER_EMAIL"),
     
-#     # Mật khẩu ứng dụng của email người gửi (không phải mật khẩu đăng nhập chính).
-#     "sender_password": os.getenv("SENDER_PASSWORD"),
+    # Mật khẩu ứng dụng của email người gửi (không phải mật khẩu đăng nhập chính).
+    "sender_password": os.getenv("SENDER_PASSWORD"),
     
-#     # Danh sách người nhận chính (To), được phân tách bằng dấu phẩy trong file .env.
-#     # Code sẽ tự động tách chuỗi, loại bỏ khoảng trắng và các email rỗng.
-#     "to_recipients": [email.strip() for email in os.getenv("TO_RECIPIENTS", "").split(",") if email.strip()],
+    # Danh sách người nhận chính (To), được phân tách bằng dấu phẩy trong file .env.
+    # Code sẽ tự động tách chuỗi, loại bỏ khoảng trắng và các email rỗng.
+    "to_recipients": [email.strip() for email in os.getenv("TO_RECIPIENTS", "").split(",") if email.strip()],
     
-#     # Danh sách người nhận ẩn danh (BCC).
-#     "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
-# }
-
-# ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
-# Đọc cấu hình admin MySQL từ .env
-ACTIVE_RESPONSE_SETTINGS = {
-    "mysql_host": os.getenv("MYSQL_ADMIN_HOST"),
-    "mysql_port": os.getenv("MYSQL_ADMIN_PORT"),
-    "mysql_user": os.getenv("MYSQL_ADMIN_USER"),
-    "mysql_password": os.getenv("MYSQL_ADMIN_PASSWORD"),
+    # Danh sách người nhận ẩn danh (BCC).
+    "bcc_recipients": [email.strip() for email in os.getenv("BCC_RECIPIENTS", "").split(",") if email.strip()]
 }
 
 # ==== REDIS / REALTIME PIPELINE ====
 # --- Redis & Streams ---
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
+REDIS_PROFILE_KEY_PREFIX = "uba:profile:"
 # Streams đặt tên rõ để dễ mở rộng đa DBMS sau này
 REDIS_STREAM_LOGS = os.getenv("REDIS_STREAM_LOGS", "uba:logs")
 REDIS_GROUP_ENGINE = os.getenv("REDIS_GROUP_ENGINE", "uba_engine")
@@ -190,13 +177,14 @@ ENGINE_BATCH_MAX_BLOCK_MS  = int(os.getenv("ENGINE_BATCH_MAX_BLOCK_MS", "1000"))
 # Các Stream cần lắng nghe (chỉ MySQL)
 STREAMS = {f"{REDIS_STREAM_LOGS}:mysql": ">"} 
 
-# --- [NEW] CẤU HÌNH BEHAVIOR PROFILING (REDIS) ---
-# Prefix cho Key lưu profile user. Ví dụ: uba:profile:thanh.nguyen
-REDIS_PROFILE_KEY_PREFIX = "uba:profile:"
+# ====== 4. Cấu hình Phản ứng Chủ động (Active Response) ======
+# Ngưỡng (số lượng vi phạm) để kích hoạt khóa tài khoản
+ACTIVE_RESPONSE_TRIGGER_THRESHOLD = 5 # Ví dụ: Khóa user nếu có 5 vi phạm trở lên
 
-# Thời gian lưu trữ profile (giây). 30 ngày = 2592000. Để None nếu muốn lưu vĩnh viễn.
-PROFILE_TTL_SECONDS = 2592000
-
-SENSITIVE_TABLES = {
-   "salaries", "attendance", "departments", "employees", "hr_db.salaries", "hr_db.employees", "mysql.user", "information_schema.columns"
+# Đọc cấu hình admin MySQL từ .env
+ACTIVE_RESPONSE_SETTINGS = {
+    "mysql_host": os.getenv("MYSQL_ADMIN_HOST"),
+    "mysql_port": os.getenv("MYSQL_ADMIN_PORT"),
+    "mysql_user": os.getenv("MYSQL_ADMIN_USER"),
+    "mysql_password": os.getenv("MYSQL_ADMIN_PASSWORD"),
 }
