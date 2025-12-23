@@ -165,10 +165,10 @@ class QueryComplexityEngine:
         if random.random() < 0.4:
             query = query.replace(" ", "  ") # Double spaces
         
-        # 3. Random comments
-        if random.random() < 0.2:
-            comments = ["/* check */ ", "/* audit */ ", "-- status check\n"]
-            query = random.choice(comments) + query
+        # # 3. Random comments
+        # if random.random() < 0.2:
+        #     comments = ["/* check */ ", "/* audit */ ", "-- status check\n"]
+        #     query = random.choice(comments) + query
             
         return query.strip()
 
