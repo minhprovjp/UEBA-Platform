@@ -112,7 +112,7 @@ def test_query_against_rules(query):
     return triggered_rules
 
 def clean_query_pool(input_file, output_file):
-    """Remove queries that trigger security rules"""
+    """Remove queries that trigger Index Evasion and non-attack false positives"""
     print(f"🔍 Loading query pool from {input_file}...")
     
     with open(input_file, 'r', encoding='utf-8') as f:
@@ -125,6 +125,13 @@ def clean_query_pool(input_file, output_file):
     else:
         pool = data
         has_metadata = False
+    
+    # Rules to filter (non-attack false positives)
+    FALSE_POSITIVE_RULES = [
+        'Sensitive Table Access',  # Normal queries accessing finance/hr/inventory
+        'Index Evasion',           # Queries with SELECT * or poor indexing
+        'High Entropy Query',      # Vietnamese text queries
+    ]
     
     total_before = 0
     total_after = 0
@@ -142,24 +149,73 @@ def clean_query_pool(input_file, output_file):
             
             print(f"\n📊 Testing {database}.{intent} ({len(queries)} queries)...")
             
+            # Check if this is an attack intent - if so, be lenient
+            is_attack_intent = any(keyword in intent.upper() for keyword in [
+                'SQL_INJECTION', 'DATA_EXFILTRATION', 'PRIVILEGE_ESCALATION', 
+                'MALICIOUS', 'ATTACK', 'EXPLOIT'
+            ])
+            
             for i, query in enumerate(queries, 1):
+                # Check for potential Index Evasion triggers
+                query_upper = query.upper()
+                has_index_issue = False
+                
+                # Patterns that often cause Index Evasion
+                if any(pattern in query_upper for pattern in [
+                    'SELECT * FROM',  # Full table scans (but allow "SELECT *" in subqueries)
+                    'LIKE \'%',       # Leading wildcard
+                ]):
+                    # Count how many tables - if scanning large table, flag it
+                    table_count = query_upper.count('FROM') + query_upper.count('JOIN')
+                    if table_count > 0:  # Any FROM/JOIN with SELECT *
+                        has_index_issue = True
+                
+                # Test against security rules
                 triggered = test_query_against_rules(query)
                 
+                # For attack intents: only remove if Index Evasion, keep SQL Injection etc.
+                # For normal intents: remove false positives
+                should_remove = False
+                reason = []
+                
+                if has_index_issue:
+                    should_remove = True
+                    reason.append('Index Evasion')
+                
                 if triggered:
+                    # Filter based on intent type
+                    if is_attack_intent:
+                        # For attack intents, only remove Index Evasion
+                        pass  # Already handled above
+                    else:
+                        # For normal intents, remove false positive rules
+                        false_positives = [r for r in triggered if r in FALSE_POSITIVE_RULES]
+                        if false_positives:
+                            should_remove = True
+                            reason.extend(false_positives)
+                
+                if should_remove:
                     removed_queries.append({
                         'query': query,
-                        'rules': triggered
+                        'rules': reason
                     })
-                    print(f"  ❌ Query {i}: Triggers {', '.join(triggered)}")
+                    if i <= 5 or len(removed_queries) <= 10:  # Only print first few
+                        print(f"  ❌ Query {i}: {' + '.join(reason)}")
                 else:
                     clean_queries.append(query)
+            
+            if removed_queries and len(removed_queries) > 10:
+                print(f"  ... and {len(removed_queries) - 10} more")
             
             cleaned_pool[database][intent] = clean_queries
             total_after += len(clean_queries)
             
             if removed_queries:
                 removed_counts[f"{database}.{intent}"] = len(removed_queries)
-                print(f"  ✅ Kept {len(clean_queries)}/{len(queries)} queries")
+                kept_pct = len(clean_queries) / len(queries) * 100
+                print(f"  ✅ Kept {len(clean_queries)}/{len(queries)} queries ({kept_pct:.1f}%)")
+            else:
+                print(f"  ✅ All {len(queries)} queries passed!")
     
     # Save cleaned pool
     if has_metadata:
@@ -179,15 +235,18 @@ def clean_query_pool(input_file, output_file):
     print(f"{'='*60}")
     print(f"Total queries before: {total_before}")
     print(f"Total queries after:  {total_after}")
-    print(f"Queries removed:       {total_before - total_after}")
-    print(f"Removal rate:          {((total_before - total_after) / total_before * 100):.1f}%")
+    print(f"Queries removed:      {total_before - total_after}")
+    print(f"Removal rate:         {((total_before - total_after) / total_before * 100):.1f}%")
     
     if removed_counts:
-        print(f"\n📋 Removed by intent:")
-        for intent, count in sorted(removed_counts.items(), key=lambda x: -x[1]):
+        print(f"\n📋 Queries removed by intent (top 10):")
+        for intent, count in sorted(removed_counts.items(), key=lambda x: -x[1])[:10]:
             print(f"  • {intent}: {count}")
+        if len(removed_counts) > 10:
+            print(f"  ... and {len(removed_counts) - 10} more intents")
     
     print(f"\n💾 Cleaned pool saved to: {output_file}")
+    print(f"📦 Original backed up to: {backup_file}")
 
 if __name__ == '__main__':
     input_file = 'dynamic_sql_generation/ai_query_pool.json'
